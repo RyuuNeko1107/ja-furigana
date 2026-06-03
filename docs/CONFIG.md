@@ -64,6 +64,26 @@ GitHub API rate limit (60 req/h/IP) を考えて `interval` は **1h 以上推�
 詳細な認証フローは [HTTP_API.md#認証](./HTTP_API.md#認証) / 辞書更新の全経路は
 [HTTP_API.md#ホットリロード--自動更新](./HTTP_API.md#ホットリロード--自動更新) を参照。
 
+### `[rate_limit]` セクション
+
+`furigana serve` の per-IP レート制限 (`tower_governor`)。default は控えめなので、
+信頼できる LAN 内や負荷試験では緩めると良い。
+
+| キー | 型 | default | 説明 |
+|---|---|---|---|
+| `per_second` | int | `1` | 1 秒あたりに補充される許可リクエスト数 (per IP) |
+| `burst_size` | int | `5` | バケットに貯められる上限 (= 瞬間バースト許容数) |
+
+```toml
+[rate_limit]
+per_second = 20
+burst_size = 100
+```
+
+> default (`1` / `5`) は素の公開エンドポイント保護向け。短文を高頻度で投げる
+> 配信コメント用途や負荷試験では `per_second` を上げる (負荷試験は
+> [`tools/k6_loadtest.js`](../tools/k6_loadtest.js) を参照)。
+
 ## 環境変数
 
 `config.toml` より後で評価され、上書きする:

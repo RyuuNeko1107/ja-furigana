@@ -128,8 +128,8 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
     const MAX_BODY_BYTES: usize = 1024 * 1024;
     let governor_conf = std::sync::Arc::new(
         GovernorConfigBuilder::default()
-            .per_second(1)
-            .burst_size(5)
+            .per_second(cfg.rate_limit.per_second)
+            .burst_size(cfg.rate_limit.burst_size)
             .finish()
             .ok_or_else(|| anyhow!("governor config 構築失敗"))?,
     );

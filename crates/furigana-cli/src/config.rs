@@ -21,6 +21,10 @@ pub struct Config {
     /// 自動辞書更新 (`furigana serve --auto-pull` の挙動も含む)
     #[serde(default)]
     pub auto_update: AutoUpdateConfig,
+
+    /// rate limit 設定
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 }
 
 /// `[server]` セクション
@@ -98,6 +102,35 @@ fn default_interval() -> String {
     "24h".to_string()
 }
 
+/// `[rate_limit]` セクション
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitConfig {
+    /// 1 秒あたりの許可リクエスト数 (default: 1)
+    #[serde(default = "default_per_second")]
+    pub per_second: u64,
+
+    /// バーストサイズ (default: 5)
+    #[serde(default = "default_burst_size")]
+    pub burst_size: u32,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            per_second: default_per_second(),
+            burst_size: default_burst_size(),
+        }
+    }
+}
+
+fn default_per_second() -> u64 {
+    1
+}
+
+fn default_burst_size() -> u32 {
+    5
+}
+
 impl Config {
     /// 設定ファイルを読み込む (存在しなければ default)
     pub fn load(paths: &Paths) -> Result<Self> {
@@ -110,5 +143,59 @@ impl Config {
         let cfg: Self = toml::from_str(&content)
             .with_context(|| format!("設定ファイルパース失敗: {}", paths.config_file.display()))?;
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_rate_limit_is_1_per_sec_burst_5() {
+        let cfg = Config::default();
+        assert_eq!(cfg.rate_limit.per_second, 1);
+        assert_eq!(cfg.rate_limit.burst_size, 5);
+    }
+
+    #[test]
+    fn rate_limit_section_overrides_defaults() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [rate_limit]
+            per_second = 20
+            burst_size = 100
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.rate_limit.per_second, 20);
+        assert_eq!(cfg.rate_limit.burst_size, 100);
+    }
+
+    #[test]
+    fn missing_rate_limit_section_falls_back_to_defaults() {
+        // 他セクションのみ指定 → rate_limit は default のまま
+        let cfg: Config = toml::from_str(
+            r#"
+            [server]
+            bind = "0.0.0.0:9000"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.rate_limit.per_second, 1);
+        assert_eq!(cfg.rate_limit.burst_size, 5);
+    }
+
+    #[test]
+    fn partial_rate_limit_keeps_other_default() {
+        // per_second だけ指定 → burst_size は default(5)
+        let cfg: Config = toml::from_str(
+            r#"
+            [rate_limit]
+            per_second = 50
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.rate_limit.per_second, 50);
+        assert_eq!(cfg.rate_limit.burst_size, 5);
     }
 }

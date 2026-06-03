@@ -4,6 +4,17 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
+## [Unreleased]
+
+### Added
+
+- **`furigana serve` の rate limit を config 化** (`config.rs` / `serve/mod.rs`):
+  これまでハードコードだった per-IP レート制限 (`per_second(1)` / `burst_size(5)`) を
+  `[rate_limit]` セクションで上書き可能に。未指定時は従来どおり `1` / `5`。
+  高頻度の配信コメント用途や負荷試験で緩められる ([CONFIG.md](docs/CONFIG.md) 参照)。
+- **負荷試験スクリプト** (`tools/k6_loadtest.js`): k6 で tts / ruby / analyze 等の
+  代表ペイロードを投げ、latency / error rate を計測する。
+
 ## [0.1.1] - 2026-06-01
 
 production signal 由来の counter / loader バグ修正 (patch)。
