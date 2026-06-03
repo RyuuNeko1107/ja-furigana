@@ -9,8 +9,12 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.1.0` stable (2026-05-12 cut)
-- **次 milestone**: `0.2.0` (= intonation / accent annotation、 PROPOSALS/intonation.md 参照)
+- **LIVE**: `0.1.1` stable (2026-06-01、 0.1.0 cut は 2026-05-12)
+- **`0.2.0` (master 実装中・未 release)**: accent **core は実装済** =
+  bracket notation parse + `AccentResult`/`AccentToken` + CLI `--mode=accent`
+  (`api.rs::to_accent` / `scoring/bracket.rs`、 ADR-0003)。
+  **残件**: UniDic pitch accent (aType) 統合 / `loanwords`→`AlphabetPassthrough` 再統合 /
+  `numeric_phrases` (NumericPhraseMatcher) 再統合。 cut 判断は user 主導 (PROPOSALS/intonation.md)
 
 ## alpha.10 task 進捗 (2026-05-11)
 
