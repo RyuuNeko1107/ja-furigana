@@ -322,26 +322,21 @@ pub fn load_rules_dir<P: AsRef<Path>>(dir: P) -> Result<RulesData> {
         )));
     }
 
-    // 全 *.toml を再帰 walk して、 各 file の `[meta] role` で振り分け。
-    // role tag 無い file は file 名から推定 (`infer_role_from_path`)。
-    // これで rule file は dir 構造に依存せず配置自由 (例
-    // `rules/text/postprocess.toml` のような階層化が可能)。
+    // 全 *.toml を再帰 walk して、 各 file の role で振り分け (walk + schema 検証 +
+    // role 解決は `for_each_toml_in_dir` が共通担当)。 role tag 無い file は file 名
+    // から推定 (`infer_role_from_path` 経由)。 これで rule file は dir 構造に依存せず
+    // 配置自由 (例 `rules/text/postprocess.toml` のような階層化が可能)。
+    //
+    // ★A1b: rules dir 配下の TOML は **全 file** に `[meta] schema_version = "2"` を
+    // 必須化 (alpha.10〜)。 役割不明 / dict 系混在 file も含めて validation される
+    // (= dir 配下の TOML は全部新 format に揃える方針、 旧 alpha era format を silent
+    // skip させない)。 これは `for_each_toml_in_dir` 内の `validate_schema_version`。
     let mut data = RulesData::default();
-    let mut postprocess_specs: Vec<(PathBuf, PostProcessSpec)> = Vec::new();
-    for path in walk_rule_files(dir)? {
-        let content = std::fs::read_to_string(&path)?;
-        let from = path.display().to_string();
-        // ★A1b: rules dir 配下の TOML は **全 file** に `[meta] schema_version = "2"`
-        // を必須化 (alpha.10〜)。 role 不明 / dict 系混在 file (jukugo / loanwords /
-        // works / single_overrides) も含めて validation する (= dir 配下の TOML は
-        // 全部新 format に揃える方針、 旧 alpha era format を silent skip させない)。
-        validate_schema_version(&content, &from)?;
-        let role =
-            parse_meta_role(&content).or_else(|| infer_role_from_path(&path).map(String::from));
-        let role_str = role.as_deref();
-        match role_str {
+    let mut merged_spec = PostProcessSpec::default();
+    for_each_toml_in_dir(dir, |content, from, role| {
+        match role {
             Some("counters") => {
-                let part: CountersData = parse_toml(&content, &from)?;
+                let part: CountersData = parse_toml(content, from)?;
                 data.counters.merge(part);
             }
             Some("context") => {
@@ -349,59 +344,43 @@ pub fn load_rules_dir<P: AsRef<Path>>(dir: P) -> Result<RulesData> {
                 // block で代替され、 lib 側では使われない。 古い release dict 互換のため
                 // role を認識するが load せず silent skip。
             }
-            Some("days") => {
-                data.days = parse_toml(&content, &from)?;
-            }
-            Some("scales") => {
-                data.scales = parse_toml(&content, &from)?;
-            }
-            Some("units") => {
-                data.units = parse_toml(&content, &from)?;
-            }
-            Some("symbols") => {
-                data.symbols = parse_toml(&content, &from)?;
-            }
-            Some("numeric_phrases") => {
-                data.numeric_phrases = parse_toml(&content, &from)?;
-            }
-            Some("compat") => {
-                data.compat = parse_toml(&content, &from)?;
-            }
+            Some("days") => data.days = parse_toml(content, from)?,
+            Some("scales") => data.scales = parse_toml(content, from)?,
+            Some("units") => data.units = parse_toml(content, from)?,
+            Some("symbols") => data.symbols = parse_toml(content, from)?,
+            Some("numeric_phrases") => data.numeric_phrases = parse_toml(content, from)?,
+            Some("compat") => data.compat = parse_toml(content, from)?,
             Some("postprocess") => {
                 // regex compile は最後にまとめて (複数 file を merge した後)
-                let spec: PostProcessSpec = parse_toml(&content, &from)?;
-                postprocess_specs.push((path.clone(), spec));
+                let spec: PostProcessSpec = parse_toml(content, from)?;
+                merged_spec.rules.extend(spec.rules);
             }
             _ => {
                 // role 不明 / 認識外 / dict 系 (jukugo/unihan/works/loanwords/
                 // single_overrides) は rules には不要、 silent skip。
             }
         }
-    }
+        Ok(())
+    })?;
     // postprocess を merge して compile
-    let mut merged_spec = PostProcessSpec::default();
-    for (_path, spec) in postprocess_specs {
-        merged_spec.rules.extend(spec.rules);
-    }
     data.postprocess = PostProcessData::from_spec(merged_spec)
         .map_err(|e| FuriganaError::Validation(format!("postprocess regex compile failed: {e}")))?;
     Ok(data)
 }
 
-/// `dir` 配下の rules 用 *.toml を再帰 walk して列挙。
+/// `dir` 配下の *.toml を再帰 walk して file path を昇順で列挙する。
 ///
 /// `_genre.toml` (STATS sub-section meta) と `*.test.toml` (CI 専用) は除外。
-/// 同じ subdir に dict 系 file (jukugo / unihan / works / loanwords /
-/// single_overrides) が混在しても、 それらは role 不明 / dict role として
-/// `load_rules_dir` 内で silent skip される (= rules に取り込まれない)。
-fn walk_rule_files(dir: &Path) -> Result<Vec<PathBuf>> {
+/// rules / dict / loanwords いずれの dir scan もこの 1 関数を共有する
+/// (= かつて loader / dict / api に 3 重実装されていた walk を統合)。
+pub(crate) fn walk_toml_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    walk_rule_files_inner(dir, &mut out)?;
+    walk_toml_files_inner(dir, &mut out)?;
     out.sort();
     Ok(out)
 }
 
-fn walk_rule_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn walk_toml_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
         if path.is_file() && path.extension().is_some_and(|e| e == "toml") {
@@ -411,8 +390,33 @@ fn walk_rule_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             }
             out.push(path);
         } else if path.is_dir() {
-            walk_rule_files_inner(&path, out)?;
+            walk_toml_files_inner(&path, out)?;
         }
+    }
+    Ok(())
+}
+
+/// `dir` 配下の全 TOML file を walk し、 各 file を schema_version 検証 + role 解決
+/// した上で `visit(content, from, role)` に渡す共有 loader。
+///
+/// rules ([`load_rules_dir`]) / dict (`Dict::from_toml_dir`) / loanwords
+/// (`load_loanwords_into`) の 3 経路が共有する 「walk → read → schema 検証 →
+/// `resolve_role` → role 別 dispatch」 の前段を 1 箇所に集約する。 role 別の
+/// 取り込み方 (= どの role を何のデータ構造へ load するか) だけが caller 固有で、
+/// `visit` closure として渡す。
+///
+/// `from` は `path.display()` 文字列 (= parse error メッセージ用)。 `dir` 不在時の
+/// 挙動 (エラー / default) は caller が事前に判断する前提で、 本関数は walk のみ行う。
+pub(crate) fn for_each_toml_in_dir<F>(dir: &Path, mut visit: F) -> Result<()>
+where
+    F: FnMut(&str, &str, Option<&str>) -> Result<()>,
+{
+    for path in walk_toml_files(dir)? {
+        let content = std::fs::read_to_string(&path)?;
+        let from = path.display().to_string();
+        validate_schema_version(&content, &from)?;
+        let role = resolve_role(&content, &path);
+        visit(&content, &from, role.as_deref())?;
     }
     Ok(())
 }

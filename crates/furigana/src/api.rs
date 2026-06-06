@@ -658,16 +658,10 @@ fn load_loanwords_into(out: &mut HashMap<String, String>, dir: &Path) -> Result<
     if !dir.exists() {
         return Ok(());
     }
-    let mut files: Vec<PathBuf> = Vec::new();
-    crate::dict::collect_toml_files_recursive(dir, &mut files)?;
-    files.sort();
-    for f in files {
-        let content = std::fs::read_to_string(&f)?;
-        let from = f.display().to_string();
-        crate::loader::validate_schema_version(&content, &from)?;
-        let role = crate::loader::resolve_role(&content, &f);
-        if role.as_deref() != Some("loanwords") {
-            continue;
+    // walk + schema 検証 + role 解決は `for_each_toml_in_dir` が共通担当。
+    crate::loader::for_each_toml_in_dir(dir, |content, from, role| {
+        if role != Some("loanwords") {
+            return Ok(());
         }
         // [entries] table を parse (= role 別 toml 構造、 jukugo と同形式)
         #[derive(serde::Deserialize, Default)]
@@ -675,13 +669,12 @@ fn load_loanwords_into(out: &mut HashMap<String, String>, dir: &Path) -> Result<
             #[serde(default)]
             entries: HashMap<String, String>,
         }
-        let parsed: LoanwordsToml = crate::loader::parse_toml(&content, &from)?;
+        let parsed: LoanwordsToml = crate::loader::parse_toml(content, from)?;
         for (surface, reading) in parsed.entries {
-            let key = normalize_alphabet(&surface);
-            out.insert(key, reading);
+            out.insert(normalize_alphabet(&surface), reading);
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]

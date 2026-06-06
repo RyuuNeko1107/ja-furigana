@@ -34,49 +34,7 @@ use crate::error::{FuriganaError, Result};
 use crate::scoring::format::{Entry, EntryDetail, KanjiBlock};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-/// ディレクトリを再帰的に walk して `*.toml` のフルパスを収集する。
-///
-/// 配布 tar.gz の展開結果を想定するため、symlink ループや権限なしディレクトリは
-/// std::fs のエラーが上に伝播する (caller 側で `?` で素直に返る)。
-///
-/// 集めた後の **role 駆動 dispatch** は caller 側 ([`Dict::from_toml_dir`]) が
-/// 行う:
-/// - `[meta] role = "jukugo" / "unihan" / "works" / "kanji"` の file → Dict に load
-/// - `[meta] role = "loanwords" / "single_overrides" / "compat"` の file → SKIP
-///   (loanwords / single_overrides は alpha.15 で削除済、 SKIP のまま無視。
-///   compat は rules loader 側で別管理)
-/// - role tag が無い file → path-based 推定 ([`crate::loader::resolve_role`])
-///   で fallback、 推定不能なら Dict にも load (backwards compat)
-///
-/// この walk 自体は file 名・dir 名で skip しない (`*.test.toml` と `_genre.toml`
-/// だけ除く)。 dir 構造に依存しない loader の前提条件。
-pub(crate) fn collect_toml_files_recursive(
-    dir: &Path,
-    out: &mut Vec<PathBuf>,
-) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_file() && path.extension().is_some_and(|e| e == "toml") {
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            // *.test.toml は CI 専用の inline test、 lib runtime には不要
-            // (release tar からも `--exclude='*.test.toml'` で除外、 通常 dev
-            // checkout にだけ存在する想定)
-            if name.ends_with(".test.toml") {
-                continue;
-            }
-            // _genre.toml は STATS.md sub-section description 用メタ、 entries なし
-            if name == "_genre.toml" {
-                continue;
-            }
-            out.push(path);
-        } else if path.is_dir() {
-            collect_toml_files_recursive(&path, out)?;
-        }
-    }
-    Ok(())
-}
+use std::path::Path;
 
 /// TOML ファイルの `[entries]` セクションを受ける defensive な型。
 ///
@@ -322,30 +280,21 @@ impl Dict {
             )));
         }
 
-        let mut files: Vec<std::path::PathBuf> = Vec::new();
-        collect_toml_files_recursive(dir, &mut files)?;
-        files.sort();
-
+        // walk + schema 検証 + role 解決は `for_each_toml_in_dir` が共通担当
+        // (★A1b: schema_version = "2" 必須、 alpha.10〜)。
         let mut merged = Self::default();
-        for f in files {
-            let content = std::fs::read_to_string(&f)?;
-            let from = f.display().to_string();
-            // ★A1b: schema_version = "2" 必須 (alpha.10〜)。 dict dir 配下の全 file に
-            // 適用 (= role 不明 / 他 role の file が混在しても 「先に schema 確認」)。
-            crate::loader::validate_schema_version(&content, &from)?;
-            let role = crate::loader::resolve_role(&content, &f);
+        crate::loader::for_each_toml_in_dir(dir, |content, from, role| {
             // Dict に load する role 一覧。 role 不明 (None) は backwards compat
             // で Dict として扱う (古い release で role tag が無い file を救う)。
             let load_into_dict = matches!(
-                role.as_deref(),
+                role,
                 Some("jukugo") | Some("unihan") | Some("works") | Some("kanji") | None
             );
-            if !load_into_dict {
-                continue;
+            if load_into_dict {
+                merged.merge(Self::from_toml_str(content, from)?);
             }
-            let part = Self::from_toml_str(&content, &from)?;
-            merged.merge(part);
-        }
+            Ok(())
+        })?;
         Ok(merged)
     }
 
