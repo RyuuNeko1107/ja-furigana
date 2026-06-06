@@ -15,7 +15,8 @@
 //! 分類不能文字の場合は no match。
 
 use crate::kana;
-use crate::scoring::format::{CharType, MatchCondition};
+use crate::scoring::candidate::WEIGHT_DEFAULT;
+use crate::scoring::format::{Alternative, CharType, MatchBlock, MatchCondition};
 
 /// matcher 評価時の周辺 context。
 ///
@@ -414,6 +415,41 @@ fn is_symbol_char(c: char) -> bool {
         // 一般 punctuation (U+2030..U+205E は U+2000..U+206F に含まれるので重複削除済)
         | '\u{2000}'..='\u{206F}'
     )
+}
+
+/// `(reading, weight)` のペア。 [`resolve_readings`] の返り値要素。
+///
+/// primary (= match block hit または default) は weight = [`WEIGHT_DEFAULT`]、
+/// alt 候補は dict 指定 weight。
+pub type ResolvedReading<'a> = (&'a str, u8);
+
+/// match block + default + alt 候補を context に対して解決し、 採用すべき
+/// `(reading, weight)` 列を返す。
+///
+/// Entry / `[[kanji]]` block 双方の reading 解決を 1 箇所に集約する
+/// (= DictBridgeProvider の emit で entry / kanji / alt にコピペされていたロジック)。
+///
+/// 1. `matches` を TOML 順で評価し、 第一 hit の reading。 hit なしなら `default`。
+///    → primary として weight [`WEIGHT_DEFAULT`] で先頭に置く。
+/// 2. `alts` のうち condition が hit するものを dict 指定 weight で続けて列挙 (ADR-0004)。
+#[must_use]
+pub fn resolve_readings<'a>(
+    matches: &'a [MatchBlock],
+    default: &'a str,
+    alts: &'a [Alternative],
+    ctx: &MatchContext<'_>,
+) -> Vec<ResolvedReading<'a>> {
+    let primary = matches
+        .iter()
+        .find(|m| m.condition.matches_context(ctx))
+        .map_or(default, |m| m.reading.as_str());
+    let mut out = vec![(primary, WEIGHT_DEFAULT)];
+    for alt in alts {
+        if alt.condition.matches_context(ctx) {
+            out.push((alt.reading.as_str(), alt.weight));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

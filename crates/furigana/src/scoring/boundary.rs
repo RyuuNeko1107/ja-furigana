@@ -1,14 +1,17 @@
-//! 漢字連続 region の検出 + boundary penalty 計算 ((b)(c))。
+//! 漢字連続 region の検出。
 //!
-//! 詳細仕様: `docs/PROPOSALS/scoring-engine.md` §5.2 / §5.3
+//! 詳細仕様: `docs/PROPOSALS/scoring-engine.md` §5.2
 //!
 //! ## 役割
 //!
-//! 長文未知語が短い完全一致 entry に切り刻まれる問題への mitigation:
+//! 入力中の 漢字連続 region (= contiguous 漢字 char sequence) を検出する。
+//! [`crate::scoring::analyze::AnalyzeResult::boundary_regions`] の debug 出力に使う。
 //!
-//! - **(b) 漢字連続 boundary penalty**: 漢字 N 文字連続 region 内部を割る edge に base penalty −300
-//! - **(c) 未知語 chunk 強化 penalty**: N >= 3 かつ region 内に完全一致 surface 皆無 → penalty −600 に強化
-//! - **(a) longest match**: [`crate::scoring::engine::PathScore`] の `edge_count` 軸で実現済み
+//! ## 過分割の抑制について
+//!
+//! 長文未知語が短い完全一致 entry に切り刻まれる問題は、 旧 (b)(c) boundary penalty
+//! ではなく [`crate::scoring::engine::PathScore`] の `edge_count` 軸 ((a) longest match)
+//! で抑制する。 penalty 軸は本番で一度も配線されず常に 0 だったため撤去した。
 //!
 //! ## scope 外
 //!
@@ -18,21 +21,18 @@
 use crate::kana;
 use std::ops::Range;
 
-/// 入力 1 つの漢字連続 region (= contiguous 漢字 char sequence) と、 そこに適用すべき penalty。
+/// 入力 1 つの漢字連続 region (= contiguous 漢字 char sequence)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KanjiRegion {
     /// input text 上の byte range
     pub range: Range<usize>,
     /// region 内の文字数 (= 漢字 char 数)
     pub char_count: usize,
-    /// 内部分割 edge に加える penalty (= boundary_penalty)。 0 = penalty なし。
-    pub interior_penalty: i16,
 }
 
 /// 入力全体の boundary 分析結果。
 ///
-/// [`Self::analyze`] で input を walk して全 漢字連続 region を検出、
-/// 各 region に dict の完全一致状況に応じた penalty を割り当てる。
+/// [`Self::analyze`] で input を walk して全 漢字連続 region を検出する。
 #[derive(Debug, Clone, Default)]
 pub struct BoundaryAnalysis {
     /// 検出された 漢字連続 region (順序保証、 byte range 昇順)
@@ -40,64 +40,27 @@ pub struct BoundaryAnalysis {
 }
 
 impl BoundaryAnalysis {
-    /// 空の分析結果 (= regions なし、 全位置 penalty 0)。
+    /// 空の分析結果 (= regions なし)。
     #[cfg(test)]
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
     }
 
-    /// `input` を walk して 漢字連続 region を検出、 各 region に penalty を割り当てる。
-    ///
-    /// `region_has_exact_match` callback で 「この region surface が dict 完全一致 entry に存在するか」 を問い合わせる。
-    /// callback `true` を返す region は (b) base penalty −300、 `false` を返す region のうち
-    /// 漢字 3 文字以上のものは (c) 強化 penalty −600、 残り (= 漢字 2 文字未満で完全一致なし) は base −300。
-    ///
-    /// ## penalty 値割り当てルール (proposal §5.2 / §5.3)
-    ///
-    /// | 条件 | penalty |
-    /// |---|---|
-    /// | region に完全一致 entry あり | -300 (b base) |
-    /// | region に完全一致なし + 漢字 3 文字以上 | -600 (c 強化) |
-    /// | region に完全一致なし + 漢字 1〜2 文字 | -300 (b base) |
-    pub fn analyze<F>(input: &str, region_has_exact_match: F) -> Self
-    where
-        F: Fn(&str) -> bool,
-    {
-        let raw_regions = find_kanji_regions(input);
-        let mut regions = Vec::new();
-        for r in raw_regions {
-            let surface = &input[r.clone()];
-            let char_count = surface.chars().count();
-            let has_exact = region_has_exact_match(surface);
-            let penalty = if !has_exact && char_count >= 3 {
-                -600 // (c) 強化
-            } else {
-                -300 // (b) base
-            };
-            regions.push(KanjiRegion {
-                range: r,
-                char_count,
-                interior_penalty: penalty,
-            });
-        }
-        Self { regions }
-    }
-
-    /// edge の start 位置 `pos` が 漢字連続 region の内部 (= start 以外の位置) なら penalty を返す。
-    ///
-    /// region 境界 (= region.start) や region 外なら 0。
-    /// 複数 region に跨る場合は最初に hit した region の penalty を採用 (region は重ならない設計)。
-    #[cfg(test)]
+    /// `input` を walk して 漢字連続 region を検出する。
     #[must_use]
-    pub fn penalty_at(&self, pos: usize) -> i16 {
-        for region in &self.regions {
-            // 「内部」 = pos > region.start && pos < region.end
-            if pos > region.range.start && pos < region.range.end {
-                return region.interior_penalty;
-            }
-        }
-        0
+    pub fn analyze(input: &str) -> Self {
+        let regions = find_kanji_regions(input)
+            .into_iter()
+            .map(|r| {
+                let char_count = input[r.clone()].chars().count();
+                KanjiRegion {
+                    range: r,
+                    char_count,
+                }
+            })
+            .collect();
+        Self { regions }
     }
 
     /// `pos` を含む region の reference (なければ None)。 debug / 解析用途。
@@ -191,102 +154,39 @@ mod tests {
 
     #[test]
     fn analyze_empty_input_yields_no_regions() {
-        let analysis = BoundaryAnalysis::analyze("", |_| false);
+        let analysis = BoundaryAnalysis::analyze("");
         assert!(analysis.regions.is_empty());
     }
 
     #[test]
-    fn analyze_single_region_no_exact_match_short_uses_base_penalty() {
-        // 漢字 2 文字 + 完全一致なし → -300 (b base)
-        let analysis = BoundaryAnalysis::analyze("漢字", |_| false);
+    fn analyze_single_region_records_char_count() {
+        let analysis = BoundaryAnalysis::analyze("漢字");
         assert_eq!(analysis.regions.len(), 1);
         assert_eq!(analysis.regions[0].char_count, 2);
-        assert_eq!(analysis.regions[0].interior_penalty, -300);
-    }
-
-    #[test]
-    fn analyze_single_region_no_exact_match_long_uses_enhanced_penalty() {
-        // 漢字 3 文字 + 完全一致なし → -600 (c 強化)
-        let analysis = BoundaryAnalysis::analyze("紅魔館", |_| false);
-        assert_eq!(analysis.regions.len(), 1);
-        assert_eq!(analysis.regions[0].char_count, 3);
-        assert_eq!(analysis.regions[0].interior_penalty, -600);
-    }
-
-    #[test]
-    fn analyze_single_region_with_exact_match_uses_base_penalty() {
-        // 漢字 3 文字 + 完全一致あり → -300 (b base、 (c) 適用外)
-        let analysis = BoundaryAnalysis::analyze("紅魔館", |s| s == "紅魔館");
-        assert_eq!(analysis.regions.len(), 1);
-        assert_eq!(analysis.regions[0].interior_penalty, -300);
+        assert_eq!(analysis.regions[0].range, 0..6);
     }
 
     #[test]
     fn analyze_two_separate_regions() {
         // "魔理沙が好き" → region 0 = 魔理沙 (3 chars)、 region 1 = 好 (1 char)
-        let analysis = BoundaryAnalysis::analyze("魔理沙が好き", |_| false);
+        let analysis = BoundaryAnalysis::analyze("魔理沙が好き");
         assert_eq!(analysis.regions.len(), 2);
         assert_eq!(analysis.regions[0].char_count, 3);
-        assert_eq!(analysis.regions[0].interior_penalty, -600); // 3+ + 完全一致なし
         assert_eq!(analysis.regions[1].char_count, 1);
-        assert_eq!(analysis.regions[1].interior_penalty, -300); // 1 char、 c 適用外
-    }
-
-    // ─── penalty_at ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn penalty_at_zero_outside_regions() {
-        let analysis = BoundaryAnalysis::analyze("魔理沙", |_| false);
-        // pos 9 (= region.end) は外
-        assert_eq!(analysis.penalty_at(9), 0);
-    }
-
-    #[test]
-    fn penalty_at_zero_at_region_start() {
-        // region.start (= pos 0) は境界、 内部ではない
-        let analysis = BoundaryAnalysis::analyze("魔理沙", |_| false);
-        assert_eq!(analysis.penalty_at(0), 0);
-    }
-
-    #[test]
-    fn penalty_at_returns_value_for_interior_position() {
-        // "魔理沙" region [0..9]、 内部 pos = 3 (= 「理」 の start) または 6 (= 「沙」 の start)
-        let analysis = BoundaryAnalysis::analyze("紅魔館", |_| false);
-        assert_eq!(analysis.penalty_at(3), -600); // 内部、 強化 penalty
-        assert_eq!(analysis.penalty_at(6), -600);
-    }
-
-    #[test]
-    fn penalty_at_uses_base_when_exact_match_exists() {
-        let analysis = BoundaryAnalysis::analyze("紅魔館", |s| s == "紅魔館");
-        // 完全一致あり → base penalty -300
-        assert_eq!(analysis.penalty_at(3), -300);
-        assert_eq!(analysis.penalty_at(6), -300);
-    }
-
-    #[test]
-    fn penalty_at_handles_multiple_regions() {
-        // "魔理沙が好" → region 0 = [0..9] 漢字 3 / region 1 = [12..15] 漢字 1
-        let analysis = BoundaryAnalysis::analyze("魔理沙が好", |_| false);
-        assert_eq!(analysis.penalty_at(0), 0); // region 0 boundary
-        assert_eq!(analysis.penalty_at(3), -600); // region 0 interior
-        assert_eq!(analysis.penalty_at(9), 0); // region 0 end
-        assert_eq!(analysis.penalty_at(12), 0); // region 1 boundary
-        assert_eq!(analysis.penalty_at(15), 0); // region 1 end + outside
     }
 
     // ─── region_containing ───────────────────────────────────────────────────
 
     #[test]
     fn region_containing_returns_correct_region() {
-        let analysis = BoundaryAnalysis::analyze("紅魔館", |_| false);
+        let analysis = BoundaryAnalysis::analyze("紅魔館");
         let r = analysis.region_containing(3).unwrap();
         assert_eq!(r.range, 0..9);
     }
 
     #[test]
     fn region_containing_returns_none_outside() {
-        let analysis = BoundaryAnalysis::analyze("紅魔館", |_| false);
+        let analysis = BoundaryAnalysis::analyze("紅魔館");
         assert!(analysis.region_containing(9).is_none());
     }
 
@@ -295,19 +195,19 @@ mod tests {
     #[test]
     fn analyze_ignores_non_kanji_runs() {
         // カタカナ連続は scope 外、 region に入らない
-        let analysis = BoundaryAnalysis::analyze("ボイスボックス", |_| false);
+        let analysis = BoundaryAnalysis::analyze("ボイスボックス");
         assert!(analysis.regions.is_empty());
     }
 
     #[test]
     fn analyze_ignores_hiragana_runs() {
-        let analysis = BoundaryAnalysis::analyze("こんにちは", |_| false);
+        let analysis = BoundaryAnalysis::analyze("こんにちは");
         assert!(analysis.regions.is_empty());
     }
 
     #[test]
     fn analyze_ignores_alphanumeric_runs() {
-        let analysis = BoundaryAnalysis::analyze("API123", |_| false);
+        let analysis = BoundaryAnalysis::analyze("API123");
         assert!(analysis.regions.is_empty());
     }
 }

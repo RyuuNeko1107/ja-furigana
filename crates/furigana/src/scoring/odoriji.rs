@@ -33,7 +33,7 @@
 //!   そのまま 「々」 / 直前複製 のいずれかで残す (= 入力破壊しない)。
 
 use crate::kana::voice_first_kana;
-use crate::scoring::analyze::{AnalyzeResult, Token};
+use crate::scoring::analyze::Token;
 use crate::scoring::candidate::{Candidate, CandidateProvider, Score, ScoringContext, BAND_KANJI};
 
 /// 踊り字 (々) char。
@@ -70,7 +70,7 @@ impl CandidateProvider for OdorijiProvider {
             ODORIJI_CHAR.to_string(),
             ODORIJI_CHAR.to_string(), // placeholder、 post-pass で連濁適用
             pos..pos + len,
-            Score::new(BAND_KANJI, 1, 0, 0),
+            Score::new(BAND_KANJI, 1, 0),
         )]
     }
 }
@@ -100,11 +100,16 @@ pub fn apply_rendaku_inplace(tokens: &mut [Token]) {
     }
 }
 
-/// [`AnalyzeResult::tokens`] に [`apply_rendaku_inplace`] を適用する convenience 関数。
+/// 連濁 post-pass の adapter ([`crate::scoring::postpass::ReadingPostPass`])。
 ///
-/// `Furigana::analyze` から `scoring_analyze` 戻り値に対して呼ぶ用途。
-pub fn apply_rendaku_to_result(result: &mut AnalyzeResult) {
-    apply_rendaku_inplace(&mut result.tokens);
+/// 「々」 placeholder token に直前 token reading の連濁形を入れる。
+#[derive(Debug, Clone, Copy)]
+pub struct RendakuPass;
+
+impl crate::scoring::postpass::ReadingPostPass for RendakuPass {
+    fn apply(&self, tokens: &mut [Token]) {
+        apply_rendaku_inplace(tokens);
+    }
 }
 
 #[cfg(test)]

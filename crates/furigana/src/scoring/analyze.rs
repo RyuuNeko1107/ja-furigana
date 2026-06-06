@@ -257,7 +257,7 @@ mod tests {
         let dict = DictProvider {
             entries: vec![("魔理沙".into(), "マリサ".into(), Score::dict_exact(3))],
         };
-        let boundary = BoundaryAnalysis::analyze("魔理沙", |_| true); // exact match
+        let boundary = BoundaryAnalysis::analyze("魔理沙");
         let result = analyze(&ctx_with_boundary("魔理沙", &boundary), &[&dict]);
         assert_eq!(result.boundary_regions.len(), 1);
         assert_eq!(result.boundary_regions[0], 0..9);

@@ -9,7 +9,7 @@
 //! 3. 各候補 edge `(pos → pos + len)` で `dp[pos + len]` を更新 (score 比較で勝者採用)
 //! 4. `dp[n]` (input 末尾) から parent backtrack で path 復元
 //!
-//! 「最良」 は [`PathScore`] の lexicographic 比較で決定 (band → length → match_hits → boundary_penalty)。
+//! 「最良」 は [`PathScore`] の lexicographic 比較で決定 (weakest_band → edge_count → match_hits)。
 //!
 //! ## 注意
 //!
@@ -30,7 +30,6 @@ use std::cmp::Ordering;
 /// 1. `weakest_band` 大 — path 中の最低 band edge が高いほど勝ち (= 弱い edge を含まない)
 /// 2. `edge_count` 小 — edge 数が少ない path が勝ち (= longest match preference、 fragmentation 回避)
 /// 3. `total_match_hits` 多 — inline match condition hit 累積
-/// 4. `total_boundary_penalty` 大 (= less negative) — ペナルティ累積が軽い path 勝ち
 ///
 /// ### なぜ純 sum ではないか
 ///
@@ -39,8 +38,7 @@ use std::cmp::Ordering;
 /// 「魔理沙」 単独 (band 1000) より 「魔」+「理沙」 (band 1000 × 2) の方が total_band 大で勝ってしまう。
 ///
 /// `weakest_band` (= 最低 band) で比較することで 「弱い edge を含まない path 勝ち」 を表現、
-/// 同 weakest なら `edge_count` で fragmentation 抑制。 これで proposal §4.2 の意図
-/// (band → longest match → match_hits → boundary penalty) を path レベルで実現。
+/// 同 weakest なら `edge_count` で fragmentation 抑制 (= 過分割を抑える (a) longest match)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PathScore {
     /// path 中の最低 band edge の band 値。 path が空の時は `u16::MAX` (= 弱点なし)。
@@ -49,8 +47,6 @@ pub struct PathScore {
     pub edge_count: u32,
     /// edge の `match_hits` 累積
     pub total_match_hits: u32,
-    /// edge の `boundary_penalty` 累積 (i32、 negative = ペナルティ済み)
-    pub total_boundary_penalty: i32,
 }
 
 impl PathScore {
@@ -60,7 +56,6 @@ impl PathScore {
         weakest_band: u16::MAX,
         edge_count: 0,
         total_match_hits: 0,
-        total_boundary_penalty: 0,
     };
 
     /// この path に edge `score` を追加した新 PathScore を返す。
@@ -70,9 +65,6 @@ impl PathScore {
             weakest_band: self.weakest_band.min(score.band),
             edge_count: self.edge_count + 1,
             total_match_hits: self.total_match_hits + u32::from(score.match_hits),
-            total_boundary_penalty: self
-                .total_boundary_penalty
-                .saturating_add(i32::from(score.boundary_penalty)),
         }
     }
 }
@@ -84,11 +76,6 @@ impl Ord for PathScore {
             // edge_count: 小 = better、 比較は逆方向
             .then(other.edge_count.cmp(&self.edge_count))
             .then(self.total_match_hits.cmp(&other.total_match_hits))
-            // total_boundary_penalty: i32、 大 = ペナルティ累積軽い = better
-            .then(
-                self.total_boundary_penalty
-                    .cmp(&other.total_boundary_penalty),
-            )
     }
 }
 
@@ -240,16 +227,9 @@ mod tests {
     }
 
     #[test]
-    fn path_score_lighter_penalty_wins() {
-        let clean = PathScore::ZERO.add_edge(&Score::new(BAND_DICT_EXACT, 2, 0, 0));
-        let penalized = PathScore::ZERO.add_edge(&Score::new(BAND_DICT_EXACT, 2, 0, -300));
-        assert!(clean > penalized);
-    }
-
-    #[test]
     fn path_score_more_match_hits_wins() {
-        let with_hit = PathScore::ZERO.add_edge(&Score::new(BAND_DICT_EXACT, 2, 1, 0));
-        let no_hit = PathScore::ZERO.add_edge(&Score::new(BAND_DICT_EXACT, 2, 0, 0));
+        let with_hit = PathScore::ZERO.add_edge(&Score::new(BAND_DICT_EXACT, 2, 1));
+        let no_hit = PathScore::ZERO.add_edge(&Score::new(BAND_DICT_EXACT, 2, 0));
         assert!(with_hit > no_hit);
     }
 
@@ -442,14 +422,14 @@ mod tests {
             entries: vec![(
                 "上手".into(),
                 "カミテ".into(),
-                Score::new(BAND_DICT_EXACT, 2, 1, 0), // match_hits = 1
+                Score::new(BAND_DICT_EXACT, 2, 1), // match_hits = 1
             )],
         };
         let dict_default = DictProvider {
             entries: vec![(
                 "上手".into(),
                 "ジョウズ".into(),
-                Score::new(BAND_DICT_EXACT, 2, 0, 0), // match_hits = 0
+                Score::new(BAND_DICT_EXACT, 2, 0), // match_hits = 0
             )],
         };
         // どちらも band 1000 / length 2、 match_hits で 「カミテ」 が勝つ

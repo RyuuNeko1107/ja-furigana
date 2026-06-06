@@ -205,7 +205,7 @@ impl CandidateProvider for ProtectTokenProvider {
                     surface.to_string(),
                     surface.to_string(), // reading = surface (passthrough)
                     token.range.clone(),
-                    Score::new(BAND_PROTECTED, length, 0, 0),
+                    Score::new(BAND_PROTECTED, length, 0),
                 ));
             }
         }
@@ -362,7 +362,7 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                 surface.to_string(),
                 reading,
                 range.clone(),
-                Score::new(band, length, 0, 0),
+                Score::new(band, length, 0),
             ));
         }
         out

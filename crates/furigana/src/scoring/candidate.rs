@@ -4,7 +4,7 @@
 //!
 //! ## 概要
 //!
-//! - [`Score`]: candidate edge の score tuple、 lexicographic 比較 (band → length → match_hits → boundary_penalty)
+//! - [`Score`]: candidate edge の score tuple、 lexicographic 比較 (band → length → match_hits → weight)
 //! - [`Candidate`]: input text 上の 1 つの候補 edge (surface + reading + range + score)
 //! - [`CandidateProvider`]: candidate を供給する trait (entry / kanji / Lindera / 特殊処理 各 layer 実装)
 //! - band 定数: 1000 = 単語辞書完全一致、 950 = 特殊処理、 100 = 漢字辞書、 50 = Lindera unihan injection
@@ -73,9 +73,8 @@ pub const BAND_PROTECTED: u16 = 2000;
 /// 2. `length` 大 (longest match、 surface 長で勝負)
 /// 3. `match_hits` 多 (inline match condition 評価で hit した数)
 /// 4. `weight` 大 (代替候補の相対頻度、 ADR-0004)
-/// 5. `boundary_penalty` 大 (= less negative、 ペナルティが軽い path が勝つ)
 ///
-/// 同点 (= 全 5 軸同値) の場合の tie-break は caller 側 (例: TOML 出現順) で。
+/// 同点 (= 全 4 軸同値) の場合の tie-break は caller 側 (例: TOML 出現順) で。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct Score {
     /// band 値 (1000 / 950 / 100 / 50 等)
@@ -86,8 +85,6 @@ pub struct Score {
     pub match_hits: u8,
     /// 候補の相対頻度 (0–100、 default = 100、 alt 候補は dict 指定値)
     pub weight: u8,
-    /// (b)(c) 漢字連続 boundary penalty 累積。 negative = penalty あり。
-    pub boundary_penalty: i16,
 }
 
 /// default reading の weight (暗黙最大値)。
@@ -96,62 +93,54 @@ pub const WEIGHT_DEFAULT: u8 = 100;
 impl Score {
     /// 明示値で構築。
     #[must_use]
-    pub const fn new(band: u16, length: u8, match_hits: u8, boundary_penalty: i16) -> Self {
+    pub const fn new(band: u16, length: u8, match_hits: u8) -> Self {
         Self {
             band,
             length,
             match_hits,
             weight: WEIGHT_DEFAULT,
-            boundary_penalty,
         }
     }
 
     /// weight 指定付き構築 (alt 候補用)。
     #[must_use]
-    pub const fn with_weight(
-        band: u16,
-        length: u8,
-        match_hits: u8,
-        weight: u8,
-        boundary_penalty: i16,
-    ) -> Self {
+    pub const fn with_weight(band: u16, length: u8, match_hits: u8, weight: u8) -> Self {
         Self {
             band,
             length,
             match_hits,
             weight,
-            boundary_penalty,
         }
     }
 
     /// 単語辞書完全一致の score (band 1000、 length 指定)。
     #[must_use]
     pub const fn dict_exact(length: u8) -> Self {
-        Self::new(BAND_DICT_EXACT, length, 0, 0)
+        Self::new(BAND_DICT_EXACT, length, 0)
     }
 
     /// 特殊処理 score (band 950、 length 指定)。
     #[must_use]
     pub const fn special(length: u8) -> Self {
-        Self::new(BAND_SPECIAL, length, 0, 0)
+        Self::new(BAND_SPECIAL, length, 0)
     }
 
     /// 漢字辞書 score (band 100、 length 指定)。 length は通常 1。
     #[must_use]
     pub const fn kanji(length: u8) -> Self {
-        Self::new(BAND_KANJI, length, 0, 0)
+        Self::new(BAND_KANJI, length, 0)
     }
 
     /// Lindera unihan injection score (band 50、 length 指定)。
     #[must_use]
     pub const fn lindera(length: u8) -> Self {
-        Self::new(BAND_LINDERA_UNIHAN, length, 0, 0)
+        Self::new(BAND_LINDERA_UNIHAN, length, 0)
     }
 
     /// Lindera 2 字以上純漢字 surface 用 score (band 150、 length 指定、 ★alpha.20)。
     #[must_use]
     pub const fn lindera_compound(length: u8) -> Self {
-        Self::new(BAND_LINDERA_COMPOUND, length, 0, 0)
+        Self::new(BAND_LINDERA_COMPOUND, length, 0)
     }
 }
 
@@ -162,7 +151,6 @@ impl Ord for Score {
             .then(self.length.cmp(&other.length))
             .then(self.match_hits.cmp(&other.match_hits))
             .then(self.weight.cmp(&other.weight))
-            .then(self.boundary_penalty.cmp(&other.boundary_penalty))
     }
 }
 
@@ -269,23 +257,16 @@ mod tests {
 
     #[test]
     fn score_same_band_length_more_match_hits_wins() {
-        let with_hits = Score::new(BAND_DICT_EXACT, 2, 1, 0);
-        let without = Score::new(BAND_DICT_EXACT, 2, 0, 0);
+        let with_hits = Score::new(BAND_DICT_EXACT, 2, 1);
+        let without = Score::new(BAND_DICT_EXACT, 2, 0);
         assert!(with_hits > without, "match_hits tie-break");
     }
 
     #[test]
-    fn score_lighter_penalty_wins() {
-        let no_penalty = Score::new(BAND_DICT_EXACT, 2, 0, 0);
-        let with_penalty = Score::new(BAND_DICT_EXACT, 2, 0, -300);
-        assert!(no_penalty > with_penalty, "no penalty > -300 penalty");
-    }
-
-    #[test]
-    fn score_lesser_penalty_wins() {
-        let small_penalty = Score::new(BAND_DICT_EXACT, 2, 0, -100);
-        let large_penalty = Score::new(BAND_DICT_EXACT, 2, 0, -600);
-        assert!(small_penalty > large_penalty, "-100 > -600");
+    fn score_same_band_higher_weight_wins() {
+        let high = Score::with_weight(BAND_DICT_EXACT, 2, 0, 100);
+        let low = Score::with_weight(BAND_DICT_EXACT, 2, 0, 30);
+        assert!(high > low, "weight tie-break (ADR-0004)");
     }
 
     #[test]

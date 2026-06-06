@@ -45,4 +45,5 @@ pub mod lindera_fallback;
 pub mod matcher;
 pub mod numbers;
 pub mod odoriji;
+pub mod postpass;
 pub mod special;

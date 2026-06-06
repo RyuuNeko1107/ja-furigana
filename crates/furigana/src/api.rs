@@ -17,13 +17,12 @@ use crate::scoring::bracket::AccentPhrase;
 use crate::scoring::candidate::{
     Candidate, CandidateProvider, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
 };
-use crate::scoring::contextual::apply_hara_suku_to_result;
 use crate::scoring::lindera_fallback::LinderaFallbackProvider;
 use crate::scoring::matcher::{
-    next2_logical_token, next_logical_token, prev_logical_token, MatchContext,
+    next2_logical_token, next_logical_token, prev_logical_token, resolve_readings, MatchContext,
 };
 use crate::scoring::numbers::NumberCandidateProvider;
-use crate::scoring::odoriji::{apply_rendaku_to_result, OdorijiProvider};
+use crate::scoring::odoriji::OdorijiProvider;
 use crate::scoring::special::{
     normalize_alphabet, AlphabetPassthroughProvider, ProtectTokenProvider,
 };
@@ -281,7 +280,7 @@ impl Furigana {
     /// `tokens` / `path_indices` 空 で `candidates` / `boundary_regions` のみ返る。
     ///
     /// 「々」 token の reading は path 確定後に直前 token reading + 連濁判定で書き換え
-    /// ([`crate::scoring::odoriji::apply_rendaku_to_result`])、 placeholder の 「々」 は残らない。
+    /// ([`crate::scoring::postpass`] の post-pass 群)、 placeholder の 「々」 は残らない。
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
         let protect = ProtectTokenProvider::new(input);
@@ -303,16 +302,14 @@ impl Furigana {
             &lindera,
         ];
 
-        let boundary =
-            BoundaryAnalysis::analyze(input, |surface| self.dict.lookup_jukugo(surface).is_some());
+        let boundary = BoundaryAnalysis::analyze(input);
 
         let ctx = ScoringContext {
             input,
             boundary: &boundary,
         };
         let mut result = scoring_analyze(&ctx, &providers);
-        apply_rendaku_to_result(&mut result);
-        apply_hara_suku_to_result(&mut result);
+        crate::scoring::postpass::apply_all(&mut result.tokens);
         result
     }
 
@@ -426,35 +423,23 @@ impl<'a> DictBridgeProvider<'a> {
 
             let mctx = Self::build_match_context(input, pos, end_pos);
 
-            let reading = entry
-                .matches()
-                .iter()
-                .find(|m| m.condition.matches_context(&mctx))
-                .map(|m| m.reading.as_str())
-                .unwrap_or_else(|| entry.default_reading());
-
             let band = if char_count == 1 {
                 BAND_KANJI
             } else {
                 BAND_DICT_EXACT
             };
 
-            out.push(Candidate::new(
-                surface.to_string(),
-                reading.to_string(),
-                pos..end_pos,
-                Score::new(band, length, 0, 0),
-            ));
-
-            for alt in entry.alternatives() {
-                if !alt.condition.matches_context(&mctx) {
-                    continue;
-                }
+            for (reading, weight) in resolve_readings(
+                entry.matches(),
+                entry.default_reading(),
+                entry.alternatives(),
+                &mctx,
+            ) {
                 out.push(Candidate::new(
                     surface.to_string(),
-                    alt.reading.to_string(),
+                    reading.to_string(),
                     pos..end_pos,
-                    Score::with_weight(band, length, 0, alt.weight, 0),
+                    Score::with_weight(band, length, 0, weight),
                 ));
             }
 
@@ -485,28 +470,14 @@ impl<'a> DictBridgeProvider<'a> {
             if emitted.contains(surface) {
                 continue;
             }
-            let reading = block
-                .matches
-                .iter()
-                .find(|m| m.condition.matches_context(&mctx))
-                .map(|m| m.reading.as_str())
-                .unwrap_or(block.default.as_str());
-            out.push(Candidate::new(
-                surface.to_string(),
-                reading.to_string(),
-                pos..end_pos,
-                Score::kanji(1),
-            ));
-
-            for alt in &block.alt {
-                if !alt.condition.matches_context(&mctx) {
-                    continue;
-                }
+            for (reading, weight) in
+                resolve_readings(&block.matches, &block.default, &block.alt, &mctx)
+            {
                 out.push(Candidate::new(
                     surface.to_string(),
-                    alt.reading.to_string(),
+                    reading.to_string(),
                     pos..end_pos,
-                    Score::with_weight(BAND_KANJI, 1, 0, alt.weight, 0),
+                    Score::with_weight(BAND_KANJI, 1, 0, weight),
                 ));
             }
 

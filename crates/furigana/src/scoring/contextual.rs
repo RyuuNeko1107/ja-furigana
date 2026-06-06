@@ -10,7 +10,7 @@
 //! - [`apply_hara_suku_inplace`]: 「腹 / お腹 / 小腹 + (助詞) + 空く活用」 を
 //!   「すく」 系読みに補正 (= 空腹の意。 「席が空いた」 等 腹文脈なしの 「あく」 は不変)。
 
-use crate::scoring::analyze::{AnalyzeResult, Token};
+use crate::scoring::analyze::Token;
 
 /// surface が 「腹」 で終わるか (= 腹 / お腹 / 小腹 / 空き腹 等)。
 fn is_hara_surface(s: &str) -> bool {
@@ -62,9 +62,14 @@ pub fn apply_hara_suku_inplace(tokens: &mut [Token]) {
     }
 }
 
-/// [`AnalyzeResult::tokens`] に [`apply_hara_suku_inplace`] を適用する convenience 関数。
-pub fn apply_hara_suku_to_result(result: &mut AnalyzeResult) {
-    apply_hara_suku_inplace(&mut result.tokens);
+/// 腹+空く 文脈補正 post-pass の adapter ([`crate::scoring::postpass::ReadingPostPass`])。
+#[derive(Debug, Clone, Copy)]
+pub struct HaraSukuPass;
+
+impl crate::scoring::postpass::ReadingPostPass for HaraSukuPass {
+    fn apply(&self, tokens: &mut [Token]) {
+        apply_hara_suku_inplace(tokens);
+    }
 }
 
 #[cfg(test)]

@@ -274,7 +274,7 @@ impl NumberCandidateProvider {
             surface.to_string(),
             reading,
             pos..pos + m_end,
-            Score::new(BAND_SPECIAL, length, 0, 0),
+            Score::new(BAND_SPECIAL, length, 0),
         )
     }
 
