@@ -6,7 +6,27 @@
 
 ## [Unreleased]
 
-## [0.1.3] - 2026-06-07
+## [0.1.4] - 2026-06-07
+
+scoring engine の内部リファクタリング (挙動不変、 `scoring` は `pub(crate)` で
+SemVer 非破壊)。 アーキテクチャ・レビューで挙がった deepening を反映。
+
+### Changed (internal)
+
+- **死配線だった boundary penalty を撤去** (`scoring/boundary.rs` / `candidate.rs`
+  / `engine.rs`): (b)(c) penalty (-300/-600) は `penalty_at()` が `#[cfg(test)]` で
+  本番未配線、 `Score.boundary_penalty` は常に 0 の死軸だった。 過分割抑制は
+  `PathScore.edge_count` で足りるため penalty 経路を撤去し Score / PathScore を縮小。
+  region 検出 (`boundary_regions`) は維持。
+- **post-pass 層に `ReadingPostPass` seam を導入** (`scoring/postpass.rs`): `analyze()`
+  に直書きしていた連濁 / 腹+空く 補正を adapter (`RendakuPass` / `HaraSukuPass`) 化、
+  `POST_PASSES` 配列で適用順を data 化。
+- **dict reading 解決を `matcher::resolve_readings` に集約**: DictBridgeProvider の
+  emit に 4 重コピペされていた 「match 探索→default、 alt filter」 を 1 箇所に。
+- **TOML dir loader を `loader::for_each_toml_in_dir` に統合**: rules / dict /
+  loanwords の 3 経路が重複させていた walk + schema 検証 + role 解決を共通化、
+  walk の 2 重実装を 1 つに。
+- 設計決定を ADR-0005 (多トークン文脈補正は post-pass 層) に記録。
 
 文脈依存読みの post-pass 追加 (patch)。
 
