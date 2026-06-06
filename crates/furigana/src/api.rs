@@ -17,6 +17,7 @@ use crate::scoring::bracket::AccentPhrase;
 use crate::scoring::candidate::{
     Candidate, CandidateProvider, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
 };
+use crate::scoring::contextual::apply_hara_suku_to_result;
 use crate::scoring::lindera_fallback::LinderaFallbackProvider;
 use crate::scoring::matcher::{
     next2_logical_token, next_logical_token, prev_logical_token, MatchContext,
@@ -311,6 +312,7 @@ impl Furigana {
         };
         let mut result = scoring_analyze(&ctx, &providers);
         apply_rendaku_to_result(&mut result);
+        apply_hara_suku_to_result(&mut result);
         result
     }
 

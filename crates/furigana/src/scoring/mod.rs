@@ -37,6 +37,7 @@ pub mod analyze;
 pub mod boundary;
 pub mod bracket;
 pub mod candidate;
+pub mod contextual;
 pub mod engine;
 pub mod format;
 pub mod inspect;
