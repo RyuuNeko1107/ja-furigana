@@ -328,9 +328,9 @@ fn scale_trailing_counter_suffix(
 /// range marker (`〜` / `~` / `～`) が **数字 / 漢数字 / 全角数字 と隣接** しているか。
 ///
 /// 「2〜3回」 「100〜200円」 のような range 用途では `prev` / `next` どちらかが
-/// 数字なので 「から」 reading を採用する。 一方 「へ〜うま」 「も〜むりすぎ」 のような
-/// kana / 漢字 context では range ではなく vowel extension 用途なので 「から」 は誤読
-/// (= candidate を出さず、 後段 provider / Lindera fallback に譲る)。
+/// 数字なので 「から」 reading を採用する。 一方 「がんばれ〜」 「も〜むりすぎ」 のような
+/// kana / 漢字 / 文末 context では range ではなく vowel extension / 強調用途なので
+/// 「から」 は誤読 (= caller 側で空 reading に置換し、 読み上げず surface のみ消費)。
 ///
 /// 判定: 直前 / 直後 (UTF-8 char 単位で 1 文字遡る or 進む) のいずれかが数字
 /// (ASCII 0-9、 全角 ０-９、 漢数字 一〜十百千) なら range context。
@@ -498,14 +498,14 @@ impl CandidateProvider for NumberCandidateProvider {
         if let Some(ch) = rest.chars().next() {
             if let Some(read) = symbol_char_reading(ch, &self.symbols) {
                 // 〜 / ~ / ～ は **range marker と vowel extension の dual use**。
-                // 数字 context (= 「2〜3」 「100〜200円」) なら従来通り concat、
-                // kana / 漢字 context (= 「へ〜うま」 「も〜むりすぎ」) では reading
-                // 前後に空白 padding を入れて 「へ から うま」 のように区切る (=
-                // 「へカラうま」 の concat 違和感を解消、 reading そのものは保持)。
+                // 数字 context (= 「2〜3」 「100〜200円」) なら従来通り 「から」 で concat、
+                // kana / 漢字 / 文末 context (= 「がんばれ〜」 「も〜むりすぎ」) では range
+                // ではなく長音・強調用途なので 「から」 は誤読。 空 reading で surface のみ
+                // 消費し、 読み上げない (= 「がんばれ〜」 → 「がんばれ」)。
                 let is_range_marker = matches!(ch, '〜' | '~' | '～');
                 let final_read =
                     if is_range_marker && !range_marker_in_numeric_context(input, pos, ch) {
-                        format!(" {read} ")
+                        String::new()
                     } else {
                         read
                     };
@@ -813,15 +813,27 @@ mod tests {
     }
 
     #[test]
-    fn tilde_padded_with_spaces_in_kana_context() {
-        // 「へ〜うま」 のような kana context では 「から」 を空白 padding で区切り
-        // 「へ から うま」 のような concat 違和感解消形に (★alpha.21 fix)。
+    fn tilde_silent_in_kana_context() {
+        // 「へ〜うま」 のような kana context では range ではなく長音・強調用途。
+        // 「から」 は誤読なので空 reading で surface のみ消費する。
         let p = provider();
         let input = "へ〜うま";
         let pos = "へ".len(); // 〜 の byte position
         let cands = p.candidates_at(&ctx(input), pos);
         let c = find(&cands, "〜").expect("tilde candidate in kana context");
-        assert_eq!(c.reading, " から ", "空白 padding 付き 「から」 を期待");
+        assert_eq!(c.reading, "", "kana 文脈の 〜 は読み上げない (空 reading)");
+    }
+
+    #[test]
+    fn tilde_silent_at_end_of_string() {
+        // 「がんばれ〜」 のような文末 (= prev kana / next 無し) でも 「から」 は誤読。
+        // 空 reading で消費し 「がんばれ」 と読む。
+        let p = provider();
+        let input = "がんばれ〜";
+        let pos = "がんばれ".len(); // 末尾 〜 の byte position
+        let cands = p.candidates_at(&ctx(input), pos);
+        let c = find(&cands, "〜").expect("tilde candidate at end");
+        assert_eq!(c.reading, "", "文末の 〜 は読み上げない (空 reading)");
     }
 
     #[test]
