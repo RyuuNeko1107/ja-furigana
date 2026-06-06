@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-06
+
+production 由来の記号読みバグ修正 + 0.1.1 以降の蓄積分 (patch)。
+
+### Fixed
+
+- **波ダッシュ `〜` / `~` / `～` が非数値文脈で 「から」 と誤読されるバグ**
+  (`scoring/numbers.rs`): `がんばれ〜` のような口語の長音・強調用途で `〜` が
+  「から」 と読み上げられていた (TTS で 「がんばれ から」 になる)。 数字隣接
+  (`3〜5` = range 用途) のときのみ 「から」 を採用し、 それ以外 (kana / 漢字 /
+  文末) では空 reading で surface のみ消費して読み上げないよう修正。 alpha.21 の
+  空白 padding 対処 (`" から "`) が結局 「から」 を発話していた regression を是正。
+
 ### Added
 
 - **`furigana serve` の rate limit を config 化** (`config.rs` / `serve/mod.rs`):
