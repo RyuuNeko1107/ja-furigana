@@ -83,7 +83,14 @@ pub struct Score {
     pub length: u8,
     /// inline match condition hit 数 (default ≠ match block)
     pub match_hits: u8,
-    /// 候補の相対頻度 (0–100、 default = 100、 alt 候補は dict 指定値)
+    /// 候補の相対頻度 (0–100、 default = 100、 alt 候補は dict 指定値)。
+    ///
+    /// **用途は `AnalyzeResult` の `alternatives` 配列の順位付け** (ADR-0004、
+    /// [`crate::scoring::analyze`] が weight 降順で並べる)。 path 選択そのものは
+    /// [`crate::scoring::engine::PathScore`] (band → edge_count → match_hits) で行い
+    /// weight を集約しない。 default は weight 100 (最大) かつ provider が最初に emit
+    /// するので path には常に default が乗る = ADR-0004 の 「default = 最高 weight」 が
+    /// 自然に満たされる。 (Score::Ord の weight 軸は test 用、 DP は通らない)
     pub weight: u8,
 }
 
