@@ -358,12 +358,51 @@ fn is_digit_like_char(c: char) -> bool {
     )
 }
 
+impl NumberCandidateProvider {
+    /// section 7 (記号 1 文字) を emit。 candidates_at から、 数値系を skip する非数値
+    /// lead 経路と通常経路の双方から呼ぶ (= 記号判定は数値系の有無に依らず常に行う)。
+    fn emit_symbol(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+        let Some(ch) = rest.chars().next() else {
+            return;
+        };
+        if let Some(read) = symbol_char_reading(ch, &self.symbols) {
+            // 〜 / ~ / ～ は **range marker と vowel extension の dual use**。
+            // 数字 context (= 「2〜3」 「100〜200円」) なら従来通り 「から」 で concat、
+            // kana / 漢字 / 文末 context (= 「がんばれ〜」 「も〜むりすぎ」) では range
+            // ではなく長音・強調用途なので 「から」 は誤読。 空 reading で surface のみ
+            // 消費し、 読み上げない (= 「がんばれ〜」 → 「がんばれ」)。
+            let is_range_marker = matches!(ch, '〜' | '~' | '～');
+            let final_read = if is_range_marker && !range_marker_in_numeric_context(input, pos, ch) {
+                String::new()
+            } else {
+                read
+            };
+            out.push(self.make(input, pos, ch.len_utf8(), final_read));
+        }
+    }
+}
+
 impl CandidateProvider for NumberCandidateProvider {
     fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
         let input = ctx.input;
         let mut out: Vec<Candidate> = Vec::new();
         let rest = &input[pos..];
         if rest.is_empty() {
+            return out;
+        }
+
+        // ─── 先頭文字 dispatch (hot path 最適化) ─────────────────────────────
+        // section 1-6 / 8 の数値系正規表現は全て **数字系の先頭文字** を要求する
+        // (NUM_PAT = 任意符号 + [0-9０-９]、 DATE/KANJI_NUM = 漢数字)。 先頭がそれ以外
+        // なら必ず空振りするので、 記号系 (section 7) だけ評価して即 return する。
+        // これで全 byte 位置で 6+ regex を試行する無駄を消す (dict prefix index 化で
+        // dict scan が消えた後の相対的 hot path)。 符号始まり (= 「-5本」) も拾うため
+        // digit-like に符号 5 種を加えた集合で判定。
+        let numeric_lead = rest.chars().next().is_some_and(|c| {
+            is_digit_like_char(c) || matches!(c, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
+        });
+        if !numeric_lead {
+            self.emit_symbol(input, pos, rest, &mut out);
             return out;
         }
 
@@ -495,23 +534,7 @@ impl CandidateProvider for NumberCandidateProvider {
         }
 
         // ─── 7. 記号 1 文字 ─────────────────────────────────────────────────
-        if let Some(ch) = rest.chars().next() {
-            if let Some(read) = symbol_char_reading(ch, &self.symbols) {
-                // 〜 / ~ / ～ は **range marker と vowel extension の dual use**。
-                // 数字 context (= 「2〜3」 「100〜200円」) なら従来通り 「から」 で concat、
-                // kana / 漢字 / 文末 context (= 「がんばれ〜」 「も〜むりすぎ」) では range
-                // ではなく長音・強調用途なので 「から」 は誤読。 空 reading で surface のみ
-                // 消費し、 読み上げない (= 「がんばれ〜」 → 「がんばれ」)。
-                let is_range_marker = matches!(ch, '〜' | '~' | '～');
-                let final_read =
-                    if is_range_marker && !range_marker_in_numeric_context(input, pos, ch) {
-                        String::new()
-                    } else {
-                        read
-                    };
-                out.push(self.make(input, pos, ch.len_utf8(), final_read));
-            }
-        }
+        self.emit_symbol(input, pos, rest, &mut out);
 
         // ─── 8. 素の数字 ────────────────────────────────────────────────────
         if let Some(m) = at_start(&DIGIT_RE, rest) {

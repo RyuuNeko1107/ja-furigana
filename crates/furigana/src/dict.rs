@@ -35,6 +35,7 @@ use crate::scoring::format::{Entry, EntryDetail, KanjiBlock};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// TOML ファイルの `[entries]` セクションを受ける defensive な型。
 ///
@@ -105,6 +106,16 @@ pub struct Dict {
     /// 単漢字単独 default + 文脈分岐 reading を持つ first-class candidate generator、
     /// Smart engine から `kanji_iter()` で walk して `MatchCondition` 評価する想定。
     kanji: Vec<KanjiBlock>,
+    /// **prefix scan index** (surface 先頭 char → その char で始まる `rich` surface 群)。
+    ///
+    /// `DictBridgeProvider` が各 byte 位置で 「この位置の文字で始まる entry だけ」 を
+    /// 引くための逆引き。 これが無いと全 ~44k entry を毎位置 linear scan して
+    /// O(N × M) になる (= 性能 hot path)。 lazy build (= 初回 [`Self::rich_index`]
+    /// 呼び出し時に `rich` 全体から構築)、 `insert` / `merge` で invalidate。
+    rich_index: OnceLock<HashMap<char, Vec<String>>>,
+    /// `[[kanji]]` block の prefix index (char → `kanji` vec 内 index 群)。
+    /// rich_index と同趣旨で、 kanji block の毎位置 linear scan を回避する。
+    kanji_index: OnceLock<HashMap<char, Vec<usize>>>,
 }
 
 impl Dict {
@@ -335,6 +346,8 @@ impl Dict {
             self.jukugo.insert(s.clone(), r.clone());
         }
         self.rich.insert(s, Entry::Simple(r));
+        // rich を変更したので prefix index を invalidate (= 次の lookup で再 build)。
+        self.rich_index = OnceLock::new();
     }
 
     /// 別の Dict を merge (other の方が後勝ち)
@@ -345,6 +358,9 @@ impl Dict {
         // ★A2 alpha.12: [[kanji]] block も merge (= append、 重複 char は両方残るので
         // 「後勝ち」 ではなく order 依存。 同 char の重複は validate.py で reject 想定)
         self.kanji.extend(other.kanji);
+        // rich / kanji を変更したので prefix index を invalidate。
+        self.rich_index = OnceLock::new();
+        self.kanji_index = OnceLock::new();
     }
 
     /// surface に対応する完全 [`Entry`] を返す (★A2、 alpha.11)。
@@ -364,6 +380,62 @@ impl Dict {
     /// 区別なく全 entry を返す。
     pub fn rich_iter(&self) -> impl Iterator<Item = (&str, &Entry)> {
         self.rich.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// `rich` の prefix index を返す (lazy build)。
+    ///
+    /// surface 先頭 char → その char で始まる surface 群。 [`Self::rich_starting_with`]
+    /// が使う内部 helper。
+    fn rich_index(&self) -> &HashMap<char, Vec<String>> {
+        self.rich_index.get_or_init(|| {
+            let mut m: HashMap<char, Vec<String>> = HashMap::new();
+            for k in self.rich.keys() {
+                if let Some(c) = k.chars().next() {
+                    m.entry(c).or_default().push(k.clone());
+                }
+            }
+            m
+        })
+    }
+
+    /// **先頭 char `c` で始まる `rich` entry のみ** を iterate する (= prefix scan)。
+    ///
+    /// `DictBridgeProvider` が各 byte 位置で呼ぶ hot path。 全 entry の linear scan
+    /// (O(M)) ではなく index 引きした小さな bucket だけを返すので O(k)。
+    /// 呼び出し側は更に `surface` 全体の prefix 一致を確認すること (index は先頭
+    /// char しか保証しない)。 順序は build 時の `rich` 反復順依存 (= 元の `rich_iter`
+    /// と同じく HashMap order、 tie-break は scoring engine が決める)。
+    ///
+    /// 内部 (DictBridgeProvider) 専用、 公開 API には載せない (= `pub(crate)`)。
+    pub(crate) fn rich_starting_with(&self, c: char) -> impl Iterator<Item = (&str, &Entry)> {
+        self.rich_index()
+            .get(&c)
+            .into_iter()
+            .flatten()
+            .filter_map(move |s| self.rich.get(s).map(|e| (s.as_str(), e)))
+    }
+
+    /// `[[kanji]]` block の prefix index を返す (lazy build)。
+    fn kanji_index(&self) -> &HashMap<char, Vec<usize>> {
+        self.kanji_index.get_or_init(|| {
+            let mut m: HashMap<char, Vec<usize>> = HashMap::new();
+            for (i, block) in self.kanji.iter().enumerate() {
+                if let Some(c) = block.char.chars().next() {
+                    m.entry(c).or_default().push(i);
+                }
+            }
+            m
+        })
+    }
+
+    /// **char `c` の `[[kanji]]` block のみ** を iterate (= prefix scan、 [`Self::kanji_iter`]
+    /// の index 引き版)。 block.char は 1 字なので `c` 完全一致と等価。 内部専用 (= `pub(crate)`)。
+    pub(crate) fn kanji_starting_with(&self, c: char) -> impl Iterator<Item = &KanjiBlock> {
+        self.kanji_index()
+            .get(&c)
+            .into_iter()
+            .flatten()
+            .map(move |&i| &self.kanji[i])
     }
 
     /// [[kanji]] block 配列を iter 公開 (★A2、 alpha.12、 `core/kanji/*.toml` 由来)。

@@ -10,7 +10,8 @@ use crate::error::Result;
 use crate::reading::{tokens_to_hiragana, tokens_to_ruby, ReadingToken};
 use crate::rules::RulesData;
 use crate::scoring::analyze::{
-    analyze as scoring_analyze, AlternativeReading, AnalyzeResult, Token as AnalyzeToken,
+    analyze as scoring_analyze, analyze_tokens as scoring_analyze_tokens, AlternativeReading,
+    AnalyzeResult, Token as AnalyzeToken,
 };
 use crate::scoring::boundary::BoundaryAnalysis;
 use crate::scoring::bracket::AccentPhrase;
@@ -138,15 +139,25 @@ impl Furigana {
     /// と判定される。
     #[must_use]
     pub fn tokenize(&self, text: &str) -> Vec<ReadingToken> {
-        let result = self.analyze(text);
-        result
-            .tokens
+        self.analyze_tokens(text)
             .into_iter()
             .map(|t| ReadingToken {
                 surface: t.surface,
                 reading: Some(t.reading),
             })
             .collect()
+    }
+
+    /// [`Self::analyze`] の軽量版 (= 採択 path token のみ、 `candidates` / `alternatives`
+    /// を計算しない)。 production 経路 (`to_*` / `tokenize`) 用。
+    ///
+    /// provider 構成は [`Self::analyze`] と完全に同一 (= 同じ採択 path)。 違いは debug 用
+    /// 集約を省く点だけ。 inspect が要る caller は [`Self::analyze`] を使う。
+    #[must_use]
+    fn analyze_tokens(&self, input: &str) -> Vec<AnalyzeToken> {
+        let mut tokens = self.with_analysis(input, scoring_analyze_tokens);
+        crate::scoring::postpass::apply_all(&mut tokens);
+        tokens
     }
 
     /// テキスト → ひらがな文字列
@@ -258,19 +269,12 @@ impl Furigana {
     /// `engine()` setting に依らず Smart 結果を返す (= caller が明示的に
     /// Smart 解析を要求している前提)。
     ///
-    /// ## 構成 provider (alpha.10 段階 + alpha.13 追加)
+    /// 構成 provider (Protect / Alphabet+loanwords / DictBridge / Number / Odoriji /
+    /// Lindera fallback) は [`Self::with_analysis`] に集約。 本 method はその full 版
+    /// (= debug 用の `candidates` 集約 + `alternatives` 抽出込み)。 production の `to_*`
+    /// / `tokenize` は軽量 [`Self::analyze_tokens`] 経由で同一 path を得る。
     ///
-    /// - [`ProtectTokenProvider`] (URL / Email / 絵文字、 band 2000)
-    /// - [`AlphabetPassthroughProvider`] (英字 passthrough、 hit は band 1000 / miss は band 100)
-    /// - [`DictBridgeProvider`] (= self.dict 経由、 jukugo は band 1000 / unihan は band 100)
-    /// - [`NumberCandidateProvider`] (数字 + 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 /
-    ///   記号 / 素の数字、 band 950)
-    /// - [`OdorijiProvider`] (々 placeholder edge、 band 100、 post-pass で連濁適用)
-    /// - [`LinderaFallbackProvider`] (★alpha.13、 Lindera + IPADIC、 band 50): 他 provider が
-    ///   一切覆わない位置 (= 助詞 / okurigana / dict 未登録 単語) を埋める safety net
-    ///
-    /// loanwords 検索は alpha.10 では未統合 (= AlphabetPassthrough は lookup 無しの passthrough_only)。
-    /// `numeric_phrases` (二十歳=ハタチ 等) も別 provider 化が望ましいが C3 scope 外。
+    /// `numeric_phrases` (二十歳=ハタチ 等) の別 provider 化は今後の課題 (C3 scope 外)。
     ///
     /// ## 戻り値
     ///
@@ -283,15 +287,38 @@ impl Furigana {
     /// ([`crate::scoring::postpass`] の post-pass 群)、 placeholder の 「々」 は残らない。
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
+        let mut result = self.with_analysis(input, scoring_analyze);
+        crate::scoring::postpass::apply_all(&mut result.tokens);
+        result
+    }
+
+    /// 6 provider 構成 + [`BoundaryAnalysis`] + [`ScoringContext`] を組み立て、
+    /// `run(ctx, providers)` を呼んで結果を返す共通土台。
+    ///
+    /// [`Self::analyze`] (full debug) と [`Self::analyze_tokens`] (production lightweight)
+    /// が **同一の採択 path** を得るために、 provider 列をここ 1 箇所に集約する
+    /// (= 旧実装は両 method に provider 構成をコピペしており、 provider 追加時の
+    /// drift 源だった)。 provider lifetime は本関数内 local に束縛されるので、
+    /// 結果を返す形ではなく closure を渡す形にしている。
+    ///
+    /// ## 構成 provider
+    ///
+    /// - [`ProtectTokenProvider`] (URL / Email / 絵文字、 band 2000)
+    /// - [`AlphabetPassthroughProvider`] (英字 passthrough + loanwords lookup、 hit 1000 / miss 100)
+    /// - [`DictBridgeProvider`] (= self.dict 経由、 jukugo 1000 / unihan 100 / `[[kanji]]` block)
+    /// - [`NumberCandidateProvider`] (数字 + 助数詞 / スケール / SI 単位 / 日付 / 時刻 / 記号、 band 950)
+    /// - [`OdorijiProvider`] (々 placeholder edge、 band 100、 post-pass で連濁適用)
+    /// - [`LinderaFallbackProvider`] (Lindera + IPADIC、 band 50/150): 他 provider が
+    ///   覆わない位置 (= 助詞 / okurigana / dict 未登録語) を埋める safety net
+    fn with_analysis<R>(
+        &self,
+        input: &str,
+        run: impl FnOnce(&ScoringContext, &[&dyn CandidateProvider]) -> R,
+    ) -> R {
         let protect = ProtectTokenProvider::new(input);
-        // ★alpha.21: loanwords lookup を渡して band 1000 hit を有効化 (= 「YouTube」
-        // 「Java」 「Discord」 等が dict 適用される)。 旧 passthrough_only mode は
-        // miss-only で alphabet を素通しだったが、 dict 整備が進んで再統合した。
         let alphabet = AlphabetPassthroughProvider::new(input, Arc::clone(&self.loanwords));
         let dict_bridge = DictBridgeProvider::new(&self.dict);
         let odoriji = OdorijiProvider::new();
-        // ★alpha.13: Lindera fallback (band 50) = 他 provider が一切覆わない位置の safety net。
-        // construction で input 全体を tokenize、 各 candidates_at は edge 配列 lookup のみ。
         let lindera = LinderaFallbackProvider::new(self.analyzer(), input);
         let providers: [&dyn CandidateProvider; 6] = [
             &protect,
@@ -303,14 +330,11 @@ impl Furigana {
         ];
 
         let boundary = BoundaryAnalysis::analyze(input);
-
         let ctx = ScoringContext {
             input,
             boundary: &boundary,
         };
-        let mut result = scoring_analyze(&ctx, &providers);
-        crate::scoring::postpass::apply_all(&mut result.tokens);
-        result
+        run(&ctx, &providers)
     }
 
     /// accent mode 出力 (intonation.md §7.1)。
@@ -404,15 +428,21 @@ impl<'a> DictBridgeProvider<'a> {
         )
     }
 
+    /// entries (`rich`) を emit。 戻り値 = **1 字 surface (= 先頭 char) を emit したか**
+    /// (= 後段 kanji / unihan phase の dedup 判定用)。
+    ///
+    /// 先頭 char bucket だけを引く ([`Dict::rich_starting_with`])。 旧実装は全 ~44k
+    /// entry を毎位置 linear scan していた (O(N×M))。
     fn emit_entries(
         &self,
         input: &str,
         pos: usize,
-        emitted: &mut std::collections::HashSet<String>,
+        tail: &str,
+        first_char: char,
         out: &mut Vec<Candidate>,
-    ) {
-        let tail = &input[pos..];
-        for (surface, entry) in self.dict.rich_iter() {
+    ) -> bool {
+        let mut char_emitted = false;
+        for (surface, entry) in self.dict.rich_starting_with(first_char) {
             if !tail.starts_with(surface) {
                 continue;
             }
@@ -443,69 +473,50 @@ impl<'a> DictBridgeProvider<'a> {
                 ));
             }
 
-            emitted.insert(surface.to_string());
+            if char_count == 1 {
+                char_emitted = true; // 1 字 surface (= 先頭 char そのもの) を emit
+            }
         }
+        char_emitted
     }
 
+    /// `[[kanji]]` block を emit (先頭 char の最初の 1 block のみ、 旧実装の dedup 等価)。
+    /// 戻り値 = emit したか。 char index 引き ([`Dict::kanji_starting_with`])。
     fn emit_kanji_blocks(
         &self,
         input: &str,
         pos: usize,
-        emitted: &mut std::collections::HashSet<String>,
+        tail: &str,
+        first_char: char,
+        first_len: usize,
         out: &mut Vec<Candidate>,
-    ) {
-        let tail = &input[pos..];
-        let Some(c) = tail.chars().next() else {
-            return;
+    ) -> bool {
+        let surface = &tail[..first_len];
+        let end_pos = pos + first_len;
+        // 旧実装は char 一致 block を全 walk して **最初の 1 つだけ** emit していた
+        // (以降は emitted dedup で skip)。 index は char 一致 block のみ返すので first。
+        let Some(block) = self.dict.kanji_starting_with(first_char).next() else {
+            return false;
         };
-        let char_len = c.len_utf8();
-        let surface = &tail[..char_len];
-        let end_pos = pos + char_len;
         let mctx = Self::build_match_context(input, pos, end_pos);
-
-        for block in self.dict.kanji_iter() {
-            if block.char != surface {
-                continue;
-            }
-            if emitted.contains(surface) {
-                continue;
-            }
-            for (reading, weight) in
-                resolve_readings(&block.matches, &block.default, &block.alt, &mctx)
-            {
-                out.push(Candidate::new(
-                    surface.to_string(),
-                    reading.to_string(),
-                    pos..end_pos,
-                    Score::with_weight(BAND_KANJI, 1, 0, weight),
-                ));
-            }
-
-            emitted.insert(surface.to_string());
+        for (reading, weight) in resolve_readings(&block.matches, &block.default, &block.alt, &mctx) {
+            out.push(Candidate::new(
+                surface.to_string(),
+                reading.to_string(),
+                pos..end_pos,
+                Score::with_weight(BAND_KANJI, 1, 0, weight),
+            ));
         }
+        true
     }
 
-    fn emit_unihan(
-        &self,
-        input: &str,
-        pos: usize,
-        emitted: &std::collections::HashSet<String>,
-        out: &mut Vec<Candidate>,
-    ) {
-        let tail = &input[pos..];
-        let Some(c) = tail.chars().next() else {
-            return;
-        };
-        let char_len = c.len_utf8();
-        let surface = &tail[..char_len];
-        if emitted.contains(surface) {
-            return;
-        }
+    fn emit_unihan(&self, pos: usize, tail: &str, first_len: usize, out: &mut Vec<Candidate>) {
+        let surface = &tail[..first_len];
         if let Some(reading) = self.dict.lookup_unihan(surface) {
             out.push(Candidate::new(
                 surface.to_string(),
                 reading.to_string(),
-                pos..pos + char_len,
+                pos..pos + first_len,
                 Score::kanji(1),
             ));
         }
@@ -515,12 +526,23 @@ impl<'a> DictBridgeProvider<'a> {
 impl<'a> CandidateProvider for DictBridgeProvider<'a> {
     fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
         let input = ctx.input;
+        let tail = &input[pos..];
+        let Some(first_char) = tail.chars().next() else {
+            return Vec::new();
+        };
+        let first_len = first_char.len_utf8();
         let mut out = Vec::new();
-        let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        self.emit_entries(input, pos, &mut emitted, &mut out);
-        self.emit_kanji_blocks(input, pos, &mut emitted, &mut out);
-        self.emit_unihan(input, pos, &emitted, &mut out);
+        // priority: entries (rich) > kanji block > unihan、 先頭 char surface 1 つ分は
+        // 上位 phase が emit したら下位は skip (= 旧 `emitted` HashSet の dedup 等価、
+        // ただし query 対象は常に先頭 1 字 surface なので bool で十分)。
+        let mut char_emitted = self.emit_entries(input, pos, tail, first_char, &mut out);
+        if !char_emitted {
+            char_emitted = self.emit_kanji_blocks(input, pos, tail, first_char, first_len, &mut out);
+        }
+        if !char_emitted {
+            self.emit_unihan(pos, tail, first_len, &mut out);
+        }
 
         out
     }

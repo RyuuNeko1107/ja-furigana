@@ -91,6 +91,21 @@ pub struct AnalyzeResult {
     pub boundary_regions: Vec<Range<usize>>,
 }
 
+/// 採択 path の [`Token`] 列だけを返す軽量版 (`candidates` / `alternatives` を計算しない)。
+///
+/// `to_ruby` / `to_hiragana` / `to_tts` / `to_romaji` / `tokenize` の production 経路は
+/// reading 文字列しか使わず、 debug 用の `candidates` 集約 (= 全 provider を path 位置で
+/// **再走** ) と `alternatives` 抽出 (sort / dedup / strip) を丸ごと捨てている。 本関数は
+/// その死荷重を払わず [`solve_path`] → Token 変換のみ行う。 inspect が要る caller は
+/// 引き続き [`analyze`] を使う。
+#[must_use]
+pub fn analyze_tokens(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) -> Vec<Token> {
+    solve_path(ctx, providers)
+        .iter()
+        .map(Token::from_candidate)
+        .collect()
+}
+
 /// `input` を `providers` で analyze、 [`AnalyzeResult`] を返す。
 ///
 /// `boundary` を渡すと `boundary_regions` field に regions を入れる (`None` なら空)。

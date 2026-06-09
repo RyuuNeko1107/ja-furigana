@@ -6,6 +6,36 @@
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-06-10
+
+辞書 lookup hot path の大幅高速化 (挙動不変、 公開 API 非破壊)。 実 dict (47k entry)
+での `to_ruby` latency を long 文で **約 200x** 短縮 (38 ms → 0.19 ms)、 短文は
+1.8 ms → 8 µs。 corpus 回帰 801 件 / lib test 429 件 pass で挙動同一を確認。
+
+### Performance (internal)
+
+- **dict prefix scan を O(N×M) → O(N×k) 化** (`dict.rs` / `api.rs`): `DictBridgeProvider`
+  が各 byte 位置で全 ~44k entry (`rich_iter`) と全 ~2.7k `[[kanji]]` block を linear
+  prefix scan していた。 surface 先頭 char で逆引きする lazy index (`rich_index` /
+  `kanji_index`、 `OnceLock`、 insert/merge で invalidate) を導入し、 各位置で
+  「その文字で始まる entry だけ」 を走査するように。 位置毎の `HashSet<String>`
+  dedup も撤去 (= 判定対象は常に先頭 1 字 surface なので bool で等価)。
+- **数値 provider に先頭文字 dispatch を追加** (`scoring/numbers.rs`):
+  `NumberCandidateProvider` が全位置で 6+ 正規表現を試行していた。 先頭が数字系
+  (digit / 全角 / 漢数字 / 符号) でなければ数値系 regex は必ず空振りするため、
+  記号 section だけ評価して即 return。 dict scan 撤去後の relative hot path を解消。
+- **production 経路の debug 集約を分離** (`api.rs` / `scoring/analyze.rs`): `to_ruby`
+  等は reading しか使わないのに、 `analyze()` が debug 用 `candidates` 再収集
+  (全 provider を path 位置で再走) と `alternatives` 抽出を毎回行っていた。 軽量
+  `analyze_tokens` 経路を新設して production の `to_*` / `tokenize` をそちらに。
+  inspect 用 public `analyze()` は full のまま維持。
+- **provider 構成を `with_analysis` に集約** (`api.rs`): `analyze` / `analyze_tokens`
+  に重複コピペされていた 6 provider + boundary + ctx 構築を 1 箇所に (= provider
+  追加時の drift 源を除去)。 stale だった loanwords doc も更新。
+- **bench に実 dict 計測 hook を追加** (`benches/lookup.rs`): `FURIGANA_BENCH_CORE`
+  / `FURIGANA_BENCH_RULES` 環境変数で実 dict を mount できるように (= seed 12 entry
+  では dict 規模依存の bottleneck が顕在化しない)。 dict load 総時間の `build` group も追加。
+
 ## [0.1.4] - 2026-06-07
 
 scoring engine の内部リファクタリング (挙動不変、 `scoring` は `pub(crate)` で

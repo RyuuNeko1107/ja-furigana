@@ -72,7 +72,7 @@ fn is_real_cjk_ideograph(c: char) -> bool {
 ///
 /// construction 時に 1 度だけ tokenize、 以降 `candidates_at` は O(edge_count)
 /// で位置 lookup (= 通常 input なら数十 edges 程度、 amortized 軽量)。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LinderaFallbackProvider {
     /// (byte_start, byte_end, reading) の 3-tuple。
     /// reading は カタカナ (Lindera 由来) または surface fallback。
@@ -87,7 +87,7 @@ impl LinderaFallbackProvider {
     #[must_use]
     pub fn new(analyzer: &Analyzer, input: &str) -> Self {
         if input.is_empty() {
-            return Self { edges: Vec::new() };
+            return Self::default();
         }
         let tokens = analyzer.tokenize(input);
         let mut edges = Vec::with_capacity(tokens.len());
@@ -99,10 +99,10 @@ impl LinderaFallbackProvider {
             // byte offset がズレるケース、 例: input `( ・∇・)`) は edges 全廃して
             // safety net 自体 disable (= 後段 provider に任せる)
             let Some(slice) = input.get(byte_pos..end) else {
-                return Self { edges: Vec::new() };
+                return Self::default();
             };
             if slice != tok.surface {
-                return Self { edges: Vec::new() };
+                return Self::default();
             }
             // reading: Lindera details[7] (= カタカナ)、 無ければ surface fallback
             // (= 記号 / 未知語、 reading = surface で 「読まない」 扱い)
@@ -117,7 +117,7 @@ impl LinderaFallbackProvider {
     #[allow(dead_code)] // test utility; kept for external callers and future use
     #[must_use]
     pub fn empty() -> Self {
-        Self { edges: Vec::new() }
+        Self::default()
     }
 }
 
