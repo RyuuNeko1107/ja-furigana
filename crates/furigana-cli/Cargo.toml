@@ -54,7 +54,7 @@ clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
-tower_governor = "0.7"
+tower_governor = "0.8"
 subtle = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
