@@ -94,21 +94,36 @@ impl LinderaFallbackProvider {
         let mut byte_pos = 0usize;
         for tok in tokens {
             let surface_len = tok.surface.len();
-            let end = byte_pos + surface_len;
-            // 範囲外 / char boundary 不一致 (= Lindera が空白 / 制御文字を吸って
-            // byte offset がズレるケース、 例: input `( ・∇・)`) は edges 全廃して
-            // safety net 自体 disable (= 後段 provider に任せる)
-            let Some(slice) = input.get(byte_pos..end) else {
-                return Self::default();
-            };
-            if slice != tok.surface {
-                return Self::default();
+            // Lindera は空白 / 改行 / 制御文字を token から落とすことがある
+            // (例: input に `\n` / `( ・∇・)` の半角 space)。 落ちると byte_pos が
+            // surface 開始位置とズレるので、 input 中で surface を前方探索して
+            // アラインを回復し、 間に挟まった bytes を passthrough edge で補う。
+            // こうしないと改行位置が誰にも覆われず dp[n] 未到達 → path 全空
+            // (= 改行入り input で出力が空になる bug)。
+            if input.get(byte_pos..byte_pos + surface_len) != Some(tok.surface.as_str()) {
+                let Some(rel) = input[byte_pos..].find(tok.surface.as_str()) else {
+                    // surface が前方にも無い (= 想定外のズレ) → safety net disable
+                    return Self::default();
+                };
+                let gap_end = byte_pos + rel;
+                if !Self::push_skipped_gap(input, byte_pos, gap_end, &mut edges) {
+                    return Self::default();
+                }
+                byte_pos = gap_end;
             }
+            let end = byte_pos + surface_len;
             // reading: Lindera details[7] (= カタカナ)、 無ければ surface fallback
             // (= 記号 / 未知語、 reading = surface で 「読まない」 扱い)
             let reading = tok.reading.unwrap_or_else(|| tok.surface.clone());
             edges.push((byte_pos, end, reading));
             byte_pos = end;
+        }
+        // 末尾に Lindera が落とした空白 / 改行が残る場合も passthrough で補う
+        // (= 「猫\n」 のような trailing newline で path 全空になるのを防ぐ)。
+        if byte_pos < input.len()
+            && !Self::push_skipped_gap(input, byte_pos, input.len(), &mut edges)
+        {
+            return Self::default();
         }
         Self { edges }
     }
@@ -118,6 +133,30 @@ impl LinderaFallbackProvider {
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// Lindera が落とした `input[start..end]` 区間を passthrough edge で補う。
+    ///
+    /// 区間が空白 / 制御文字のみ (= Lindera が token から落とす種類) なら、
+    /// reading = surface の passthrough edge を 1 本足して `true`。 それ以外
+    /// (= 実 surface のズレ、 構造的問題) は edge を足さず `false` を返し、
+    /// caller に safety net 全廃 (disable) を促す。 空区間は no-op で `true`。
+    fn push_skipped_gap(
+        input: &str,
+        start: usize,
+        end: usize,
+        edges: &mut Vec<(usize, usize, String)>,
+    ) -> bool {
+        if start >= end {
+            return true;
+        }
+        let gap = &input[start..end];
+        if gap.chars().all(|c| c.is_whitespace() || c.is_control()) {
+            edges.push((start, end, gap.to_string()));
+            true
+        } else {
+            false
+        }
     }
 }
 

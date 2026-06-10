@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-06-10
+
+改行を含む input で出力が空になる bug の修正 (公開 API 非破壊)。
+
+### Fixed
+
+- **改行 / 制御文字を含む input が全空出力になる bug を修正** (`scoring/lindera_fallback.rs`):
+  Lindera は `\n` / `\r` 等を token から落とすため byte offset がズレ、 従来は
+  safety net の `LinderaFallbackProvider` が input 全体の edge を全廃して
+  自身を無効化していた。 結果、 改行位置と周辺の助詞が誰にも覆われず Viterbi
+  path が構築不能 (`dp[n]` 未到達) になり、 `to_ruby` / `to_hiragana` / `to_tts` /
+  `to_romaji` が空文字列を返していた (例: 複数段落テキスト)。 Lindera が落とした
+  空白 / 制御文字区間を前方探索でアラインし直し、 reading = surface の
+  passthrough edge で補うように変更。 改行は出力にそのまま保持される。
+
 ## [0.1.5] - 2026-06-10
 
 辞書 lookup hot path の大幅高速化 (挙動不変、 公開 API 非破壊)。 実 dict (47k entry)

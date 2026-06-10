@@ -760,6 +760,27 @@ mod tests {
     }
 
     #[test]
+    fn newline_input_does_not_blank_out() {
+        // regression: 改行を含む input は Lindera が改行を token から落とし、
+        // fallback provider が disable → path 全空 → 出力が空になる bug があった。
+        // Lindera fallback の gap-passthrough で改行を覆い、 改行を保持したまま
+        // 各行を正しく変換できることを確認する。
+        let f = Furigana::minimal().unwrap();
+        let hira = f.to_hiragana("猫が\n好き");
+        assert_eq!(hira, "ねこが\nすき", "改行を挟んでも path 構築できる");
+
+        // 先頭 / 末尾 / 連続改行も path 全空にならない
+        assert_eq!(f.to_hiragana("\n猫"), "\nねこ");
+        assert_eq!(f.to_hiragana("猫\n"), "ねこ\n");
+        assert_eq!(f.to_hiragana("猫\n\n犬"), "ねこ\n\nいぬ");
+
+        // ruby も同様 (漢字部だけ ruby 化、 改行はそのまま)
+        let ruby = f.to_ruby("灰桜\n道");
+        assert!(ruby.contains('\n'), "改行が保持される: {ruby}");
+        assert!(!ruby.is_empty());
+    }
+
+    #[test]
     fn debug_format_shows_summary() {
         let f = Furigana::minimal().unwrap();
         let s = format!("{f:?}");
