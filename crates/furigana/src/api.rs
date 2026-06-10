@@ -46,15 +46,6 @@ use std::sync::{Arc, OnceLock};
 /// `Furigana::minimal()` の呼び出し自体は ~µs 級で済むため、引数 parse や
 /// help 表示など analyze に至らない経路を高速化できる。サーバー起動時に
 /// 先に init したい場合は [`Furigana::preload`] を呼ぶ。
-/// 入力 preprocess: scoring engine が ASCII whitespace を candidate 化できない問題の
-/// workaround として、 半角 space / tab を全角 space (U+3000) に置換。 全角 space は
-/// LinderaFallbackProvider が token として拾うため path 構築できる。
-///
-/// 「変なの 水田」 のような (= 半角 space 区切り) input で path 全空になる bug fix。
-fn preprocess_input(text: &str) -> String {
-    text.replace([' ', '\t'], "\u{3000}")
-}
-
 pub struct Furigana {
     analyzer: OnceLock<Analyzer>,
     rules: RulesData,
@@ -166,8 +157,7 @@ impl Furigana {
     /// 出力直前に `postprocess.toml` の `mode = "hiragana"` ルールを適用。
     #[must_use]
     pub fn to_hiragana(&self, text: &str) -> String {
-        let text = preprocess_input(text);
-        let hira = tokens_to_hiragana(&self.tokenize(&text));
+        let hira = tokens_to_hiragana(&self.tokenize(text));
         self.rules.postprocess.apply(&hira, "hiragana")
     }
 
@@ -178,8 +168,7 @@ impl Furigana {
     /// 出力直前に `postprocess.toml` の `mode = "ruby"` ルールを適用。
     #[must_use]
     pub fn to_ruby(&self, text: &str) -> String {
-        let text = preprocess_input(text);
-        let ruby = tokens_to_ruby(&self.tokenize(&text));
+        let ruby = tokens_to_ruby(&self.tokenize(text));
         self.rules.postprocess.apply(&ruby, "ruby")
     }
 
@@ -190,10 +179,9 @@ impl Furigana {
     /// 出力直前に `postprocess.toml` の `mode = "tts"` ルールを適用。
     #[must_use]
     pub fn to_tts(&self, text: &str, opts: &TtsOptions) -> String {
-        let text = preprocess_input(text);
         // hiragana 自体の postprocess はここでは飛ばす (二重適用回避)。
         // 必要なら hiragana 用 postprocess を tts mode で再度書く想定。
-        let hira = tokens_to_hiragana(&self.tokenize(&text));
+        let hira = tokens_to_hiragana(&self.tokenize(text));
         let normalized = tts::normalize_for_tts(&hira, opts);
         self.rules.postprocess.apply(&normalized, "tts")
     }
@@ -778,6 +766,26 @@ mod tests {
         let ruby = f.to_ruby("灰桜\n道");
         assert!(ruby.contains('\n'), "改行が保持される: {ruby}");
         assert!(!ruby.is_empty());
+    }
+
+    #[test]
+    fn half_width_space_is_preserved_not_widened() {
+        // 旧実装は preprocess_input で半角 space → 全角 space (U+3000) に置換していた
+        // (= scoring engine が ASCII whitespace を覆えない問題の workaround)。
+        // Lindera fallback の gap-passthrough 導入でこの hack は不要になり撤去。
+        // 半角 space は出力にそのまま残る (= 全角化けしない) ことを確認する。
+        let f = Furigana::minimal().unwrap();
+
+        // 英字混在: space が全角化すると TTS / 表示で不自然
+        assert_eq!(f.to_hiragana("hello world"), "hello world");
+        assert!(!f.to_ruby("hello world").contains('\u{3000}'));
+
+        // 旧 preprocess_input が導入された元凶ケース。 path 全空にならず、 かつ
+        // 半角 space 区切りが維持される (全角に化けない)。
+        let hira = f.to_hiragana("変なの 水田");
+        assert!(!hira.is_empty(), "path 構築できる");
+        assert!(hira.contains(' '), "半角 space が保持される: {hira:?}");
+        assert!(!hira.contains('\u{3000}'), "全角化しない: {hira:?}");
     }
 
     #[test]

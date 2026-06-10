@@ -123,9 +123,14 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
     use tower_governor::governor::GovernorConfigBuilder;
     use tower_governor::GovernorLayer;
     use tower_http::limit::RequestBodyLimitLayer;
+    use tower_http::timeout::TimeoutLayer;
     use tower_http::trace::TraceLayer;
     use tracing::Level;
     const MAX_BODY_BYTES: usize = 1024 * 1024;
+    // 1 リクエストの上限処理時間。 変換自体は通常 sub-ms〜数 ms なので、
+    // これを超えるのは異常 (ハング / 想定外の重い入力)。 408 で打ち切り、
+    // ワーカーを 1 リクエストに占有され続けないようにする defense-in-depth。
+    const REQUEST_TIMEOUT_SECS: u64 = 30;
     let governor_conf = std::sync::Arc::new(
         GovernorConfigBuilder::default()
             .per_second(cfg.rate_limit.per_second)
@@ -199,6 +204,10 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
         .route("/metrics", get(metrics_handler))
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
+        .layer(TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
+        ))
         .layer(log_429)
         .layer(governor_layer)
         .layer(trace_layer)

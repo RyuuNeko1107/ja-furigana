@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-06-10
+
+半角スペースの出力保持 + HTTP server のリクエストタイムアウト追加。
+
+### Changed
+
+- **半角スペース / タブを出力にそのまま保持** (`api.rs`): 旧実装は `to_ruby` /
+  `to_hiragana` / `to_tts` の前段 `preprocess_input` で半角 space / tab を全角
+  space (U+3000) に置換していた (= scoring engine が ASCII whitespace を candidate
+  化できない問題の workaround)。 0.1.6 の Lindera fallback gap-passthrough により
+  落とされた空白も passthrough edge で覆えるようになったため、 この hack は不要に
+  なり撤去。 半角 space は全角化けせず往復するようになった (例: `"hello world"` が
+  `"hello　world"` にならない)。 英字混在テキストの TTS / 表示で自然な挙動。
+
+### Security
+
+- **`furigana serve` に 30 秒のリクエストタイムアウトを追加** (`commands/serve/mod.rs`):
+  `tower_http::timeout::TimeoutLayer` で 1 リクエストの上限処理時間を設定。 変換は
+  通常 sub-ms〜数 ms なので、 これを超える異常リクエストは 408 で打ち切り、 ワーカーの
+  占有を防ぐ (defense-in-depth)。 body サイズ上限 (1 MB) / rate limit と合わせた多層防御。
+
 ## [0.1.6] - 2026-06-10
 
 改行を含む input で出力が空になる bug の修正 (公開 API 非破壊)。
