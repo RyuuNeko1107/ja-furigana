@@ -9,7 +9,11 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.1.1` stable (2026-06-01、 0.1.0 cut は 2026-05-12)
+- **LIVE**: `0.1.7` (2026-06-10、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
+  しており 0.2.0 開発分 (ScoringContext / ADR-0004 / bracket-accent parser / scoring pub(crate) 化) を
+  含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.5 = dict hot path 約215x
+  高速化、 0.1.6 = 改行入り input の空出力 bug 修正 (Lindera fallback gap-passthrough)、 0.1.7 = 半角
+  スペース保持 (preprocess U+3000 hack 撤去) + `furigana serve` リクエストタイムアウト (408)
 - **`0.2.0` (master 実装中・未 release)**: accent **core は実装済** =
   bracket notation parse + `AccentResult`/`AccentToken` + CLI `--mode=accent`
   (`api.rs::to_accent` / `scoring/bracket.rs`、 ADR-0003)。
