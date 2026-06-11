@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-06-11
+
+数詞慣用語句 (二十歳=ハタチ 等) の復活 + Smart engine 内部の facade 化 + dev tool 拡充。
+
 ### Added
 
 - **`numeric_phrases` を Smart engine に再統合** (`scoring/numbers/`): 旧 Strict engine
