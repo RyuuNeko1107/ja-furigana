@@ -248,8 +248,6 @@ impl Furigana {
     /// ([`Pipeline::analyze`] = debug 用の `candidates` 集約 + `alternatives` 抽出込み)。
     /// production の `to_*` / `tokenize` は軽量 [`Pipeline::tokens`] 経由で同一 path を得る。
     ///
-    /// `numeric_phrases` (二十歳=ハタチ 等) の別 provider 化は今後の課題 (C3 scope 外)。
-    ///
     /// ## 戻り値
     ///
     /// [`AnalyzeResult`] (= ★11 freeze、 0.1.0 stable で additive 追加のみ可)。
@@ -900,6 +898,41 @@ mod tests {
             r.tokens[0].reading.contains("ジュウガツ"),
             "reading: {}",
             r.tokens[0].reading,
+        );
+    }
+
+    #[test]
+    fn analyze_numeric_phrase_emits_single_token() {
+        // ★0.2.0 残件再統合: numeric_phrases (二十歳=ハタチ) が NumberCandidateProvider
+        // (band 950) 経由で 1 token になり、 Lindera 分解 (二十+歳) に勝つ。
+        let f = Furigana::builder()
+            .rules_dir(fixture_rules_dir())
+            .build()
+            .expect("build with rules_dir");
+        let r = f.analyze("二十歳");
+        assert_eq!(r.tokens.len(), 1, "expected single phrase token: {r:?}");
+        assert_eq!(r.tokens[0].surface, "二十歳");
+        assert_eq!(r.tokens[0].reading, "ハタチ");
+
+        // 非数字先頭の慣用語句 (明後日) も同様に 1 token
+        let r2 = f.analyze("明後日");
+        assert_eq!(r2.tokens.len(), 1, "expected single phrase token: {r2:?}");
+        assert_eq!(r2.tokens[0].reading, "アサッテ");
+    }
+
+    #[test]
+    fn analyze_dict_entry_overrides_numeric_phrase() {
+        // dict 完全一致 (band 1000) は phrase (band 950) を上書きできる
+        let mut f = Furigana::builder()
+            .rules_dir(fixture_rules_dir())
+            .build()
+            .expect("build with rules_dir");
+        f.add_reading("二十歳", "ニジュッサイ");
+        let r = f.analyze("二十歳");
+        assert_eq!(r.tokens.len(), 1);
+        assert_eq!(
+            r.tokens[0].reading, "ニジュッサイ",
+            "dict 1000 が phrase 950 に勝つ"
         );
     }
 

@@ -20,6 +20,8 @@
 //! 並列に提案する (path 選択は Smart engine の DP に委ねる)。 適用順は
 //! [`NumberCandidateProvider::candidates_at`] の `try_*` 呼び出し列が data として明示する:
 //!
+//! 0. 数詞慣用語句 `二十歳=ハタチ` / `明後日=アサッテ` 等 — [`NumberCandidateProvider::try_phrase`]
+//!    (★0.2.0 残件の再統合。 「明後日」 等 数字以外の先頭もあるため numeric lead 判定より前に評価)
 //! 1. 和式日付 `YYYY年MM月DD日` / `MM月DD日` — [`NumberCandidateProvider::try_date`]
 //! 2. 和式時刻 `H時M分S秒` / `H時M分` / `H時` — [`NumberCandidateProvider::try_time_jp`]
 //! 3. 時刻 `HH:MM(:SS)` — [`NumberCandidateProvider::try_time_colon`]
@@ -44,11 +46,6 @@
 //! - 踊り字 「々」 → [`crate::scoring::odoriji::OdorijiProvider`]
 //! - jukugo super-set check は **不要** (Smart engine DP が band 1000 dict entry を自然に優先)
 //!
-//! ## 注意
-//!
-//! - `numeric_phrases` (`二十歳=ハタチ` 等) は別 provider 化が望ましいが C3 scope 外。
-//!   alpha.10〜rc1 で必要なら追加。
-
 mod patterns;
 
 #[cfg(test)]
@@ -82,6 +79,10 @@ pub struct NumberCandidateProvider {
     units: UnitsData,
     symbols: SymbolsData,
     days: DaysData,
+    /// 数詞慣用語句 (numeric_phrases.toml) の先頭 char bucket index。
+    /// key = surface 先頭 char、 value = (surface, reading) を **surface 長降順** sort 済
+    /// (= emit 順を deterministic にするため。 候補は全 emit、 採択は DP の length 軸)。
+    phrase_index: std::collections::HashMap<char, Vec<(String, String)>>,
     /// `(NUM)(base)(recursive?)` pattern (算用 / 全角数字)。 counter / simple table が空なら `None`。
     counter_re: Option<Regex>,
     /// `(KANJI_NUM)(base)(recursive)` pattern (漢数字 + 末尾再帰 「目」 必須)。
@@ -102,12 +103,31 @@ impl NumberCandidateProvider {
         let (counter_re, counter_kanji_re) = build_counter_regexes(&rules.counters);
         let scale_re = build_scale_regex(&rules.scales, &rules.units, &rules.counters);
         let si_unit_re = build_si_unit_regex(&rules.units);
+
+        // 数詞慣用語句を先頭 char で bucket 化 (= 非 hit 位置のコストを HashMap lookup
+        // 1 回に抑える)。 HashMap iteration は順序不定なので、 deterministic 出力のため
+        // bucket 内を surface 長降順 + 同長は辞書順で sort する。
+        let mut phrase_index: std::collections::HashMap<char, Vec<(String, String)>> =
+            std::collections::HashMap::new();
+        for (surface, reading) in &rules.numeric_phrases.entries {
+            if let Some(first) = surface.chars().next() {
+                phrase_index
+                    .entry(first)
+                    .or_default()
+                    .push((surface.clone(), reading.clone()));
+            }
+        }
+        for bucket in phrase_index.values_mut() {
+            bucket.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+        }
+
         Self {
             counters: rules.counters.clone(),
             scales: rules.scales.clone(),
             units: rules.units.clone(),
             symbols: rules.symbols.clone(),
             days: rules.days.clone(),
+            phrase_index,
             counter_re,
             counter_kanji_re,
             scale_re,
@@ -211,6 +231,30 @@ fn is_digit_like_char(c: char) -> bool {
 // ─── 候補種別ごとの matcher (適用順は candidates_at が所有) ──────────────────
 
 impl NumberCandidateProvider {
+    /// section 0: 数詞慣用語句 (二十歳=ハタチ / 明後日=アサッテ 等)。
+    ///
+    /// 「明後日」 のように数字以外の先頭を持つ語句もあるため、 caller は numeric lead
+    /// 判定より **前に** 呼ぶこと。 同位置で複数 hit (= 「一人前」 と 「一人」) は
+    /// 全部 emit し、 採択は DP の length / edge_count 軸に委ねる (長い方が勝つ)。
+    /// dict 完全一致 (band 1000) には負ける = dict 側で個別 override 可能。
+    fn try_phrase(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        first_char: char,
+        out: &mut Vec<Candidate>,
+    ) {
+        let Some(bucket) = self.phrase_index.get(&first_char) else {
+            return;
+        };
+        for (surface, reading) in bucket {
+            if rest.starts_with(surface.as_str()) {
+                out.push(self.make(input, pos, surface.len(), reading.clone()));
+            }
+        }
+    }
+
     /// section 1: 和式日付 (full → MD の優先順、 full が match したら MD は試さない)。
     fn try_date(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
         if let Some(caps) = at_start(&DATE_KANJI_FULL_RE, rest) {
@@ -387,9 +431,13 @@ impl CandidateProvider for NumberCandidateProvider {
         let input = ctx.input;
         let mut out: Vec<Candidate> = Vec::new();
         let rest = &input[pos..];
-        if rest.is_empty() {
+        let Some(first_char) = rest.chars().next() else {
             return out;
-        }
+        };
+
+        // section 0: 数詞慣用語句。 「明後日」 等 数字以外の先頭もあるため
+        // numeric lead 判定より前に評価する (非 hit 位置は HashMap lookup 1 回)。
+        self.try_phrase(input, pos, rest, first_char, &mut out);
 
         // ─── 先頭文字 dispatch (hot path 最適化) ─────────────────────────────
         // 数値系正規表現は全て **数字系の先頭文字** を要求する (NUM_PAT = 任意符号 +
@@ -398,9 +446,8 @@ impl CandidateProvider for NumberCandidateProvider {
         // を試行する無駄を消す (dict prefix index 化で dict scan が消えた後の相対的
         // hot path)。 符号始まり (= 「-5本」) も拾うため digit-like に符号 5 種を加えた
         // 集合で判定。
-        let numeric_lead = rest.chars().next().is_some_and(|c| {
-            is_digit_like_char(c) || matches!(c, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
-        });
+        let numeric_lead = is_digit_like_char(first_char)
+            || matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}');
         if !numeric_lead {
             self.emit_symbol(input, pos, rest, &mut out);
             return out;

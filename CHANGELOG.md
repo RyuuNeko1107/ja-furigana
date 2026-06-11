@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`numeric_phrases` を Smart engine に再統合** (`scoring/numbers/`): 旧 Strict engine
+  撤廃 (alpha.15) 以降 data だけ残って未使用だった数詞慣用語句 (`二十歳=ハタチ` /
+  `明後日=アサッテ` / `十分間=ジュップンカン` 等) を `NumberCandidateProvider` の
+  candidate (band 950) として復活。 「明後日」 のような数字以外の先頭を持つ語句も
+  拾えるよう、 数字先頭 fast-path 判定より前に評価する。 dict 完全一致 (band 1000)
+  での個別 override は引き続き可能。 0.2.0 残件の 1 つを消化 (残りは UniDic aType)
+- **`benches/scaling.rs` 追加**: 入力長スケーリング (1x/4x/16x) + 漢字連続 run +
+  counting allocator による alloc churn レポート。 性能 regression detector 用
+  (実 dict は `FURIGANA_BENCH_CORE` / `_RULES` で mount)
+
+### Changed
+
+- **Smart engine パイプラインを `scoring/pipeline.rs` facade に集約** (内部 refactor、
+  挙動変更なし): provider 構成 + Viterbi + Reading Post-pass の所有を 1 module 化、
+  `DictBridgeProvider` は `scoring/dict_bridge.rs` へ移動、 `api.rs` は薄い公開層に。
+  `scoring/numbers.rs` は `patterns.rs` (regex 構築) と候補種別ごとの `try_*` matcher
+  に内部分割。 alpha.15 で削除済の旧 module (chunks / reading::pipeline / loanwords /
+  single_overrides) への陳腐化 doc 参照も一掃
+
 ## [0.1.7] - 2026-06-10
 
 半角スペースの出力保持 + HTTP server のリクエストタイムアウト追加。

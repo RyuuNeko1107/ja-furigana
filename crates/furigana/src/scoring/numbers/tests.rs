@@ -52,6 +52,54 @@ fn pos_at_end_yields_empty() {
     assert!(p.candidates_at(&ctx(input), input.len()).is_empty());
 }
 
+// ─── 数詞慣用語句 (numeric_phrases、 ★0.2.0 再統合) ──────────────────────
+
+#[test]
+fn phrase_basic_hatachi() {
+    let p = provider();
+    let cands = p.candidates_at(&ctx("二十歳になった"), 0);
+    let c = find(&cands, "二十歳").expect("二十歳 candidate");
+    assert_eq!(c.reading, "ハタチ");
+    assert_eq!(c.score.band, BAND_SPECIAL);
+    assert_eq!(c.score.length, 3);
+}
+
+#[test]
+fn phrase_non_digit_lead_asatte() {
+    // 「明後日」 は先頭が数字系 char ではない → numeric lead guard より前の
+    // try_phrase で拾われることを確認する (guard 後だと絶対に出ない)。
+    let p = provider();
+    let cands = p.candidates_at(&ctx("明後日は晴れ"), 0);
+    let c = find(&cands, "明後日").expect("明後日 candidate");
+    assert_eq!(c.reading, "アサッテ");
+}
+
+#[test]
+fn phrase_overlapping_surfaces_both_emitted() {
+    // 「一人前」 の pos 0 では 「一人前」 と 「一人」 の両方が candidate に上がる。
+    // 採択は DP の length / edge_count 軸 (長い方が勝つ) に委ねる。
+    let p = provider();
+    let cands = p.candidates_at(&ctx("一人前の寿司"), 0);
+    assert_eq!(
+        find(&cands, "一人前").map(|c| c.reading.as_str()),
+        Some("イチニンマエ")
+    );
+    assert_eq!(
+        find(&cands, "一人").map(|c| c.reading.as_str()),
+        Some("ヒトリ")
+    );
+}
+
+#[test]
+fn phrase_empty_rules_yields_no_phrase_candidates() {
+    let p = NumberCandidateProvider::new(&RulesData::default());
+    let cands = p.candidates_at(&ctx("二十歳"), 0);
+    assert!(
+        find(&cands, "二十歳").is_none(),
+        "空 rules では phrase candidate なし: {cands:?}"
+    );
+}
+
 // ─── 単一助数詞 ──────────────────────────────────────────────────────────
 
 #[test]
