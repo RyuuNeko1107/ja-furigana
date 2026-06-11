@@ -17,6 +17,9 @@
 - **`benches/scaling.rs` 追加**: 入力長スケーリング (1x/4x/16x) + 漢字連続 run +
   counting allocator による alloc churn レポート。 性能 regression detector 用
   (実 dict は `FURIGANA_BENCH_CORE` / `_RULES` で mount)
+- **`furigana-corpus-check` の複数 corpus / ディレクトリ一括対応**: dir 指定で再帰
+  `*.toml` 収集、 Furigana 構築 1 回で全 corpus を流す (802 case ≈ 4 秒)。
+  summary に morph dict 種別 (ipadic / unidic) を表示し A/B 比較 log を区別可能に
 
 ### Changed
 

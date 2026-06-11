@@ -5,17 +5,17 @@ ja-furigana の中長期計画。 **完了履歴は [CHANGELOG.md](../CHANGELOG.
 
 > 戻る: [README](../README.md)
 
-## ステータス概観 (2026-05-12 更新)
+## ステータス概観 (2026-06-11 更新)
 
-**v0.1.x (alpha)**: alpha.10〜.19 で **Smart engine 投入 + Strict 削除 + dict format
-完全再編成 + dict-curated context rule 路線統一** 完了。 corpus 正解率 99.6%
-(262 case、 IPADIC default)、 **0.1.0 stable cut 射程に入った**。
+**v0.1.0 stable cut 完了 (2026-05-12)**、 現 LIVE は `0.1.7` (2026-06-10)。
+master は 0.2.0 開発分 (accent core = bracket parse + `--mode=accent`、 Pipeline facade、
+numeric_phrases 再統合) を含む実質 0.2.0-preview。 corpus regression は
+`furigana-corpus-check` で 802/802 (100%)。
 
-残作業 (= release blocker):
-- API freeze (= `Furigana` / `FuriganaBuilder` / `AnalyzeResult` / `Score` 等の SemVer 約束)
-- benchmark 再計測 (alpha.13 以降、 alpha.19 state で未計測)
-- 0.1.0 cut オペレーション (= version bump / git tag / crates.io publish 再開 /
-  branch protection 復元)
+0.2.0 に向けた lib 側残件は実質ゼロ — 残りは dict 側の bracket notation 蓄積と、
+UniDic aType → bracket 注釈の offline 生成 tool (dict repo 側 tooling)。
+runtime 形態素辞書は IPADIC 据え置き確定 (2026-06-11 A/B 評価: corpus で
+IPADIC 100% vs UniDic 95.9%、 詳細は [ARCHITECTURE.md](./ARCHITECTURE.md) 設計判断メモ)。
 
 `0.1.x` の間は以下が予告なく変更されうる:
 
@@ -136,6 +136,11 @@ ja-furigana の中長期計画。 **完了履歴は [CHANGELOG.md](../CHANGELOG.
 
 **0.1.0 で建てた forward compat** (= bracket notation `[ ] /` strip 済 dict が大量に存在) を 0.2.0 で parse + 活用。 加えて 0.1.0 cut 後の運用で発覚した lib 改善 sweep を統合。
 
+> **進捗 (2026-06-11)**: bracket parse + `AccentPhrase` / `--mode=accent` は master 実装済。
+> `numeric_phrases` 再統合済。 UniDic aType は runtime 統合ではなく **offline bracket
+> 生成 tool** (dict repo 側) の方針に確定 (= runtime は IPADIC 据え置き)。
+> engine 別 mode (`voicevox-aques` / `voicevox-query`) は adapter crate 側 (ADR 方針)。
+
 ##### 主要 機能追加 (= intonation)
 
 - **bracket notation parse 実装**、 `Token { accent_phrases }` field 追加 (additive、 `#[non_exhaustive]` で SemVer minor 互換)
@@ -161,18 +166,21 @@ ja-furigana の中長期計画。 **完了履歴は [CHANGELOG.md](../CHANGELOG.
   - protect token / 顔文字 chunk を TTS 出力で **silent** にする option (= `--include-emoji-tts=false`)
 - **半角 space normalize の正式化** (= 0.1.0 では `preprocess_input()` で 全角 space に変換、 0.2.0 で path 構築 logic に proper 統合)
 
-##### should_read.toml regression test 状態 (= 2026-05-13 時点)
+##### corpus regression test 状態 (= 2026-06-11 時点)
 
-`should_read.toml` (598 case 全 6 file) を corpus_check binary に正しく dict
-+ rules 渡すと **598/598 = 100%** pass (= round 47 dict 改善 + 「檜風呂」 異体字
-旧字保険 + 「マニュ勢」 expected を連濁ルール反映に更新)。
+`tests/corpus/` 全 file (802 expected case) が **802/802 = 100%** pass。
+測定は `furigana-corpus-check` を使う (複数 corpus file / ディレクトリ一括対応済、
+Furigana 構築 1 回で 802 case ≈ 4 秒):
 
-> **注意**: `tools/run_corpus.py` 経由で binary の default data_dir を使うと
-> dict 未配置で 163 fail と出るが、 これは偽数値。 真の lib regression test は
-> `furigana-corpus-check --rules-dir <furigana-dict/rules> --core-dict-dir
-> <furigana-dict/core> <corpus.toml>` で測ること。 各 PR の CI gate (=
-> `tools/run_corpus.py` を CI 環境で実行する場合) も dict mount の正確性を
-> 担保する必要がある。
+```bash
+cargo run --release --bin furigana-corpus-check -- \
+    --rules-dir <furigana-dict/rules> --core-dict-dir <furigana-dict/core> \
+    <furigana-dict/tests/corpus>
+```
+
+> **注意**: dict repo の `tools/run_corpus.py` は 1 case ごとに CLI を起動するため
+> 2 桁以上遅い (802 case で ~15 分)。 ローカルの regression 測定は常に
+> `furigana-corpus-check` を使うこと。
 
 corpus 増強 (= 新規 case 追加) は 0.1.0 cut 後 TODO の 「大規模 QA corpus 増強」
 で漸進、 現状 598 case の主要パターンは全 pass。

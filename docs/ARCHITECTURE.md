@@ -26,7 +26,7 @@ crates/
 │   │   ├── scales.rs         #   scales.toml (大数: 万 / 億 / 兆…)
 │   │   ├── units.rs          #   units.toml (km / kg / 円 / % …)
 │   │   ├── symbols.rs        #   symbols.toml (+/-/% etc)
-│   │   ├── numeric_phrases.rs #  慣用句 data (lib 側未統合、 0.2.0 で Smart provider 化予定)
+│   │   ├── numeric_phrases.rs #  数詞慣用語句 data (scoring/numbers の try_phrase が consume)
 │   │   ├── compat.rs         #   compat.toml (異体字)
 │   │   └── postprocess.rs    #   postprocess.toml (mode 別後処理 regex 置換)
 │   ├── numbers/              # 数値処理 (data-driven、 scoring/numbers.rs から呼ばれる)
@@ -37,23 +37,30 @@ crates/
 │   ├── reading/              # ReadingToken + output helper
 │   │   ├── mod.rs            #   ReadingToken (= Smart engine Token の API 互換 wrapper)
 │   │   └── output.rs         #   tokens_to_hiragana / tokens_to_ruby
-│   └── scoring/              # Smart engine 本体 (★alpha.10〜.15 の主軸)
+│   └── scoring/              # Smart engine 本体
 │       ├── mod.rs            #   module 集約
-│       ├── candidate.rs      #   Score / Candidate / CandidateProvider trait + band 定数
+│       ├── pipeline.rs       #   ★Pipeline facade — provider 構成 + Viterbi + Reading Post-pass を所有する single seam
+│       ├── candidate.rs      #   Score / Candidate / CandidateProvider trait + ScoringContext + band 定数
 │       ├── engine.rs         #   PathScore (weakest_band agg) + solve_path Viterbi DP
 │       ├── boundary.rs       #   BoundaryAnalysis (b)(c) 漢字連続 penalty
 │       ├── format.rs         #   Entry / EntryDetail / MatchBlock / KanjiBlock の dict 受け入れ型
-│       ├── matcher.rs        #   MatchContext + matches_context() + classify_char()
-│       ├── special.rs        #   ProtectTokenProvider (URL/Email/絵文字) + AlphabetPassthroughProvider
-│       ├── numbers.rs        #   NumberCandidateProvider (band 950: 数字 + 助数詞 / 大数 / SI / 日付 / 時刻)
-│       ├── odoriji.rs        #   OdorijiProvider (々 placeholder) + apply_rendaku post-pass
-│       ├── lindera_fallback.rs #   LinderaFallbackProvider (band 50 safety net)
-│       ├── bracket.rs        #   strip_intonation_markers (forward compat for 0.2.0)
-│       └── analyze.rs        #   AnalyzeResult / Token + analyze() debug API
+│       ├── matcher.rs        #   MatchContext + matches_context() + classify_char() + resolve_readings
+│       ├── special.rs        #   ProtectTokenProvider (URL/Email/絵文字) + AlphabetPassthroughProvider (loanwords lookup 込)
+│       ├── dict_bridge.rs    #   DictBridgeProvider (jukugo / unihan / [[kanji]] block、 先頭 char prefix index 引き)
+│       ├── numbers/          #   NumberCandidateProvider (band 950)。 patterns.rs = regex 構築、 mod.rs = 候補種別ごとの try_* (日付 / 時刻 / scale / SI / 助数詞 / 数詞慣用語句 / 記号 / 素数字)
+│       ├── odoriji.rs        #   OdorijiProvider (々 placeholder) + RendakuPass
+│       ├── contextual.rs     #   HaraSukuPass (腹+空く 2-token-back 補正)
+│       ├── postpass.rs       #   ReadingPostPass trait + POST_PASSES 配列 (path 確定後の token 補正 seam)
+│       ├── lindera_fallback.rs #   LinderaFallbackProvider (band 50/150 safety net + gap-passthrough)
+│       ├── bracket.rs        #   bracket notation parse → AccentPhrase (0.2.0 core)
+│       ├── analyze.rs        #   AnalyzeResult / Token + analyze() / analyze_tokens()
+│       └── inspect.rs        #   dict gap 抽出等の inspection helper (公開 re-export)
 │
 └── furigana-cli/             # bin crate (crates.io 名: ja-furigana-cli / バイナリ名: furigana)
     └── src/
         ├── main.rs           # clap dispatch (引数なしなら repl にフォールバック)
+        ├── bin/              # dev tool 群: furigana-corpus-check (corpus 一括 regression) /
+        │                     #   furigana-analyze-one (AnalyzeResult dump) / furigana-dict-gap-mine
         ├── paths.rs          # 実行ファイル横を default、--data-dir / FURIGANA_DATA_DIR で上書き
         ├── config.rs         # config.toml ロード ([server] / [auth].tokens / .admin_tokens)
         └── commands/
@@ -105,12 +112,15 @@ let f = Furigana::builder()
 
 `Furigana::to_*` の流れ:
 
+工程 2〜4 は `scoring::pipeline::Pipeline` (facade) が所有する — provider の追加・
+順序変更・post-pass 追加はこの 1 module の変更で完結する。
+
 | # | 工程 | 実装場所 |
 |---|---|---|
 | 1 | テキスト正規化 (NFKC + 互換マップ) | `kana::normalize_text` + `rules::compat` |
-| 2 | candidate edge 列挙 (6 provider) | `scoring::analyze::analyze` (下記) |
+| 2 | candidate edge 列挙 (6 provider) | `scoring::pipeline` → `scoring::analyze` (下記) |
 | 3 | Viterbi DP で path 解 | `scoring::engine::solve_path` |
-| 4 | 踊り字 「々」 reading 確定 (連濁 post-pass) | `scoring::odoriji::apply_rendaku_to_result` |
+| 4 | Reading Post-pass (連濁 RendakuPass + 腹空く HaraSukuPass、 適用順は `POST_PASSES` 配列) | `scoring::postpass::apply_all` |
 | 5 | `AnalyzeToken` → `ReadingToken` 変換 | `Furigana::tokenize` |
 | 6 | surface 文字種で reading 表記を分岐 | `reading::output::tokens_to_hiragana` (下記) |
 | 7 | 後処理 regex 置換 (mode 別) | `rules::postprocess::PostProcessData::apply` |
@@ -126,7 +136,7 @@ let f = Furigana::builder()
 | 2000 | `ProtectTokenProvider` | URL / Email / 絵文字 (= 読み付けず passthrough) | `https://example.com` / `a@b.jp` / 🦀 |
 | 1000 | `DictBridgeProvider` (jukugo) | dict surface ≥2 字 | `灰桜` → `ハイザクラ` |
 | 1000 / 100 | `AlphabetPassthroughProvider` | 英字 passthrough (lookup あり = band 1000、 無し = band 100) | `Kubernetes` |
-| 950 | `NumberCandidateProvider` | 数字 + 助数詞 / 大数 / SI / 日付 / 時刻 / 記号 | `1万円` / `2025年10月30日` / `100km` |
+| 950 | `NumberCandidateProvider` | 数字 + 助数詞 / 大数 / SI / 日付 / 時刻 / 記号 / 数詞慣用語句 | `1万円` / `2025年10月30日` / `100km` / `二十歳` |
 | 100 | `DictBridgeProvider` (unihan / `[[kanji]]`) | 1 字 surface fallback + 文脈分岐 | `米` (= 次がひらがな → こめ / 漢字 → ベイ) |
 | 100 | `OdorijiProvider` | 「々」 placeholder edge (post-pass で連濁適用) | `山々` → `やまやま` |
 | 50 | `LinderaFallbackProvider` | 上記 5 が一切覆わない位置の safety net | 助詞 / okurigana / dict 未登録 単語 |
@@ -190,7 +200,7 @@ client                                    server (Arc<RwLock<Arc<Furigana>>>)
 
 - **decisions.md にしない**: ADR (Architecture Decision Records) は今のところ書くほどのスコープではないので、本書で軽くメモする方針
 - **データ駆動 (TOML)**: ルール変更で再ビルド不要、PR が contributors からも入りやすい
-- **Lindera + IPADIC 固定**: `embed-ipadic` で配布物に同梱。 Smart engine 上では band 50 の fallback として動作 (= 他 provider が一切覆わない位置だけで使われる)。 NEologd は opt-in feature flag で対応する案 (Phase 3 候補、[Issue #9](https://github.com/RyuuNeko1107/ja-furigana/issues/9))
+- **Lindera + IPADIC 固定**: `embed-ipadic` で配布物に同梱。 Smart engine 上では band 50 の fallback として動作 (= 他 provider が一切覆わない位置だけで使われる)。 NEologd は opt-in feature flag で対応する案 (Phase 3 候補、[Issue #9](https://github.com/RyuuNeko1107/ja-furigana/issues/9))。 UniDic への runtime 切替は 2026-06 の A/B 評価 (corpus 802 件で IPADIC 100% vs UniDic 95.9%、 発音形化け + 短単位分解が要因) で見送り — UniDic は 0.2.0 の aType → bracket 注釈 offline 生成にのみ使う方針
 - **discrete band lexicographic 比較**: 連続値 score の calibration 沼を回避。 band 値は 5 種類 (2000 / 1000 / 950 / 100 / 50) のみで、 各 layer の責務が明確
 - **`Dict` の多重保持**: jukugo (≥2 字 default) / unihan (1 字 default) / rich (Entry with match) / kanji (`[[kanji]]` block) を別 HashMap で保持。 Smart engine の `DictBridgeProvider` が rich / kanji を walk して `MatchCondition` 評価する
 - **`postprocess.toml`**: 辞書 / [[kanji]] block で表現しづらい文字列レベルの最終調整 (例: 「ジュウパー → ジュッパー」の促音化補正)。mode 別 (`hiragana` / `ruby` / `tts` / `romaji`) フィルタ + regex pattern + capture group 参照可
