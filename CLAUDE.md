@@ -9,11 +9,13 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.1.8` (2026-06-11、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
+- **LIVE**: `0.1.9` (2026-06-11、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
   しており 0.2.0 開発分 (ScoringContext / ADR-0004 / bracket-accent parser / scoring pub(crate) 化) を
-  含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.6 = 改行入り input の
-  空出力 bug 修正、 0.1.7 = 半角スペース保持 + serve リクエストタイムアウト、 0.1.8 = numeric_phrases
-  再統合 (二十歳=ハタチ) + Pipeline facade 内部 refactor + corpus-check 一括化
+  含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.7 = 半角スペース保持 +
+  serve リクエストタイムアウト、 0.1.8 = numeric_phrases 再統合 (二十歳=ハタチ) + Pipeline facade 内部
+  refactor + corpus-check 一括化、 0.1.9 = **漢数字+助数詞 bare 読みを dict opt-in flag (`CounterRule.kanji_numeral`)
+  で有効化** (五匹→ごひき 等、euphony は既存ロジック流用、どの助数詞を opt-in するかは dict が制御)。
+  本番 furigana-api は wrapper `2.0.6` で lib 0.1.9 + dict v2026.06.11.2 稼働 (2026-06-11 deploy)
 - **`0.2.0` (master 実装中・未 release)**: accent **core は実装済** =
   bracket notation parse + `AccentResult`/`AccentToken` + CLI `--mode=accent`
   (`api.rs::to_accent` / `scoring/bracket.rs`、 ADR-0003)。
