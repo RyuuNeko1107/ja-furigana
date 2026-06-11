@@ -97,7 +97,13 @@ cargo fmt                                    # フォーマット
 
 # CLI 動作確認
 cargo run --bin furigana -- lookup "猫が好き" --mode hiragana
-cargo run --bin furigana-diff-engines -- <corpus.toml>
+
+# corpus regression (高速一括、 Furigana 構築 1 回で全 corpus。 802 case ≈ 4 秒)
+# ※ dict repo の tools/run_corpus.py (1 case ごと CLI 起動、 ~15 分) より常にこちらを使う
+cargo run --release --bin furigana-corpus-check -- `
+  --rules-dir ..\furigana-dict\rules --core-dict-dir ..\furigana-dict\core `
+  ..\furigana-dict\tests\corpus
+# UniDic 版: cargo build --release -p ja-furigana-cli --bin furigana-corpus-check --no-default-features --features dict-unidic
 
 # benchmark
 cargo bench --bench lookup                   # 代表入力の latency
