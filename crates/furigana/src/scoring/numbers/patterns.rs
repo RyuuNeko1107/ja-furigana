@@ -67,11 +67,16 @@ pub(super) static DIGIT_RE: Lazy<Regex> =
 pub(super) fn build_counter_regexes(counters: &CountersData) -> (Option<Regex>, Option<Regex>) {
     let mut base: Vec<String> = counters.simple.keys().cloned().collect();
     let mut recursive: Vec<String> = Vec::new();
+    // 漢数字 bare 対応に opt-in した助数詞 (= `kanji_numeral = true`)。
+    let mut kanji_optin = false;
     for (key, rule) in &counters.counter {
         if rule.mode == Some(CounterMode::Recursive) {
             recursive.push(key.clone());
         } else {
             base.push(key.clone());
+        }
+        if rule.kanji_numeral {
+            kanji_optin = true;
         }
     }
     if base.is_empty() {
@@ -82,10 +87,21 @@ pub(super) fn build_counter_regexes(counters: &CountersData) -> (Option<Regex>, 
     let base_alts: Vec<String> = base.iter().map(|s| regex::escape(s)).collect();
     let base_joined = base_alts.join("|");
 
+    // 漢数字 regex は recursive 助数詞 (「目」) か opt-in 助数詞のどちらかが在れば構築する。
+    // recursive group は optional 化し、 bare match (recursive 無し) の採否は matcher 側で
+    // `kanji_numeral` フラグにより gate する (= 「一日中」 の 「一日」 等の誤 counter 化を防ぐ)。
     if recursive.is_empty() {
         let arabic = Regex::new(&format!(r"({NUM_PAT})({base_joined})"))
             .expect("scoring counter regex build failed");
-        return (Some(arabic), None);
+        let kanji = if kanji_optin {
+            Some(
+                Regex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})"))
+                    .expect("scoring kanji counter regex build failed"),
+            )
+        } else {
+            None
+        };
+        return (Some(arabic), kanji);
     }
 
     recursive.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
@@ -94,7 +110,8 @@ pub(super) fn build_counter_regexes(counters: &CountersData) -> (Option<Regex>, 
 
     let arabic = Regex::new(&format!(r"({NUM_PAT})({base_joined})({rec_joined})?"))
         .expect("scoring counter regex build failed");
-    let kanji = Regex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})({rec_joined})"))
+    // recursive group を optional 化 (= 「一個目」 の recursive 形 + opt-in 助数詞の bare 形 両対応)。
+    let kanji = Regex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})({rec_joined})?"))
         .expect("scoring kanji counter regex build failed");
     (Some(arabic), Some(kanji))
 }
@@ -194,6 +211,34 @@ mod tests {
         let rules = RulesData::default();
         assert!(build_scale_regex(&rules.scales, &rules.units, &rules.counters).is_none());
         assert!(build_si_unit_regex(&rules.units).is_none());
+    }
+
+    #[test]
+    fn kanji_optin_builds_bare_kanji_regex_without_recursive() {
+        // recursive 助数詞 (「目」) が無くても、 kanji_numeral opt-in 助数詞が在れば
+        // 漢数字 regex が構築され bare match する。
+        let toml_str = r#"
+            [counter."匹"]
+            default = "ヒキ"
+            kanji_numeral = true
+        "#;
+        let counters: crate::rules::CountersData = toml::from_str(toml_str).unwrap();
+        let (arabic, kanji) = build_counter_regexes(&counters);
+        assert!(arabic.is_some());
+        let kanji = kanji.expect("opt-in 助数詞で漢数字 regex が構築される");
+        assert!(at_start(&kanji, "五匹").is_some(), "五匹 が bare match する");
+    }
+
+    #[test]
+    fn non_optin_counter_yields_no_kanji_regex_without_recursive() {
+        // opt-in も recursive も無ければ漢数字 regex は None (従来挙動)。
+        let toml_str = r#"
+            [counter."杯"]
+            default = "ハイ"
+        "#;
+        let counters: crate::rules::CountersData = toml::from_str(toml_str).unwrap();
+        let (_arabic, kanji) = build_counter_regexes(&counters);
+        assert!(kanji.is_none(), "opt-in 無しは漢数字 regex を作らない");
     }
 
     #[test]

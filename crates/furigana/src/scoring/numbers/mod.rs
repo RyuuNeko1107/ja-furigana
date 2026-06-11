@@ -374,10 +374,13 @@ impl NumberCandidateProvider {
         }
     }
 
-    /// section 6b: 漢数字 + 助数詞 + 末尾再帰 「目」 (recursive 必須)。
+    /// section 6b: 漢数字 + 助数詞 (+ optional 末尾再帰 「目」)。
     ///
-    /// 「一個目」 「十二回目」 等。 bare 漢数字 + 助数詞 (= 「一個」 「一日」) は
-    /// 従来通り Lindera / chunker に委ねる。
+    /// - recursive 形 (= 「一個目」「十二回目」): group 3 が match。常に採用。
+    /// - bare 形 (= 「五匹」「三羽」): group 3 不在。base 助数詞が `kanji_numeral = true` に
+    ///   opt-in している時のみ採用 (= 「一日中」 の 「一日」 等の誤 counter 化を防ぐ)。
+    ///   euphony は `read_counter` 内の `kansuji_to_arabic` + `euphonic_counter_read` が
+    ///   担うので、 連濁 (三羽→さんば) / 促音 (六匹→ろっぴき) も自動で効く。
     fn try_counter_kanji(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
         let Some(re) = &self.counter_kanji_re else {
             return;
@@ -386,8 +389,21 @@ impl NumberCandidateProvider {
             let m_end = caps.get(0).unwrap().end();
             let num = caps.get(1).unwrap().as_str();
             let base = caps.get(2).unwrap().as_str();
-            let rec = caps.get(3).unwrap().as_str();
-            let counter = format!("{base}{rec}");
+            let counter = if let Some(rec) = caps.get(3) {
+                // recursive 形 (「目」) は常に採用
+                format!("{base}{}", rec.as_str())
+            } else {
+                // bare 形は opt-in 助数詞のみ採用
+                let opted_in = self
+                    .counters
+                    .counter
+                    .get(base)
+                    .is_some_and(|r| r.kanji_numeral);
+                if !opted_in {
+                    return;
+                }
+                base.to_string()
+            };
             let reading = self.read_counter(num, &counter);
             out.push(self.make(input, pos, m_end, reading));
         }

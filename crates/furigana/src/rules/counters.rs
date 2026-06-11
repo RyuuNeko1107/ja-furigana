@@ -86,6 +86,15 @@ pub struct CounterRule {
     /// `mode = "recursive"` の際に末尾連結する suffix (例: 目→「メ」)
     #[serde(default)]
     pub suffix: Option<String>,
+
+    /// **漢数字 (五/七/十 等) を bare で counter 化するか** (default false)。
+    ///
+    /// false (従来挙動): bare 漢数字 + 助数詞 (= 「五匹」「一日」) は counter candidate に
+    /// せず Lindera / chunker に委ねる。「一日中」 の 「一日」 が誤って counter 化するのを防ぐ。
+    /// true: 「五匹→ごひき」「三羽→さんば」 等を NumberProvider 側で連濁・促音込みで読む。
+    /// counter 用法が支配的で非 counter 文脈との衝突が無い助数詞 (匹/羽/頭/杯 等) のみ opt-in する。
+    #[serde(default)]
+    pub kanji_numeral: bool,
 }
 
 /// 数値カナの末尾置換ルール
