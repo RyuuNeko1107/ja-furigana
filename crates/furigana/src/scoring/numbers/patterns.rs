@@ -226,7 +226,10 @@ mod tests {
         let (arabic, kanji) = build_counter_regexes(&counters);
         assert!(arabic.is_some());
         let kanji = kanji.expect("opt-in 助数詞で漢数字 regex が構築される");
-        assert!(at_start(&kanji, "五匹").is_some(), "五匹 が bare match する");
+        assert!(
+            at_start(&kanji, "五匹").is_some(),
+            "五匹 が bare match する"
+        );
     }
 
     #[test]

@@ -49,7 +49,7 @@ dict-unidic = ["furigana/dict-unidic"]
 [dependencies]
 # crates.io 上の crate 名は `ja-furigana` (`furigana` は別 crate に取られているため)。
 # import 名は `furigana` のままにして CLI 内の `use furigana::...` を保つ (package alias)。
-furigana = { package = "ja-furigana", path = "../furigana", version = "=0.1.8", default-features = false }
+furigana = { package = "ja-furigana", path = "../furigana", version = "=0.1.9", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
 axum = "0.8"

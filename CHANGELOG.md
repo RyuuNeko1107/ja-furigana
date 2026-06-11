@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-06-11
+
+漢数字 + 助数詞の bare 読みを dict 制御で有効化 (data 駆動の opt-in 機構)。
+
+### Added
+
+- **`CounterRule.kanji_numeral` フラグ** (`rules/counters.rs`): 漢数字 (五/七/十) +
+  助数詞を bare で counter 化するかを助数詞ごとに opt-in できる。従来は recursive 形
+  (「一個目」) のみ counter 化し bare 形 (「五匹」) は Lindera 委譲だった (「一日中」 の
+  「一日」 誤 counter 化を避けるため)。`build_counter_regexes` の漢数字 regex で recursive
+  group を optional 化し、bare match の採否を `try_counter_kanji` が `kanji_numeral` で
+  gate する。euphony は既存 `kansuji_to_arabic` + `euphonic_counter_read` が担うので連濁
+  (三羽→さんば) / 促音 (六匹→ろっぴき) も自動。どの助数詞を opt-in するかは dict
+  (`rules/numbers/counters/*.toml`) が制御 (= 辞書が source of truth)。`KANJI_NUM_PAT`
+  guard により日本 / 立派 / 乾杯 等の非 counter 衝突なし。serde 未知フィールド無視で
+  旧 dict 互換。
+
 ## [0.1.8] - 2026-06-11
 
 数詞慣用語句 (二十歳=ハタチ 等) の復活 + Smart engine 内部の facade 化 + dev tool 拡充。
