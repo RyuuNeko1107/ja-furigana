@@ -245,7 +245,7 @@ pub enum CharType {
 /// `[[kanji]]` block — 単漢字 first-class candidate generator。
 ///
 /// 各単漢字に default reading + 文脈 match を持つ。 alpha era の `core/single/`
-/// (= [`crate::single_overrides::SingleOverrides`] 含む) を統合した形。
+/// (= 旧 `single_overrides::SingleOverrides`、 alpha.15 で削除済) を統合した形。
 ///
 /// ## 例
 ///

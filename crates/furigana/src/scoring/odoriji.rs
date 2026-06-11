@@ -14,8 +14,8 @@
 //!
 //! ## 連濁判定
 //!
-//! 既存 Strict engine (`crate::reading::pipeline::expand_odoriji_inplace`) と
-//! 同じ rule。 簡易連濁:
+//! 旧 Strict engine の `expand_odoriji_inplace` (alpha.15 で削除済) から引き継いだ
+//! rule。 簡易連濁:
 //!
 //! - 直前 reading の **第 1 音がカ/サ/タ/ハ 行** → 濁音化して 「々」 reading に採用
 //!   (神→ガミ、 人→ビト、 時→ドキ)
@@ -81,7 +81,7 @@ impl CandidateProvider for OdorijiProvider {
 /// 直前 token が無い / 直前 reading が空 → 「々」 のまま残す (= no-op)、
 /// 連濁対象外 (voice_first_kana が None) → 直前 reading をそのまま複製。
 ///
-/// 既存 Strict engine の `reading::pipeline::expand_odoriji_inplace` と同じ rule。
+/// 旧 Strict engine の `expand_odoriji_inplace` (alpha.15 で削除済) と同じ rule。
 ///
 /// ## 例
 ///

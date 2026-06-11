@@ -45,7 +45,8 @@ pub fn build_furigana(paths: &Paths) -> Result<Furigana> {
         b = b.overrides_file(&overrides);
     }
     // 旧 Strict-only path (= loanwords / single_overrides) は alpha.15 で撤廃済。
-    // loanwords は AlphabetPassthroughProvider に統合予定 (= 0.2.0+ work)。
+    // loanwords は alpha.21 で AlphabetPassthroughProvider に再統合済 (= core_dict_dir
+    // 配下の role = "loanwords" file を builder が自動で拾う)。
     // single_overrides 相当は dict 側 `core/kanji/overrides.toml` の [[kanji]] block に移行。
 
     if !data_loaded {

@@ -4,7 +4,7 @@
 //!
 //! ## 役割
 //!
-//! 既存 [`crate::chunks::NumberChunker::split`] の数値関連 logic を
+//! 数値関連 logic (旧 `chunks::NumberChunker::split`、 alpha.15 で削除済) を
 //! [`CandidateProvider`] として再実装し、 Smart engine path に band [`BAND_SPECIAL`]
 //! (= 950) candidate として乗せる。 dict 完全一致 (band 1000) には常に負け、
 //! 漢字辞書 (band 100) / Lindera (band 50) には常勝。
@@ -33,14 +33,12 @@
 //! - URL / Email / 絵文字 → [`crate::scoring::special::ProtectTokenProvider`] (band 2000)
 //! - アルファベット token → [`crate::scoring::special::AlphabetPassthroughProvider`]
 //!   (lookup hit は band 1000、 miss は band 100)
-//! - 単語 / 漢字辞書 → `DictBridgeProvider` (api.rs)
+//! - 単語 / 漢字辞書 → [`crate::scoring::dict_bridge::DictBridgeProvider`]
 //! - 踊り字 「々」 → [`crate::scoring::odoriji::OdorijiProvider`]
 //! - jukugo super-set check は **不要** (Smart engine DP が band 1000 dict entry を自然に優先)
 //!
 //! ## 注意
 //!
-//! - 既存 chunker と独立 implementation (= scoring/special.rs URL_RE 重複と同方針)。
-//!   0.2.0+ で `crate::chunks` 削除と coordinated に整理予定。
 //! - `numeric_phrases` (`二十歳=ハタチ` 等) は別 provider 化が望ましいが C3 scope 外。
 //!   alpha.10〜rc1 で必要なら追加。
 
@@ -372,7 +370,8 @@ impl NumberCandidateProvider {
             // ではなく長音・強調用途なので 「から」 は誤読。 空 reading で surface のみ
             // 消費し、 読み上げない (= 「がんばれ〜」 → 「がんばれ」)。
             let is_range_marker = matches!(ch, '〜' | '~' | '～');
-            let final_read = if is_range_marker && !range_marker_in_numeric_context(input, pos, ch) {
+            let final_read = if is_range_marker && !range_marker_in_numeric_context(input, pos, ch)
+            {
                 String::new()
             } else {
                 read

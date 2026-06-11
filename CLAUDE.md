@@ -17,8 +17,9 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 - **`0.2.0` (master 実装中・未 release)**: accent **core は実装済** =
   bracket notation parse + `AccentResult`/`AccentToken` + CLI `--mode=accent`
   (`api.rs::to_accent` / `scoring/bracket.rs`、 ADR-0003)。
-  **残件**: UniDic pitch accent (aType) 統合 / `loanwords`→`AlphabetPassthrough` 再統合 /
-  `numeric_phrases` (NumericPhraseMatcher) 再統合。 cut 判断は user 主導 (PROPOSALS/intonation.md)
+  **残件**: UniDic pitch accent (aType) 統合 /
+  `numeric_phrases` (NumericPhraseMatcher) 再統合 (loanwords は alpha.21 で再統合済)。
+  cut 判断は user 主導 (PROPOSALS/intonation.md)
 
 ## alpha.10 task 進捗 (2026-05-11)
 
@@ -44,40 +45,47 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ```
 crates/furigana/src/
-├── api.rs                 — Furigana / FuriganaBuilder (公開 entry)
+├── api.rs                 — Furigana / FuriganaBuilder (公開 entry、 解析は scoring/pipeline 経由の薄い層)
 ├── analyzer.rs            — Lindera + IPADIC ラッパー
-├── chunks/                — NumberChunker (URL/email regex 含む)
-├── dict.rs                — jukugo / unihan 二段 HashMap
-├── kana.rs                — kanji/hiragana/katakana 判定
-├── loader.rs              — TOML loader (★ schema_version validate 追加済 alpha.10)
-├── loanwords.rs           — 外来語 (case-fold + 全角→半角 normalize)
-├── numbers/               — kansuji / 助数詞 logic
-├── reading/               — pipeline.rs::resolve_reading (= 既存 Strict engine の core 7-step)
-├── rules/                 — counters / context / days / scales / etc TOML data
-├── scoring/  ★alpha.10★  — 新 Smart engine module (詳細 別記)
-├── single_overrides.rs    — Issue #15 限定解 (1 字 surface override)
+├── dict.rs                — jukugo / unihan / rich entry / [[kanji]] block 多重保持 (先頭 char prefix index 付)
+├── kana.rs                — kanji/hiragana/katakana 判定 + 連濁 (voice_first_kana)
+├── loader.rs              — TOML loader (schema_version validate)
+├── numbers/               — kansuji / 助数詞 logic (scoring/numbers.rs から呼ばれる)
+├── reading/               — 出力 layer (ReadingToken + tokens_to_hiragana / tokens_to_ruby)
+├── romaji.rs              — ひらがな → ローマ字 (Hepburn / Kunrei)
+├── rules/                 — counters / context / days / scales / postprocess 等 TOML data
+├── scoring/               — Smart engine module (詳細 別記)
 └── tts.rs                 — TTS pre-processing (pause 整形 等)
+
+(旧 chunks/ / loanwords.rs / single_overrides.rs / reading/pipeline.rs は alpha.15 で削除済。
+ loanwords は alpha.21 で AlphabetPassthroughProvider に再統合。)
 
 crates/furigana-cli/src/
 ├── main.rs                — `furigana` バイナリ (CLI + HTTP server)
 ├── commands/              — lookup / repl / serve / dict subcommands
-└── bin/diff_engines.rs ★  — `furigana-diff-engines` (Smart vs Strict diff tool)
+└── bin/                   — dict_gap_mine 等 support tool
 ```
 
 ## scoring/ module (alpha.10 新設)
 
 | sub module | 役割 |
 |---|---|
+| `pipeline.rs` ★ | **Pipeline facade** — 6 provider 構成 + Viterbi + Reading Post-pass を所有する single seam。 `tokens()` (production) / `analyze()` (debug)。 provider 追加・順序変更はここで完結 |
 | `format.rs` | Entry / EntryDetail / MatchBlock / MatchCondition / CharType / KanjiBlock の struct |
-| `matcher.rs` | MatchContext + matches_context() + classify_char() |
-| `candidate.rs` | Score / Candidate / CandidateProvider trait + Engine enum + band 定数 |
+| `matcher.rs` | MatchContext + matches_context() + classify_char() + resolve_readings |
+| `candidate.rs` | Score / Candidate / CandidateProvider trait + ScoringContext + band 定数 |
 | `engine.rs` | PathScore (weakest_band + edge_count agg) + solve_path Viterbi DP |
 | `boundary.rs` | KanjiRegion + BoundaryAnalysis (b)(c) penalty -300/-600 |
-| `special.rs` | ProtectTokenProvider (band 2000) + AlphabetPassthroughProvider (hit 1000 / miss 100) |
-| `numbers.rs` | NumberCandidateProvider (★C3、 band 950: 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 / 記号 / 素の数字) |
-| `odoriji.rs` | OdorijiProvider + apply_rendaku post-pass (々 の Smart engine 統合、 連濁 logic は kana::voice_first_kana 共通化) |
-| `bracket.rs` | strip_intonation_markers (forward compat for 0.2.0) |
-| `analyze.rs` | AnalyzeResult / Token + analyze() function (★11 freeze types) |
+| `special.rs` | ProtectTokenProvider (band 2000) + AlphabetPassthroughProvider (hit 1000 / miss 100、 loanwords lookup 込) |
+| `dict_bridge.rs` ★ | DictBridgeProvider — Dict (jukugo / unihan / [[kanji]] block) の candidate 化、 先頭 char prefix index 引き |
+| `numbers.rs` | NumberCandidateProvider (band 950: 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 / 記号 / 素の数字) |
+| `odoriji.rs` | OdorijiProvider (々 placeholder) + RendakuPass (連濁 logic は kana::voice_first_kana 共通化) |
+| `lindera_fallback.rs` | LinderaFallbackProvider (band 50/150 safety net + gap-passthrough) |
+| `postpass.rs` | ReadingPostPass trait + POST_PASSES 配列 (ADR-0005) |
+| `contextual.rs` | HaraSukuPass (腹+空く 2-token-back 補正) |
+| `bracket.rs` | bracket notation parse → AccentPhrase (0.2.0 core) |
+| `analyze.rs` | AnalyzeResult / Token + analyze() / analyze_tokens() (★11 freeze types) |
+| `inspect.rs` | dict gap 抽出等の inspection helper (公開 re-export) |
 
 ## よく使うコマンド
 
@@ -98,8 +106,7 @@ cargo bench --bench lookup
 
 ## 重要設計指針
 
-- **既存挙動を壊さない**: alpha.10 の scoring module は **並走実装**、 既存 Furigana::to_* は currently Strict engine 経由 (Smart 選択時も内部実装は Strict と同等)
-- **Smart engine 真 wire-up は段階的**: C 系完了後に Furigana に統合、 0.1.0-rc1 で default 切替
+- **Smart engine 一本化済** (alpha.15): 旧 Strict engine は削除済、 `Furigana::to_*` / `tokenize` / `analyze` はすべて `scoring/pipeline.rs` の Pipeline facade 経由 (= 同一の採択 path)
 - **discrete band + lexicographic**: 連続値 score ではなく band/length/match_hits/penalty の 4 軸 lexicographic 比較 (= calibration 沼回避)
 - **品詞 matcher 不採用**: Lindera 撤廃路線と整合、 `prev_pos` / `next_pos` は無し、 literal + char_type のみ
 - **forward compat for intonation**: bracket notation `[` `]` `/` を 0.1.0 から dict 側で書ける、 lib は strip / 無視、 0.2.0 で活用
@@ -118,4 +125,3 @@ cargo bench --bench lookup
 - **branch protection 一時 OFF** (master): alpha.7 → alpha.8 経緯、 stable cut 前に復元
 - **publish policy** (2026-05-11 再更新): **alpha 期間中は crates.io publish しない** (= 0.1.0 stable 再開)、 加えて **alpha.10 は GitHub release も skip** (= 4 commit は master push 済の内部 milestone label として残す)。 次の release は alpha.10 + alpha.11 work をまとめた alpha.11+。 既 publish 済 (`alpha.1` 〜 `alpha.9`) は metadata 不変のまま yank しない
 - **dict version compat**: alpha.10 lib は `[meta] schema_version = "2"` のみ accept、 旧 format dict は parse error (= dict v2 化と coordinated)
-- **既存 chunks/regex.rs の URL_RE / EMAIL_RE と scoring/special.rs の独立実装が併存**: 0.2.0+ で旧実装 deprecate / 削除予定

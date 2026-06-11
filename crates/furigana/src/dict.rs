@@ -25,10 +25,11 @@
 //! [`Self::lookup_jukugo`] と [`Self::lookup_unihan`] で別々に lookup できる。
 //! [`Self::lookup`] は両者を試す互換 API (jukugo 優先)。
 //!
-//! 呼び出し側 ([`crate::reading::pipeline::resolve_reading`]) は
-//! `context rule → jukugo lookup → Lindera reading → unihan lookup` の優先順位で評価する。
-//! こうすることで、Lindera が動詞活用形 surface に対して持っている自然な reading を
-//! 単漢字 unihan の保守的読みが横取りすることがなくなる。
+//! 呼び出し側 (`scoring/dict_bridge.rs` の `DictBridgeProvider`) は
+//! `entries (rich) → [[kanji]] block → unihan` の優先順で candidate を emit し、
+//! band (jukugo 1000 / unihan 100 / Lindera 50) の lexicographic 比較で
+//! Lindera が動詞活用形 surface に持つ自然な reading を単漢字 unihan の
+//! 保守的読みが横取りしないようになっている。
 
 use crate::error::{FuriganaError, Result};
 use crate::scoring::format::{Entry, EntryDetail, KanjiBlock};
@@ -312,7 +313,7 @@ impl Dict {
     /// surface に対応する読みを返す (jukugo 優先で fallback で unihan を見る、互換 API)
     ///
     /// 新規コードは [`Self::lookup_jukugo`] / [`Self::lookup_unihan`] を分けて
-    /// 使い、resolve_reading の優先順位に組み込むのが推奨。
+    /// 使い、`DictBridgeProvider` の emit 優先順位に組み込むのが推奨。
     #[must_use]
     pub fn lookup(&self, surface: &str) -> Option<&str> {
         self.jukugo
@@ -473,9 +474,8 @@ impl Dict {
 
     /// 熟語の (surface, reading) ペアを iter 公開
     ///
-    /// `chunks::NumberChunker` が起動時に jukugo の Aho-Corasick automaton を
-    /// build するために使う (counter chunk が jukugo entry の真部分集合になって
-    /// いる場合に jukugo を優先するため)。
+    /// 旧 `chunks::NumberChunker` (alpha.15 で削除済) が使っていた公開 helper。
+    /// 現在 lib 内部に caller は無いが、 dict 内容の inspection 用 public API として残置。
     pub fn jukugo_iter(&self) -> impl Iterator<Item = (&str, &str)> {
         self.jukugo.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }

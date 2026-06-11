@@ -29,8 +29,8 @@ pub(crate) fn norm_num(s: &str) -> String {
 /// サポート範囲は 0〜99 (日付・月の用途で十分)。複雑なケース (百二十三 等) は
 /// 未対応で `None` を返す。
 ///
-/// 主に [`crate::chunks::NumberChunker`] の日付/月日処理から呼ばれ、
-/// 「6月**一**日」「**二**月**十**日」のような漢数字混在パターンを
+/// 主に [`crate::scoring::numbers`] (NumberCandidateProvider) の日付/月日処理から
+/// 呼ばれ、 「6月**一**日」「**二**月**十**日」のような漢数字混在パターンを
 /// `read_counter` に投入できるようにするのが目的。
 pub(crate) fn kansuji_to_arabic(s: &str) -> Option<String> {
     let chars: Vec<char> = s.chars().collect();

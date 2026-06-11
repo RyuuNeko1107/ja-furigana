@@ -1,6 +1,7 @@
 //! 補助変換: スケール / SI 単位 / 記号の単発読み
 //!
-//! `chunks` モジュールから呼ばれる、引数を受けて 1 つの読みを返す軽量関数群。
+//! [`crate::scoring::numbers`] (NumberCandidateProvider) から呼ばれる、
+//! 引数を受けて 1 つの読みを返す軽量関数群。
 
 use super::digit::number_to_katakana;
 use super::helpers::{last_digit, sokuonize_last};

@@ -265,8 +265,9 @@ pub fn has_katakana(s: &str) -> bool {
 /// (ア/ナ/マ/ヤ/ラ/ワ 行 + 既に濁音 + ハ 行半濁音) は `None` を返し、 caller は
 /// 「清音のまま複製」 にフォールバックする想定。
 ///
-/// 既存 Strict engine ([`crate::reading::pipeline`] の `expand_odoriji_inplace`) と
-/// Smart engine ([`crate::scoring::odoriji`]) の両方で共有。
+/// Smart engine の踊り字処理 (`scoring::odoriji` の `RendakuPass`) から使う。
+/// (旧 Strict engine の `expand_odoriji_inplace` と共有していた logic、 alpha.15 の
+/// Strict 撤廃後は Smart 側のみが caller。)
 ///
 /// ## 例
 ///

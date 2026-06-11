@@ -13,9 +13,8 @@
 //! `solve_path` に流す。 surface = reading で透過 (= URL や 絵文字をひらがな化しない)、
 //! path 選択時に必ず採用される (band 2000 が他の全 band を上回る)。
 //!
-//! 既存 [`crate::chunks::regex`] の URL_RE / EMAIL_RE と機能的に重複するが、
-//! scoring engine 用の独立 implementation を持つ (alpha.10 〜 0.1.0 stable で
-//! 既存実装を deprecate、 0.2.0+ で削除予定)。
+//! URL_RE / EMAIL_RE は本 module が唯一の実装 (旧 `chunks::regex` の重複実装は
+//! alpha.15 の chunks 削除で解消済)。
 
 use crate::scoring::candidate::{
     Candidate, CandidateProvider, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
@@ -264,8 +263,8 @@ pub fn find_alphabet_ranges(input: &str) -> Vec<Range<usize>> {
 
 /// 英字 surface を 「全角→半角 + case-fold」 で正規化。
 ///
-/// dict 完全一致 lookup 前段の normalize。 [`crate::loanwords::Loanwords::normalize`]
-/// と同等の挙動 (alpha era 互換、 alpha.10 で scoring 側にも独立実装)。
+/// dict 完全一致 lookup 前段の normalize。 旧 `loanwords::Loanwords::normalize`
+/// (alpha.15 で削除済) と同等の挙動、 現在は本関数が唯一の実装。
 #[must_use]
 pub fn normalize_alphabet(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

@@ -4,24 +4,24 @@
 //! 文全体の最良 path を採用する。 詳細仕様は
 //! `docs/PROPOSALS/scoring-engine.md` 参照。
 //!
-//! ## 構成 (alpha.10 で順次追加)
+//! ## 構成
 //!
+//! - [`pipeline`]: **解析パイプライン facade** (provider 構成 + Viterbi + post-pass を所有)
 //! - [`format`]: 新 dict format の struct + Deserialize (entry inline match /
 //!   `[[kanji]]` block / matcher conditions / 文字種列挙)
-//! - 今後追加予定:
-//!   - `matcher`: matcher 条件の評価 logic
-//!   - `candidate`: Candidate / Score (band lexicographic 比較)
-//!   - `engine`: Smart engine 本体 (Viterbi-like)
-//!   - `boundary`: (b)(c) 漢字連続 boundary penalty
-//!   - `special`: 保護トークン / 数字系 / 踊り字
-//!   - `analyze`: `AnalyzeResult` / `analyze()` debug API
+//! - [`matcher`]: matcher 条件の評価 logic
+//! - [`candidate`]: Candidate / Score (band lexicographic 比較)
+//! - [`engine`]: Smart engine 本体 (Viterbi-like)
+//! - [`boundary`]: (b)(c) 漢字連続 boundary penalty
+//! - [`special`] / [`numbers`] / [`odoriji`] / [`dict_bridge`] / [`lindera_fallback`]: 各 provider
+//! - [`postpass`]: path 確定後の token 列補正 seam (ADR-0005)
+//! - [`analyze`]: `AnalyzeResult` / `analyze()` debug API
 //!
-//! ## 既存 architecture (Strict engine) との関係
+//! ## 旧 architecture (Strict engine) との関係
 //!
-//! 0.1.0 alpha 期間中は既存 [`crate::reading::pipeline::resolve_reading`] (= Strict
-//! engine) が default、 Smart engine は experimental flag (env var
-//! `JA_FURIGANA_ENGINE=smart` で切替可能)。 0.1.0-rc1 で Smart を default 切替、
-//! 0.2.0+ で Strict を削除予定。
+//! 旧 Strict engine (`reading/pipeline.rs` の `resolve_reading` 7-step) は alpha.15 で
+//! 削除済。 Smart engine が唯一の読み解決系統 (= [`crate::Furigana::tokenize`] /
+//! `to_*` / `analyze` はすべて [`pipeline::Pipeline`] 経由)。
 //!
 //! ## postprocess との分離 (★C4)
 //!
@@ -38,6 +38,7 @@ pub mod boundary;
 pub mod bracket;
 pub mod candidate;
 pub mod contextual;
+pub mod dict_bridge;
 pub mod engine;
 pub mod format;
 pub mod inspect;
@@ -45,5 +46,6 @@ pub mod lindera_fallback;
 pub mod matcher;
 pub mod numbers;
 pub mod odoriji;
+pub mod pipeline;
 pub mod postpass;
 pub mod special;
