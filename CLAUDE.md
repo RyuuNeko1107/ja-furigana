@@ -78,7 +78,7 @@ crates/furigana-cli/src/
 | `boundary.rs` | KanjiRegion + BoundaryAnalysis (b)(c) penalty -300/-600 |
 | `special.rs` | ProtectTokenProvider (band 2000) + AlphabetPassthroughProvider (hit 1000 / miss 100、 loanwords lookup 込) |
 | `dict_bridge.rs` ★ | DictBridgeProvider — Dict (jukugo / unihan / [[kanji]] block) の candidate 化、 先頭 char prefix index 引き |
-| `numbers.rs` | NumberCandidateProvider (band 950: 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 / 記号 / 素の数字) |
+| `numbers/` | NumberCandidateProvider (band 950: 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 / 記号 / 素の数字)。 `patterns.rs` = regex 定義+構築、 `mod.rs` = 候補種別ごとの try_* matcher |
 | `odoriji.rs` | OdorijiProvider (々 placeholder) + RendakuPass (連濁 logic は kana::voice_first_kana 共通化) |
 | `lindera_fallback.rs` | LinderaFallbackProvider (band 50/150 safety net + gap-passthrough) |
 | `postpass.rs` | ReadingPostPass trait + POST_PASSES 配列 (ADR-0005) |
@@ -101,7 +101,8 @@ cargo run --bin furigana -- lookup "猫が好き" --mode hiragana
 cargo run --bin furigana-diff-engines -- <corpus.toml>
 
 # benchmark
-cargo bench --bench lookup
+cargo bench --bench lookup                   # 代表入力の latency
+cargo bench --bench scaling                  # 入力長スケーリング + alloc churn (実 dict は FURIGANA_BENCH_CORE/_RULES)
 ```
 
 ## 重要設計指針
