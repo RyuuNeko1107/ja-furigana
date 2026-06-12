@@ -114,11 +114,17 @@ fn insert_pause_after(text: &str, targets: &[char], pause: &str) -> String {
 /// 文末記号で一次分割 → 各文が `max_len` 超なら `、` で再分割 (貪欲詰め込み)
 /// → それでも超える場合は固定長 chunk 分割。
 /// 空・句読点のみのセグメントは除去。
+///
+/// `max_len = 0` は `slice::chunks(0)` が panic するため内部で 1 に clamp する
+/// (= 「1 文字ずつ分割」)。 caller (HTTP handler 等) は妥当な下限を別途 validate
+/// してよいが、 本関数単体でも入力値によって panic しないことを保証する。
 #[must_use]
 pub fn segment_for_tts(text: &str, max_len: usize) -> Vec<String> {
     if text.is_empty() {
         return Vec::new();
     }
+    // chunks(0) panic 回避の自己防御。
+    let max_len = max_len.max(1);
 
     // 句読点前後正規化
     static PUNCT_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*([、。！？!?])\s*").unwrap());
@@ -290,6 +296,17 @@ mod tests {
     #[test]
     fn segment_empty_input() {
         assert_eq!(segment_for_tts("", 60), Vec::<String>::new());
+    }
+
+    #[test]
+    fn segment_max_len_zero_does_not_panic() {
+        // max_len=0 は内部で 1 に clamp される (slice::chunks(0) panic 回避)。
+        // REPORT-002 回帰: 非空文を 0 で分割しても panic せず 1 文字ずつになる。
+        let segs = segment_for_tts("あいう。", 0);
+        assert!(!segs.is_empty());
+        assert!(segs
+            .iter()
+            .all(|s| s.chars().count() <= 1 || s.ends_with('。')));
     }
 
     #[test]

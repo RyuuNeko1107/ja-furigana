@@ -13,6 +13,19 @@ use tokio::sync::RwLock;
 /// 1 リクエストあたりの最大入力文字数 (公開 API 仕様)
 pub(super) const MAX_TEXT_LEN: usize = 10_000;
 
+/// `short_pause` / `long_pause` の最大文字数。
+///
+/// pause は句読点ごとに出力へ挿入されるため、 長い pause × 大量句読点で出力が
+/// 増幅する (REPORT-001)。 ポーズ記号 (空白 / 短いマーカー) の用途では十分な上限。
+pub(super) const MAX_PAUSE_LEN: usize = 16;
+
+/// `max_segment_len` の許容範囲 (両端含む)。
+///
+/// 0 は分割器 (`slice::chunks`) を panic させる (REPORT-002)。 上限は入力長
+/// ([`MAX_TEXT_LEN`]) と揃える (それ以上の分割幅は無意味)。
+pub(super) const MIN_SEGMENT_LEN: usize = 1;
+pub(super) const MAX_SEGMENT_LEN: usize = MAX_TEXT_LEN;
+
 /// total_ms がこの閾値を超えると WARN log + slow_requests counter increment
 pub(super) const SLOW_REQUEST_MS: f64 = 100.0;
 

@@ -1,8 +1,8 @@
 //! HTTP ハンドラ + 変換ロジック
 
 use super::types::{
-    default_mode, error, ApiError, AppState, FuriganaParams, FuriganaResponse, MAX_TEXT_LEN,
-    SLOW_REQUEST_MS,
+    default_mode, error, ApiError, AppState, FuriganaParams, FuriganaResponse, MAX_PAUSE_LEN,
+    MAX_SEGMENT_LEN, MAX_TEXT_LEN, MIN_SEGMENT_LEN, SLOW_REQUEST_MS,
 };
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -138,6 +138,7 @@ fn process(
 ) -> Result<Json<FuriganaResponse>, ApiError> {
     let text = decode_text(params)?;
     validate_length(&text)?;
+    validate_params(params)?;
     let mode = normalize_mode(&params.mode);
 
     tracing::debug!(
@@ -424,6 +425,40 @@ fn validate_length(text: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// pause 長 / segment 幅などの数量パラメータを検証する。
+///
+/// - `short_pause` / `long_pause`: 句読点ごとに出力へ挿入されるため、 長すぎる
+///   pause × 大量句読点で出力が増幅する (REPORT-001)。 [`MAX_PAUSE_LEN`] で上限。
+/// - `max_segment_len`: 0 は分割器を panic させ (REPORT-002)、 lib 側で 1 に clamp
+///   されるが、 API としては明示的に 400 を返す。 [`MIN_SEGMENT_LEN`]..=[`MAX_SEGMENT_LEN`]。
+fn validate_params(params: &FuriganaParams) -> Result<(), ApiError> {
+    let short_len = params.short_pause.chars().count();
+    if short_len > MAX_PAUSE_LEN {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("short_pause too long: {short_len} chars (max {MAX_PAUSE_LEN})"),
+        ));
+    }
+    let long_len = params.long_pause.chars().count();
+    if long_len > MAX_PAUSE_LEN {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("long_pause too long: {long_len} chars (max {MAX_PAUSE_LEN})"),
+        ));
+    }
+    // max_segment_len は segmented 時のみ使われるが、 不正値は常に早期 reject する。
+    if params.segmented && !(MIN_SEGMENT_LEN..=MAX_SEGMENT_LEN).contains(&params.max_segment_len) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "max_segment_len out of range: {} (allowed {MIN_SEGMENT_LEN}..={MAX_SEGMENT_LEN})",
+                params.max_segment_len
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// 不正な mode は静かに `tts` (= default) に fallback
 fn normalize_mode(mode: &str) -> String {
     match mode {
@@ -435,4 +470,90 @@ fn normalize_mode(mode: &str) -> String {
 
 fn round1(ms: f64) -> f64 {
     (ms * 10.0).round() / 10.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::serve::types::{default_long_pause, default_max_seg, default_short_pause};
+
+    fn base_params() -> FuriganaParams {
+        FuriganaParams {
+            text: Some("猫".into()),
+            text_b64: None,
+            mode: default_mode(),
+            short_pause: default_short_pause(),
+            long_pause: default_long_pause(),
+            keep_period: true,
+            segmented: false,
+            max_segment_len: default_max_seg(),
+            debug: false,
+        }
+    }
+
+    #[test]
+    fn validate_params_accepts_defaults() {
+        assert!(validate_params(&base_params()).is_ok());
+    }
+
+    #[test]
+    fn validate_params_rejects_oversized_short_pause() {
+        // REPORT-001 回帰: pause × 大量句読点の出力増幅を入口で弾く
+        let p = FuriganaParams {
+            short_pause: "x".repeat(MAX_PAUSE_LEN + 1),
+            ..base_params()
+        };
+        assert!(validate_params(&p).is_err());
+    }
+
+    #[test]
+    fn validate_params_rejects_oversized_long_pause() {
+        let p = FuriganaParams {
+            long_pause: "x".repeat(MAX_PAUSE_LEN + 1),
+            ..base_params()
+        };
+        assert!(validate_params(&p).is_err());
+    }
+
+    #[test]
+    fn validate_params_accepts_pause_at_limit() {
+        let p = FuriganaParams {
+            short_pause: "x".repeat(MAX_PAUSE_LEN),
+            long_pause: "y".repeat(MAX_PAUSE_LEN),
+            ..base_params()
+        };
+        assert!(validate_params(&p).is_ok());
+    }
+
+    #[test]
+    fn validate_params_rejects_zero_segment_len_when_segmented() {
+        // REPORT-002 回帰: max_segment_len=0 (chunks(0) panic 経路) を 400 で弾く
+        let p = FuriganaParams {
+            segmented: true,
+            max_segment_len: 0,
+            ..base_params()
+        };
+        assert!(validate_params(&p).is_err());
+    }
+
+    #[test]
+    fn validate_params_ignores_segment_len_when_not_segmented() {
+        // segmented=false なら max_segment_len は未使用 → 値を検証しない
+        let p = FuriganaParams {
+            segmented: false,
+            max_segment_len: 0,
+            ..base_params()
+        };
+        assert!(validate_params(&p).is_ok());
+    }
+
+    #[test]
+    fn validate_params_rejects_segment_len_above_max() {
+        let p = FuriganaParams {
+            segmented: true,
+            max_segment_len: MAX_SEGMENT_LEN + 1,
+            ..base_params()
+        };
+        assert!(validate_params(&p).is_err());
+    }
 }
