@@ -76,7 +76,7 @@ impl<'a> DictBridgeProvider<'a> {
                 BAND_DICT_EXACT
             };
 
-            for (reading, weight) in resolve_readings(
+            for (reading, weight, hits) in resolve_readings(
                 entry.matches(),
                 entry.default_reading(),
                 entry.alternatives(),
@@ -86,7 +86,7 @@ impl<'a> DictBridgeProvider<'a> {
                     surface.to_string(),
                     reading.to_string(),
                     pos..end_pos,
-                    Score::with_weight(band, length, 0, weight),
+                    Score::with_weight(band, length, hits, weight),
                 ));
             }
 
@@ -116,13 +116,14 @@ impl<'a> DictBridgeProvider<'a> {
             return false;
         };
         let mctx = Self::build_match_context(input, pos, end_pos);
-        for (reading, weight) in resolve_readings(&block.matches, &block.default, &block.alt, &mctx)
+        for (reading, weight, hits) in
+            resolve_readings(&block.matches, &block.default, &block.alt, &mctx)
         {
             out.push(Candidate::new(
                 surface.to_string(),
                 reading.to_string(),
                 pos..end_pos,
-                Score::with_weight(BAND_KANJI, 1, 0, weight),
+                Score::with_weight(BAND_KANJI, 1, hits, weight),
             ));
         }
         true

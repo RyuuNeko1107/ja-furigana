@@ -81,6 +81,18 @@ impl<'a> MatchContext<'a> {
     }
 }
 
+/// literal 完全一致 condition (`prev_eq` / `prev_eq_any` / `next_eq` / `next_eq_any` /
+/// `next_starts`) 1 つあたりの match_hits 加算値。
+///
+/// suffix / prefix list / char_type / 述語 ([`HIT_WEIGHT_BROAD`]) より厳密な指定として
+/// 2 倍に評価する。 値を変える場合は CHANGELOG に明記すること。
+pub const HIT_WEIGHT_LITERAL: u8 = 2;
+
+/// 広めの condition (`prev_ends_any` / `next_starts_any` / `next2_starts_any` /
+/// `prev_char_type` / `next_char_type` / `prev_month` / `next_digit`) 1 つあたりの
+/// match_hits 加算値。
+pub const HIT_WEIGHT_BROAD: u8 = 1;
+
 impl MatchCondition {
     /// この condition が context にマッチするか判定 (AND semantics)。
     ///
@@ -88,103 +100,112 @@ impl MatchCondition {
     /// 1 つでも condition が指定されていて、 それが context に hit しない場合は `false`。
     #[must_use]
     pub fn matches_context(&self, ctx: &MatchContext<'_>) -> bool {
+        self.context_hits(ctx).is_some()
+    }
+
+    /// この condition が context にマッチする場合、 hit した condition 数の
+    /// **重み付き累積値** を返す (AND semantics、 miss は `None`)。
+    ///
+    /// 重み: literal 完全一致 = [`HIT_WEIGHT_LITERAL`]、 それ以外 = [`HIT_WEIGHT_BROAD`]。
+    /// 全 condition が空 (= 無条件 match) は `Some(0)`。
+    /// 累積値は `Score::match_hits` (lexicographic 第 3 軸) に載り、 同 band ・ 同 length
+    /// 内で 「より厳密な条件で書いた block」 を勝たせる (condition 全 12 種 hit でも
+    /// 最大 17 なので u8 で十分)。
+    #[must_use]
+    pub fn context_hits(&self, ctx: &MatchContext<'_>) -> Option<u8> {
+        let mut hits: u8 = 0;
+
         // ─── prev_eq ────────────────────────────────────────────────────────
         if let Some(expected) = &self.prev_eq {
             match ctx.prev_token {
-                Some(actual) if actual == expected => {}
-                _ => return false,
+                Some(actual) if actual == expected => hits += HIT_WEIGHT_LITERAL,
+                _ => return None,
             }
         }
 
         // ─── prev_eq_any ────────────────────────────────────────────────────
         if !self.prev_eq_any.is_empty() {
-            let prev = match ctx.prev_token {
-                Some(p) => p,
-                None => return false, // prev 無いのに list 指定 → no match
-            };
+            let prev = ctx.prev_token?; // prev 無いのに list 指定 → no match
             if !self.prev_eq_any.iter().any(|s| s == prev) {
-                return false;
+                return None;
             }
+            hits += HIT_WEIGHT_LITERAL;
         }
 
         // ─── next_eq ────────────────────────────────────────────────────────
         if let Some(expected) = &self.next_eq {
             match ctx.next_token {
-                Some(actual) if actual == expected => {}
-                _ => return false,
+                Some(actual) if actual == expected => hits += HIT_WEIGHT_LITERAL,
+                _ => return None,
             }
         }
 
         // ─── next_eq_any ────────────────────────────────────────────────────
         if !self.next_eq_any.is_empty() {
-            let next = match ctx.next_token {
-                Some(n) => n,
-                None => return false,
-            };
+            let next = ctx.next_token?;
             if !self.next_eq_any.iter().any(|s| s == next) {
-                return false;
+                return None;
             }
+            hits += HIT_WEIGHT_LITERAL;
         }
 
         // ─── prev_ends_any (= prev_token surface ends_with any of) ─────────
         if !self.prev_ends_any.is_empty() {
-            let prev = match ctx.prev_token {
-                Some(p) => p,
-                None => return false,
-            };
+            let prev = ctx.prev_token?;
             if !self
                 .prev_ends_any
                 .iter()
                 .any(|s| prev.ends_with(s.as_str()))
             {
-                return false;
+                return None;
             }
+            hits += HIT_WEIGHT_BROAD;
         }
 
         // ─── next_starts (= next_token surface starts_with) ────────────────
         if let Some(prefix) = &self.next_starts {
             match ctx.next_token {
-                Some(actual) if actual.starts_with(prefix.as_str()) => {}
-                _ => return false,
+                Some(actual) if actual.starts_with(prefix.as_str()) => {
+                    hits += HIT_WEIGHT_LITERAL;
+                }
+                _ => return None,
             }
         }
 
         // ─── next_starts_any (= next_token surface starts_with any of) ─────
         if !self.next_starts_any.is_empty() {
-            let next = match ctx.next_token {
-                Some(n) => n,
-                None => return false,
-            };
+            let next = ctx.next_token?;
             if !self
                 .next_starts_any
                 .iter()
                 .any(|s| next.starts_with(s.as_str()))
             {
-                return false;
+                return None;
             }
+            hits += HIT_WEIGHT_BROAD;
         }
 
         // ─── next2_starts_any (= next2_token surface starts_with any of) ───
         if !self.next2_starts_any.is_empty() {
-            let next2 = match ctx.next2_token {
-                Some(n) => n,
-                None => return false,
-            };
+            let next2 = ctx.next2_token?;
             if !self
                 .next2_starts_any
                 .iter()
                 .any(|s| next2.starts_with(s.as_str()))
             {
-                return false;
+                return None;
             }
+            hits += HIT_WEIGHT_BROAD;
         }
 
         // ─── prev_char_type ─────────────────────────────────────────────────
         if let Some(expected_type) = self.prev_char_type {
             let last_char = ctx.prev_token.and_then(|s| s.chars().next_back());
             match last_char {
-                Some(c) if classify_char(c) == Some(expected_type) => {}
-                _ => return false,
+                Some(c) if classify_char(c) == Some(expected_type) => {
+                    hits += HIT_WEIGHT_BROAD;
+                }
+                _ => return None,
             }
         }
 
@@ -192,8 +213,10 @@ impl MatchCondition {
         if let Some(expected_type) = self.next_char_type {
             let first_char = ctx.next_token.and_then(|s| s.chars().next());
             match first_char {
-                Some(c) if classify_char(c) == Some(expected_type) => {}
-                _ => return false,
+                Some(c) if classify_char(c) == Some(expected_type) => {
+                    hits += HIT_WEIGHT_BROAD;
+                }
+                _ => return None,
             }
         }
 
@@ -201,19 +224,21 @@ impl MatchCondition {
         if self.prev_month {
             let ok = ctx.prev_token.is_some_and(ends_with_month);
             if !ok {
-                return false;
+                return None;
             }
+            hits += HIT_WEIGHT_BROAD;
         }
 
         // ─── next_digit (= next_token starts_with 半角/全角数字) ───────────
         if self.next_digit {
             let ok = ctx.next_token.is_some_and(starts_with_digit);
             if !ok {
-                return false;
+                return None;
             }
+            hits += HIT_WEIGHT_BROAD;
         }
 
-        true
+        Some(hits)
     }
 }
 
@@ -417,21 +442,26 @@ fn is_symbol_char(c: char) -> bool {
     )
 }
 
-/// `(reading, weight)` のペア。 [`resolve_readings`] の返り値要素。
+/// `(reading, weight, match_hits)` の組。 [`resolve_readings`] の返り値要素。
 ///
 /// primary (= match block hit または default) は weight = [`WEIGHT_DEFAULT`]、
-/// alt 候補は dict 指定 weight。
-pub type ResolvedReading<'a> = (&'a str, u8);
+/// alt 候補は dict 指定 weight。 match_hits は hit した match block の重み付き
+/// condition 数 ([`MatchCondition::context_hits`])、 default / alt は常に 0。
+pub type ResolvedReading<'a> = (&'a str, u8, u8);
 
 /// match block + default + alt 候補を context に対して解決し、 採用すべき
-/// `(reading, weight)` 列を返す。
+/// `(reading, weight, match_hits)` 列を返す。
 ///
 /// Entry / `[[kanji]]` block 双方の reading 解決を 1 箇所に集約する
 /// (= DictBridgeProvider の emit で entry / kanji / alt にコピペされていたロジック)。
 ///
 /// 1. `matches` を TOML 順で評価し、 第一 hit の reading。 hit なしなら `default`。
-///    → primary として weight [`WEIGHT_DEFAULT`] で先頭に置く。
+///    → primary として weight [`WEIGHT_DEFAULT`] で先頭に置く。 match_hits には
+///    hit block の重み付き condition 数を載せる (default は 0)。
 /// 2. `alts` のうち condition が hit するものを dict 指定 weight で続けて列挙 (ADR-0004)。
+///    alt の match_hits は **常に 0**: match_hits は lexicographic で weight より上位の
+///    軸なので、 alt に載せると path 選択で default を逆転しうる
+///    (= ADR-0004 の 「default が常に path に乗る」 不変条件が壊れる)。
 #[must_use]
 pub fn resolve_readings<'a>(
     matches: &'a [MatchBlock],
@@ -439,14 +469,18 @@ pub fn resolve_readings<'a>(
     alts: &'a [Alternative],
     ctx: &MatchContext<'_>,
 ) -> Vec<ResolvedReading<'a>> {
-    let primary = matches
+    let (primary, primary_hits) = matches
         .iter()
-        .find(|m| m.condition.matches_context(ctx))
-        .map_or(default, |m| m.reading.as_str());
-    let mut out = vec![(primary, WEIGHT_DEFAULT)];
+        .find_map(|m| {
+            m.condition
+                .context_hits(ctx)
+                .map(|hits| (m.reading.as_str(), hits))
+        })
+        .unwrap_or((default, 0));
+    let mut out = vec![(primary, WEIGHT_DEFAULT, primary_hits)];
     for alt in alts {
         if alt.condition.matches_context(ctx) {
-            out.push((alt.reading.as_str(), alt.weight));
+            out.push((alt.reading.as_str(), alt.weight, 0));
         }
     }
     out
@@ -756,6 +790,116 @@ mod tests {
         assert!(!cond.matches_context(&MatchContext::with_next("一日"))); // 漢数字は false
         assert!(!cond.matches_context(&MatchContext::with_next("ABC")));
         assert!(!cond.matches_context(&MatchContext::empty()));
+    }
+
+    // ─── context_hits (= match_hits 重み付き累積、 lex 第 3 軸) ─────────────
+
+    #[test]
+    fn context_hits_unconditional_match_is_zero() {
+        let cond = cond_default();
+        assert_eq!(cond.context_hits(&MatchContext::empty()), Some(0));
+    }
+
+    #[test]
+    fn context_hits_literal_exact_weighs_two() {
+        let cond = MatchCondition {
+            next_eq: Some("から".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_next("から")),
+            Some(HIT_WEIGHT_LITERAL)
+        );
+        assert_eq!(cond.context_hits(&MatchContext::with_next("まで")), None);
+    }
+
+    #[test]
+    fn context_hits_broad_condition_weighs_one() {
+        let cond = MatchCondition {
+            next_char_type: Some(CharType::Hiragana),
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_next("じる")),
+            Some(HIT_WEIGHT_BROAD)
+        );
+    }
+
+    #[test]
+    fn context_hits_accumulates_across_conditions() {
+        // literal (prev_eq = 2) + broad (next_char_type = 1) = 3
+        let cond = MatchCondition {
+            prev_eq: Some("生".into()),
+            next_char_type: Some(CharType::Hiragana),
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_both("生", "じる")),
+            Some(HIT_WEIGHT_LITERAL + HIT_WEIGHT_BROAD)
+        );
+        // AND miss → None (部分 hit は加算しない)
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_both("死", "じる")),
+            None
+        );
+    }
+
+    #[test]
+    fn context_hits_next_starts_is_literal_weight() {
+        let cond = MatchCondition {
+            next_starts: Some("な".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_next("ない")),
+            Some(HIT_WEIGHT_LITERAL)
+        );
+    }
+
+    #[test]
+    fn context_hits_predicates_weigh_one() {
+        let cond = MatchCondition {
+            prev_month: true,
+            next_digit: true,
+            ..Default::default()
+        };
+        let ctx = MatchContext::with_both("一月", "1日");
+        assert_eq!(cond.context_hits(&ctx), Some(HIT_WEIGHT_BROAD * 2));
+    }
+
+    // ─── resolve_readings の match_hits ──────────────────────────────────────
+
+    #[test]
+    fn resolve_readings_primary_carries_hits_default_is_zero() {
+        let matches = vec![MatchBlock {
+            reading: "ジョウズ".into(),
+            condition: MatchCondition {
+                next_eq: Some("だ".into()),
+                ..Default::default()
+            },
+        }];
+        // match block hit → primary に重み付き hits
+        let hit = resolve_readings(&matches, "ウワテ", &[], &MatchContext::with_next("だ"));
+        assert_eq!(hit, vec![("ジョウズ", WEIGHT_DEFAULT, HIT_WEIGHT_LITERAL)]);
+        // miss → default、 hits 0
+        let miss = resolve_readings(&matches, "ウワテ", &[], &MatchContext::empty());
+        assert_eq!(miss, vec![("ウワテ", WEIGHT_DEFAULT, 0)]);
+    }
+
+    #[test]
+    fn resolve_readings_alt_hits_always_zero() {
+        // alt に condition があっても match_hits は 0 (ADR-0004 default-on-path 維持)
+        let alts = vec![Alternative {
+            reading: "カミテ".into(),
+            sense: None,
+            weight: 30,
+            condition: MatchCondition {
+                next_eq: Some("から".into()),
+                ..Default::default()
+            },
+        }];
+        let out = resolve_readings(&[], "ウワテ", &alts, &MatchContext::with_next("から"));
+        assert_eq!(out, vec![("ウワテ", WEIGHT_DEFAULT, 0), ("カミテ", 30, 0)]);
     }
 
     // ─── pseudo-token segmentation (= char-class-based) ─────────────────────

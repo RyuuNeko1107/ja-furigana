@@ -6,7 +6,25 @@
 
 ## [Unreleased]
 
-## [0.1.10] - 2026-06-12
+### Added
+
+- **match condition 数を `Score::match_hits` に重み付き累積** (`scoring/matcher.rs` /
+  `scoring/dict_bridge.rs`): `[[match]]` / `[[kanji.match]]` block が hit したとき、 hit した
+  condition 数の重み付き合計を `match_hits` (lexicographic 第 3 軸) に載せる。 これまで
+  DictBridge は常に 0 を emit しており、 厳密な条件で書いた block と緩い block が同 band ・
+  同 length で差別化されなかった。 weight 表: **literal 完全一致**
+  (`prev_eq` / `prev_eq_any` / `next_eq` / `next_eq_any` / `next_starts`) **= 2**、
+  **広め条件** (`prev_ends_any` / `next_starts_any` / `next2_starts_any` / `prev_char_type` /
+  `next_char_type` / `prev_month` / `next_digit`) **= 1** (`HIT_WEIGHT_LITERAL` /
+  `HIT_WEIGHT_BROAD` 定数に集約)。 default reading と `[[alt]]` 候補は従来どおり 0
+  (= alt に載せると ADR-0004 の 「default が常に path に乗る」 不変条件が壊れるため)。
+  916k 実コーパス A/B では 217 行が変化し、 「今日中: いまにっちゅう → きょうちゅう」 系
+  (~55 件) / 「5日間: ごにちかん → いつかかん」 系 (~25 件) / 複合名詞の
+  境界改善 (漂着物 / 投入口 / 正体現した 等) が主。 同点 path の逆転で生じた退行は
+  dict 側 sweep (ja-furigana-dict 2026-06-12) で補正済。 既知の許容退行: ひらがな混じり文
+  では path の weakest_band が Lindera edge (band 50) で頭打ちになるため、 counter 候補
+  (band 950) が match hit 持ち分割 path に同点負けする case が稀にある
+  (「(space)1人でも」 「2種を」 等、 894k 中 freq 4)
 
 人名+敬称の token 衝突補正 (NameBoundaryPass)。
 
