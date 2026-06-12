@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-06-12
+
+人名+敬称の token 衝突補正 (NameBoundaryPass)。
+
 ### Added
 
 - **`NameBoundaryPass` (人名+敬称の token 衝突補正、`scoring/names.rs`)**: 「白上さん」 が
