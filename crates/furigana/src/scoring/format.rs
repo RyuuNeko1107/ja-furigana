@@ -220,27 +220,9 @@ fn default_weight() -> u8 {
     50
 }
 
-/// 文字種列挙 (matcher の `prev_char_type` / `next_char_type` の値型)。
-///
-/// TOML では文字列で書く: `"漢字"` / `"ひらがな"` / `"カタカナ"` / `"英数"` / `"記号"`
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-pub enum CharType {
-    /// 漢字 (CJK Unified Ideographs)
-    #[serde(rename = "漢字")]
-    Kanji,
-    /// ひらがな
-    #[serde(rename = "ひらがな")]
-    Hiragana,
-    /// カタカナ (全角・半角)
-    #[serde(rename = "カタカナ")]
-    Katakana,
-    /// 英数 (ASCII / 全角英数)
-    #[serde(rename = "英数")]
-    Alphanumeric,
-    /// 記号 (句読点 / 括弧 / その他記号)
-    #[serde(rename = "記号")]
-    Symbol,
-}
+// 文字種列挙は crate::char_class に集約 (定義 + 分類 + range 表)。
+// dict format の値型として従来 path でも参照できるよう re-export を維持。
+pub use crate::char_class::CharType;
 
 /// `[[kanji]]` block — 単漢字 first-class candidate generator。
 ///

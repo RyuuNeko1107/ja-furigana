@@ -51,8 +51,9 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 crates/furigana/src/
 ├── api.rs                 — Furigana / FuriganaBuilder (公開 entry、 解析は scoring/pipeline 経由の薄い層)
 ├── analyzer.rs            — Lindera + IPADIC ラッパー
+├── char_class.rs          — 文字種 (CharType) 分類 + Unicode range 表の single home (kana/matcher/special が参照)
 ├── dict.rs                — jukugo / unihan / rich entry / [[kanji]] block 多重保持 (先頭 char prefix index 付)
-├── kana.rs                — kanji/hiragana/katakana 判定 + 連濁 (voice_first_kana)
+├── kana.rs                — ひら⇄カタ変換 + 連濁 (voice_first_kana)。 判定 3 関数は char_class への公開 delegate
 ├── loader.rs              — TOML loader (schema_version validate)
 ├── numbers/               — kansuji / 助数詞 logic (scoring/numbers.rs から呼ばれる)
 ├── reading/               — 出力 layer (ReadingToken + tokens_to_hiragana / tokens_to_ruby)
@@ -75,8 +76,8 @@ crates/furigana-cli/src/
 | sub module | 役割 |
 |---|---|
 | `pipeline.rs` ★ | **Pipeline facade** — 6 provider 構成 + Viterbi + Reading Post-pass を所有する single seam。 `tokens()` (production) / `analyze()` (debug)。 provider 追加・順序変更はここで完結 |
-| `format.rs` | Entry / EntryDetail / MatchBlock / MatchCondition / CharType / KanjiBlock の struct |
-| `matcher.rs` | MatchContext + matches_context() + classify_char() + resolve_readings |
+| `format.rs` | Entry / EntryDetail / MatchBlock / MatchCondition / KanjiBlock の struct (CharType は char_class.rs から re-export) |
+| `matcher.rs` | MatchContext + matches_context() + pseudo-token 走査 + resolve_readings (classify_char は char_class.rs へ移動) |
 | `candidate.rs` | Score / Candidate / CandidateProvider trait + ScoringContext + band 定数 |
 | `engine.rs` | PathScore (weakest_band + edge_count agg) + solve_path Viterbi DP |
 | `boundary.rs` | KanjiRegion + BoundaryAnalysis (b)(c) penalty -300/-600 |

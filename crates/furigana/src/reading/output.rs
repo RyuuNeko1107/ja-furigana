@@ -4,6 +4,7 @@
 //! - `tokens_to_ruby`    : `{kanji|hiragana}` 形式 (HTML ルビ生成等の前段)
 
 use super::ReadingToken;
+use crate::char_class;
 use crate::kana;
 
 /// surface が「漢字を含む」 かどうかで reading 出力を切替えるルールに使う判定
@@ -29,7 +30,7 @@ fn surface_is_all_kana(surface: &str) -> bool {
     !surface.is_empty()
         && surface
             .chars()
-            .all(|c| kana::is_hiragana_char(c) || kana::is_katakana_char(c) || c == 'ー')
+            .all(|c| kana::is_hiragana_char(c) || char_class::is_katakana_loose_char(c))
 }
 
 /// surface に **ASCII / 全角 alphabet** が含まれるかを判定。

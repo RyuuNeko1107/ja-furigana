@@ -53,7 +53,7 @@
 //! 公開 API は [`Furigana`] / [`FuriganaBuilder`] で、内部は以下の module に分かれる:
 //!
 //! - [`analyzer`] : 形態素解析 (Lindera + IPADIC、 Smart engine fallback として使用)
-//! - [`kana`]     : ひら⇄カタ + Unicode 正規化
+//! - [`kana`]     : ひら⇄カタ + Unicode 正規化 (文字種判定は内部 `char_class` module に集約)
 //! - [`numbers`]  : 数値処理 (digit / counter / extras / `kansuji_to_arabic`)
 //! - [`reading`]  : 出力 layer (= [`ReadingToken`] + tokens_to_hiragana / tokens_to_ruby)
 //! - [`tts`]      : TTS 整形 + segment
@@ -91,6 +91,7 @@
 #![allow(clippy::tabs_in_doc_comments)]
 
 pub mod analyzer;
+pub(crate) mod char_class;
 pub mod dict;
 pub mod error;
 pub mod kana;

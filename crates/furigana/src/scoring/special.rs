@@ -16,6 +16,7 @@
 //! URL_RE / EMAIL_RE は本 module が唯一の実装 (旧 `chunks::regex` の重複実装は
 //! alpha.15 の chunks 削除で解消済)。
 
+use crate::char_class::{self, is_digit_char};
 use crate::scoring::candidate::{
     Candidate, CandidateProvider, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
     BAND_PROTECTED,
@@ -64,36 +65,8 @@ static EMAIL_RE: Lazy<Regex> = Lazy::new(|| {
 
 // ─── 絵文字判定 (char-based) ─────────────────────────────────────────────────
 
-/// 絵文字判定 (Unicode emoji range の主要部をカバー)。
-///
-/// 完全な Unicode Emoji 仕様 (combining sequence / ZWJ joiner 等) は対応しない、
-/// 主要 char range のみで実用十分。 必要なら 0.2.0+ で精緻化。
-///
-/// ## カバー範囲
-///
-/// - U+1F300..U+1F5FF: Misc Symbols and Pictographs
-/// - U+1F600..U+1F64F: Emoticons
-/// - U+1F680..U+1F6FF: Transport and Map
-/// - U+1F700..U+1F77F: Alchemical Symbols
-/// - U+1F900..U+1F9FF: Supplemental Symbols and Pictographs
-/// - U+1FA00..U+1FA6F: Symbols and Pictographs Extended-A
-/// - U+1FA70..U+1FAFF: Symbols and Pictographs Extended-B
-/// - U+2600..U+26FF: Misc Symbols
-/// - U+2700..U+27BF: Dingbats
-#[must_use]
-pub fn is_emoji_char(c: char) -> bool {
-    matches!(c,
-        '\u{1F300}'..='\u{1F5FF}'
-        | '\u{1F600}'..='\u{1F64F}'
-        | '\u{1F680}'..='\u{1F6FF}'
-        | '\u{1F700}'..='\u{1F77F}'
-        | '\u{1F900}'..='\u{1F9FF}'
-        | '\u{1FA00}'..='\u{1FA6F}'
-        | '\u{1FA70}'..='\u{1FAFF}'
-        | '\u{2600}'..='\u{26FF}'
-        | '\u{2700}'..='\u{27BF}'
-    )
-}
+// 絵文字 range 判定は crate::char_class に集約。 既存 caller 向けに従来 path を維持。
+pub use crate::char_class::is_emoji_char;
 
 // ─── 抽出 logic ──────────────────────────────────────────────────────────────
 
@@ -216,23 +189,13 @@ impl CandidateProvider for ProtectTokenProvider {
 
 /// 英字 / 全角英数字 / ASCII whitespace を 1 文字単位で判定。
 ///
-/// - ASCII alphanumeric (a-z A-Z 0-9)
-/// - 全角英数字 (Ａ-Ｚ ａ-ｚ ０-９)
-/// - **半角 space / tab** (= 「猫 犬」 のような ASCII whitespace 含み input で path
-///   構築失敗を防ぐ、 passthrough として扱う)
-///
-/// 注: 「英数」 文字種の判定は [`crate::scoring::matcher::classify_char`] と整合、
-/// ただしここでは alphabet range 検出専用 helper として独立定義 (依存関係縮小)。
+/// = 「英数」 文字種 ([`char_class::is_alphanumeric_char`]) + **半角 space / tab**
+/// (= 「猫 犬」 のような ASCII whitespace 含み input で path 構築失敗を防ぐ、
+/// passthrough として扱う)。 whitespace 込みは本 provider 固有の判断で、
+/// range 知識自体は char_class と共有 (= 手動同期不要)。
 #[must_use]
 pub fn is_alphabet_char(c: char) -> bool {
-    c.is_ascii_alphanumeric()
-        || c == ' '
-        || c == '\t'
-        || matches!(c,
-            '\u{FF10}'..='\u{FF19}'   // 全角数字
-            | '\u{FF21}'..='\u{FF3A}' // 全角大文字
-            | '\u{FF41}'..='\u{FF5A}' // 全角小文字
-        )
+    c == ' ' || c == '\t' || char_class::is_alphanumeric_char(c)
 }
 
 /// 入力中の連続英字 byte range を全列挙。
@@ -368,11 +331,6 @@ impl CandidateProvider for AlphabetPassthroughProvider {
     }
 }
 
-/// digit 1 字判定 (= ASCII 0-9 / 全角０-９)。
-fn is_digit_char(c: char) -> bool {
-    c.is_ascii_digit() || matches!(c, '\u{FF10}'..='\u{FF19}')
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,26 +341,7 @@ mod tests {
         ScoringContext { input, boundary }
     }
 
-    // ─── is_emoji_char ───────────────────────────────────────────────────────
-
-    #[test]
-    fn emoji_char_detects_common_emoji() {
-        assert!(is_emoji_char('😀')); // U+1F600
-        assert!(is_emoji_char('🎉')); // U+1F389
-        assert!(is_emoji_char('🚀')); // U+1F680
-        assert!(is_emoji_char('☀')); // U+2600
-        assert!(is_emoji_char('✨')); // U+2728
-    }
-
-    #[test]
-    fn emoji_char_rejects_non_emoji() {
-        assert!(!is_emoji_char('a'));
-        assert!(!is_emoji_char('猫'));
-        assert!(!is_emoji_char('あ'));
-        assert!(!is_emoji_char('ア'));
-        assert!(!is_emoji_char('1'));
-        assert!(!is_emoji_char(' '));
-    }
+    // (is_emoji_char の unit test は crate::char_class 側に移動)
 
     // ─── URL extraction ──────────────────────────────────────────────────────
 

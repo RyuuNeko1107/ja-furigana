@@ -35,6 +35,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use furigana::kana::{is_hiragana_char, is_kanji_char};
 use furigana::{
     extract_dict_gap_candidates, surface_with_context, token_band, AnalyzeResult, Furigana,
 };
@@ -126,20 +127,9 @@ struct BaseAggregate {
     example_context: String,
 }
 
-fn is_kanji_char(c: char) -> bool {
-    matches!(c,
-        '\u{3400}'..='\u{4DBF}' |
-        '\u{4E00}'..='\u{9FFF}' |
-        '\u{F900}'..='\u{FAFF}' |
-        '々' | '〆' | 'ヶ'
-    )
-}
-
-fn is_hiragana_char(c: char) -> bool {
-    matches!(c, '\u{3040}'..='\u{309F}')
-}
-
-fn is_alphabet_char(c: char) -> bool {
+/// ASCII 英字のみ (lib の `is_alphabet_char` と異なり **数字 / 全角 / 空白を含まない**:
+/// alphabet chunk は数字で切る規則のため、 意図的に狭い判定を使う)。
+fn is_ascii_alpha_char(c: char) -> bool {
     c.is_ascii_alphabetic()
 }
 
@@ -175,7 +165,7 @@ fn chunk_low_band(result: &AnalyzeResult, threshold: u16) -> Vec<Chunk> {
         }
         let has_kanji = s.chars().any(is_kanji_char);
         let is_pure_hira = s.chars().all(is_hiragana_char);
-        let is_pure_alpha = s.chars().all(is_alphabet_char);
+        let is_pure_alpha = s.chars().all(is_ascii_alpha_char);
 
         // この token をどう扱うか
         // - Some(Kanji): kanji chunk の member 候補 (= 漢字含み or 純ひらがな)
@@ -239,7 +229,7 @@ fn chunk_low_band(result: &AnalyzeResult, threshold: u16) -> Vec<Chunk> {
 fn chunk_is_valid(c: &Chunk) -> bool {
     match c.kind {
         ChunkKind::Kanji => c.surface.chars().any(is_kanji_char),
-        ChunkKind::Alphabet => c.surface.chars().any(is_alphabet_char),
+        ChunkKind::Alphabet => c.surface.chars().any(is_ascii_alpha_char),
     }
 }
 

@@ -4,6 +4,7 @@
 //! `normalize_text` だけ [`CompatData`](crate::rules::CompatData) を引数に取り、
 //! 異体字置換を行う。
 
+use crate::char_class::{self, HIRAGANA_END, HIRAGANA_START, KATAKANA_END, KATAKANA_START};
 use crate::rules::CompatData;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -11,42 +12,31 @@ use unicode_normalization::UnicodeNormalization;
 
 // ─── 範囲定数 ────────────────────────────────────────────────────────────────
 
-/// ひらがな範囲: ぁ(0x3041) 〜 ん(0x3093)
-const HIRAGANA_START: u32 = 0x3041;
-const HIRAGANA_END: u32 = 0x3093;
-
-/// カタカナ範囲: ァ(0x30A1) 〜 ン(0x30F3)
-const KATAKANA_START: u32 = 0x30A1;
-const KATAKANA_END: u32 = 0x30F3;
+// Unicode range 定数は crate::char_class に集約 (本 module は変換 offset のみ持つ)。
 
 /// ひら⇄カタ オフセット
 const KATA_HIRA_OFFSET: u32 = 0x60;
 
 // ─── 単文字判定 ──────────────────────────────────────────────────────────────
+//
+// 実装は crate::char_class に集約、 本 module は公開 API として delegate を維持。
 
 /// ひらがな 1 文字か (ぁ〜ん + ゔ)
 #[must_use]
 pub fn is_hiragana_char(c: char) -> bool {
-    let cp = c as u32;
-    (HIRAGANA_START..=HIRAGANA_END).contains(&cp) || c == 'ゔ'
+    char_class::is_hiragana_char(c)
 }
 
 /// カタカナ 1 文字か (ァ〜ン + ヴ)
 #[must_use]
 pub fn is_katakana_char(c: char) -> bool {
-    let cp = c as u32;
-    (KATAKANA_START..=KATAKANA_END).contains(&cp) || c == 'ヴ'
+    char_class::is_katakana_char(c)
 }
 
 /// 漢字 1 文字か (CJK 統合漢字 + 拡張 A + 互換 + 々〆ヶ)
 #[must_use]
 pub fn is_kanji_char(c: char) -> bool {
-    matches!(c,
-        '\u{3400}'..='\u{4DBF}' |   // CJK 拡張 A
-        '\u{4E00}'..='\u{9FFF}' |   // CJK 統合漢字
-        '\u{F900}'..='\u{FAFF}' |   // CJK 互換
-        '々' | '〆' | 'ヶ'
-    )
+    char_class::is_kanji_char(c)
 }
 
 // ─── 文字列単位 ──────────────────────────────────────────────────────────────
@@ -251,11 +241,10 @@ pub fn has_kanji(s: &str) -> bool {
     s.chars().any(is_kanji_char)
 }
 
-/// カタカナを 1 文字でも含むか (長音 ー 含む)
+/// カタカナを 1 文字でも含むか (長音 ー / 半角カナ 含む)
 #[must_use]
 pub fn has_katakana(s: &str) -> bool {
-    s.chars()
-        .any(|c| is_katakana_char(c) || c == 'ー' || c == 'ヴ')
+    s.chars().any(char_class::is_katakana_loose_char)
 }
 
 /// kana reading の **第 1 音を連濁化** する (踊り字 「々」 展開で使用)。

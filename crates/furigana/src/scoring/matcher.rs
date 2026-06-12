@@ -14,9 +14,9 @@
 //! を [`classify_char`] で分類して比較する。 token 不在 (= 文頭 / 文末) や
 //! 分類不能文字の場合は no match。
 
-use crate::kana;
+use crate::char_class::{classify_char, CharType};
 use crate::scoring::candidate::WEIGHT_DEFAULT;
-use crate::scoring::format::{Alternative, CharType, MatchBlock, MatchCondition};
+use crate::scoring::format::{Alternative, MatchBlock, MatchCondition};
 
 /// matcher 評価時の周辺 context。
 ///
@@ -315,8 +315,8 @@ pub fn prev_logical_token(input: &str, end: usize) -> &str {
 
 /// 月名 (一月〜十二月、 1月〜12月、 全角数字含む) で終わるか。
 ///
-/// scoring 用途の self-contained helper、 `crate::reading::context` の同名関数と
-/// 同 logic / 同 list を持つ。 0.2.0+ で chunker / reading 経路を整理する際に共通化候補。
+/// `prev_month` matcher 専用の self-contained helper。
+/// (旧 `crate::reading::context` の同名関数は alpha.15 の chunks 削除で消滅済、 現在は本実装が唯一。)
 fn ends_with_month(s: &str) -> bool {
     const MONTHS: &[&str] = &[
         "一月",
@@ -361,85 +361,6 @@ fn starts_with_digit(s: &str) -> bool {
     s.chars()
         .next()
         .is_some_and(|c| c.is_ascii_digit() || ('０'..='９').contains(&c))
-}
-
-/// 文字を [`CharType`] に分類。
-///
-/// 既存 [`crate::kana`] の helper を再利用 + 英数 / 記号判定を追加。
-/// 分類不能 (= 制御文字 / 空白 等) は `None`。
-///
-/// ## 分類順序 (mutually exclusive)
-///
-/// 1. 漢字 (CJK Unified Ideographs 等)
-/// 2. ひらがな
-/// 3. カタカナ (全角・半角)
-/// 4. 英数 (ASCII alphanumeric / 全角英数)
-/// 5. 記号 (上記以外の punctuation 等)
-#[must_use]
-pub fn classify_char(c: char) -> Option<CharType> {
-    if kana::is_kanji_char(c) {
-        Some(CharType::Kanji)
-    } else if kana::is_hiragana_char(c) {
-        Some(CharType::Hiragana)
-    } else if kana::is_katakana_char(c) || is_extended_katakana_char(c) {
-        Some(CharType::Katakana)
-    } else if is_alphanumeric_char(c) {
-        Some(CharType::Alphanumeric)
-    } else if is_symbol_char(c) {
-        Some(CharType::Symbol)
-    } else {
-        None
-    }
-}
-
-/// カタカナ拡張判定 (kana::is_katakana_char に含まれない長音 / 半角カナ等)。
-///
-/// scoring 用途では実用的なカタカナ判定が要るので、 既存 strict 定義より広め:
-/// - 長音記号 ー (U+30FC)
-/// - 半角カタカナ (U+FF65〜U+FF9F)
-/// - カタカナ拡張 (U+31F0〜U+31FF)
-fn is_extended_katakana_char(c: char) -> bool {
-    matches!(c,
-        '\u{30FC}'                  // 長音記号 ー
-        | '\u{FF65}'..='\u{FF9F}'   // 半角カタカナ
-        | '\u{31F0}'..='\u{31FF}'   // カタカナ拡張
-    )
-}
-
-/// 英数判定 (ASCII alphanumeric + 全角英数)。
-fn is_alphanumeric_char(c: char) -> bool {
-    c.is_ascii_alphanumeric()
-        || matches!(c,
-            '\u{FF10}'..='\u{FF19}'   // 全角数字 0-9
-            | '\u{FF21}'..='\u{FF3A}' // 全角大文字 A-Z
-            | '\u{FF41}'..='\u{FF5A}' // 全角小文字 a-z
-        )
-}
-
-/// 記号判定 (kanji / kana / 英数 でなく、 punctuation 系の文字)。
-///
-/// 制御文字 / 空白は除外 (= None 扱い)、 句読点 / 括弧 / その他記号のみ Symbol 扱い。
-fn is_symbol_char(c: char) -> bool {
-    if c.is_control() || c.is_whitespace() {
-        return false;
-    }
-    // 既知の punctuation / symbol range をざっくり include
-    matches!(c,
-        // ASCII punctuation
-        '\u{0021}'..='\u{002F}'
-        | '\u{003A}'..='\u{0040}'
-        | '\u{005B}'..='\u{0060}'
-        | '\u{007B}'..='\u{007E}'
-        // 日本語句読点 / 括弧
-        | '\u{3000}'..='\u{303F}'
-        // 全角記号 (`！` 〜 `／` の前半部、 数字英字以外)
-        | '\u{FF01}'..='\u{FF0F}'
-        | '\u{FF1A}'..='\u{FF20}'
-        | '\u{FF3B}'..='\u{FF40}'
-        | '\u{FF5B}'..='\u{FF65}'
-        // 一般 punctuation (U+2030..U+205E は U+2000..U+206F に含まれるので重複削除済)
-        | '\u{2000}'..='\u{206F}'
-    )
 }
 
 /// `(reading, weight, match_hits)` の組。 [`resolve_readings`] の返り値要素。
@@ -610,54 +531,7 @@ mod tests {
         assert!(!cond.matches_context(&MatchContext::with_both("きの", "ジュース")));
     }
 
-    // ─── classify_char ───────────────────────────────────────────────────────
-
-    #[test]
-    fn classify_char_kanji() {
-        assert_eq!(classify_char('生'), Some(CharType::Kanji));
-        assert_eq!(classify_char('漢'), Some(CharType::Kanji));
-        assert_eq!(classify_char('魔'), Some(CharType::Kanji));
-    }
-
-    #[test]
-    fn classify_char_hiragana() {
-        assert_eq!(classify_char('あ'), Some(CharType::Hiragana));
-        assert_eq!(classify_char('ん'), Some(CharType::Hiragana));
-        assert_eq!(classify_char('ゃ'), Some(CharType::Hiragana));
-    }
-
-    #[test]
-    fn classify_char_katakana() {
-        assert_eq!(classify_char('ア'), Some(CharType::Katakana));
-        assert_eq!(classify_char('ン'), Some(CharType::Katakana));
-        assert_eq!(classify_char('ー'), Some(CharType::Katakana)); // 長音
-    }
-
-    #[test]
-    fn classify_char_alphanumeric() {
-        assert_eq!(classify_char('A'), Some(CharType::Alphanumeric));
-        assert_eq!(classify_char('z'), Some(CharType::Alphanumeric));
-        assert_eq!(classify_char('5'), Some(CharType::Alphanumeric));
-        assert_eq!(classify_char('Ａ'), Some(CharType::Alphanumeric)); // 全角
-        assert_eq!(classify_char('１'), Some(CharType::Alphanumeric)); // 全角数字
-    }
-
-    #[test]
-    fn classify_char_symbol() {
-        assert_eq!(classify_char('!'), Some(CharType::Symbol));
-        assert_eq!(classify_char('、'), Some(CharType::Symbol));
-        assert_eq!(classify_char('。'), Some(CharType::Symbol));
-        assert_eq!(classify_char('「'), Some(CharType::Symbol));
-        assert_eq!(classify_char('】'), Some(CharType::Symbol));
-    }
-
-    #[test]
-    fn classify_char_unknown_returns_none() {
-        // 制御文字 / 空白 / 未割当 は None
-        assert_eq!(classify_char(' '), None);
-        assert_eq!(classify_char('\t'), None);
-        assert_eq!(classify_char('\n'), None);
-    }
+    // (classify_char / range 判定の unit test は crate::char_class 側に移動)
 
     // ─── multi-byte token char_type 判定 ─────────────────────────────────────
 
