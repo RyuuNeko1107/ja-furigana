@@ -9,14 +9,16 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.1.10` (2026-06-12、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
+- **LIVE**: `0.1.11` (2026-06-12、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
   しており 0.2.0 開発分 (ScoringContext / ADR-0004 / bracket-accent parser / scoring pub(crate) 化) を
-  含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.8 = numeric_phrases
-  再統合 (二十歳=ハタチ) + Pipeline facade 内部 refactor + corpus-check 一括化、 0.1.9 = 漢数字+助数詞
+  含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.9 = 漢数字+助数詞
   bare 読みを dict opt-in flag (`CounterRule.kanji_numeral`) で有効化、 0.1.10 = **NameBoundaryPass**
-  (人名+敬称の token 衝突補正、 白上さん→白|上さん 等を path 確定後に再分割/merge、 ADR-0005 第 3 adapter)。
-  本番 furigana-api は wrapper `2.0.7` で lib 0.1.10 稼働 (2026-06-12 deploy、 白上さん/戌神様/白上氏 を
-  本番 smoke 確認済)
+  (人名+敬称の token 衝突補正、 ADR-0005 第 3 adapter)、 0.1.11 = **match_hits condition weighting**
+  (match block の hit condition 数を literal=2/broad=1 で `Score::match_hits` に累積、 同 band・同
+  length の tie で厳密な block が勝つ。 916k A/B 217 行、 今日中/N日間 系改善。 退行は dict sweep
+  2026-06-12 で補正済)。
+  本番 furigana-api は wrapper `2.0.8` で lib 0.1.11 稼働 (2026-06-12 deploy、 今日中/複数人/教育係/
+  売却額 を本番 smoke 確認済)
 - **`0.2.0` (master 実装中・未 release)**: accent **core は実装済** =
   bracket notation parse + `AccentResult`/`AccentToken` + CLI `--mode=accent`
   (`api.rs::to_accent` / `scoring/bracket.rs`、 ADR-0003)。
