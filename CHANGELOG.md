@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-06-12
+
+match condition 数の重み付き tie-break (= 厳密な dict match block が同点で勝つ)。
+
 ### Added
 
 - **match condition 数を `Score::match_hits` に重み付き累積** (`scoring/matcher.rs` /
