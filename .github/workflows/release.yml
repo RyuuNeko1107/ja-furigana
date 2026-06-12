@@ -33,9 +33,14 @@ jobs:
 
       - name: 解決された tag
         id: tag
+        # script injection 防止: untrusted な inputs.tag を run: に直接展開せず
+        # env 経由で受ける (shell では quote した "$INPUT_TAG" のみ参照)。
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
           else
             TAG="${GITHUB_REF#refs/tags/}"
           fi
