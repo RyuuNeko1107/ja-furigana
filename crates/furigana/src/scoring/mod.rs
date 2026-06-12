@@ -44,6 +44,7 @@ pub mod format;
 pub mod inspect;
 pub mod lindera_fallback;
 pub mod matcher;
+pub mod names;
 pub mod numbers;
 pub mod odoriji;
 pub mod pipeline;

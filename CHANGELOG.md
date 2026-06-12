@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`NameBoundaryPass` (人名+敬称の token 衝突補正、`scoring/names.rs`)**: 「白上さん」 が
+  白 | 上さん (= IPADIC 「上さん (カミサン)」)、 「戌神様」 が 戌 | 神様 のように、
+  名前末尾 + 敬称が 1 語として形態素辞書に存在すると Viterbi path が名前境界を割る
+  問題を、 ADR-0005 の Reading Post-pass 第 3 adapter として補正。 合成 suffix 形
+  (白 | 上さん) と bare suffix 形 (白 | 上 | 氏) の両方に対応し、 結合 surface を
+  dict 熟語 (works 含む) → IPADIC 単一 token + 固有名詞 の順で照会、 hit した場合のみ
+  再分割 / merge する (普通名詞は対象外 = 誤爆防止)。 916k 実コーパス A/B で副作用 1 件
+  (きたしん→ほくしん、 固有名詞標準読みへの変化) のみ確認済。 単漢字の名前読み切替
+  (舞さん=まい 等) は dict `[[kanji]]` block の人名 suffix match が担当 (data 側) で、
+  本 pass は境界修復のみを担う
+
+### Changed
+
+- **`ReadingPostPass::apply` の引数を `&mut Vec<Token>` に変更** (旧 `&mut [Token]`):
+  `NameBoundaryPass` の bare suffix 形 merge が token 数を減らすため。 scoring module は
+  pub(crate) のため公開 API への影響なし
+
 ## [0.1.9] - 2026-06-11
 
 漢数字 + 助数詞の bare 読みを dict 制御で有効化 (data 駆動の opt-in 機構)。

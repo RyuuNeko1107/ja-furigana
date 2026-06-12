@@ -82,8 +82,9 @@ crates/furigana-cli/src/
 | `numbers/` | NumberCandidateProvider (band 950: 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 / 記号 / 素の数字)。 `patterns.rs` = regex 定義+構築、 `mod.rs` = 候補種別ごとの try_* matcher |
 | `odoriji.rs` | OdorijiProvider (々 placeholder) + RendakuPass (連濁 logic は kana::voice_first_kana 共通化) |
 | `lindera_fallback.rs` | LinderaFallbackProvider (band 50/150 safety net + gap-passthrough) |
-| `postpass.rs` | ReadingPostPass trait + POST_PASSES 配列 (ADR-0005) |
+| `postpass.rs` | ReadingPostPass trait + apply_all 適用順 (ADR-0005) |
 | `contextual.rs` | HaraSukuPass (腹+空く 2-token-back 補正) |
+| `names.rs` | NameBoundaryPass (人名+敬称 token 衝突の再分割/merge、 読み source = dict→IPADIC 固有名詞) |
 | `bracket.rs` | bracket notation parse → AccentPhrase (0.2.0 core) |
 | `analyze.rs` | AnalyzeResult / Token + analyze() / analyze_tokens() (★11 freeze types) |
 | `inspect.rs` | dict gap 抽出等の inspection helper (公開 re-export) |

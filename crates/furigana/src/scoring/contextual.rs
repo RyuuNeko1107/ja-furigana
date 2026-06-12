@@ -67,7 +67,7 @@ pub fn apply_hara_suku_inplace(tokens: &mut [Token]) {
 pub struct HaraSukuPass;
 
 impl crate::scoring::postpass::ReadingPostPass for HaraSukuPass {
-    fn apply(&self, tokens: &mut [Token]) {
+    fn apply(&self, tokens: &mut Vec<Token>) {
         apply_hara_suku_inplace(tokens);
     }
 }

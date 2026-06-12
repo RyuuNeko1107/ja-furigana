@@ -70,7 +70,7 @@ impl<'a> Pipeline<'a> {
     #[must_use]
     pub fn tokens(&self, input: &str) -> Vec<Token> {
         let mut tokens = self.with_providers(input, run_analyze_tokens);
-        postpass::apply_all(&mut tokens);
+        postpass::apply_all(&mut tokens, self.dict, self.analyzer);
         tokens
     }
 
@@ -81,7 +81,7 @@ impl<'a> Pipeline<'a> {
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
         let mut result = self.with_providers(input, run_analyze);
-        postpass::apply_all(&mut result.tokens);
+        postpass::apply_all(&mut result.tokens, self.dict, self.analyzer);
         result
     }
 

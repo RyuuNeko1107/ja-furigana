@@ -107,7 +107,7 @@ pub fn apply_rendaku_inplace(tokens: &mut [Token]) {
 pub struct RendakuPass;
 
 impl crate::scoring::postpass::ReadingPostPass for RendakuPass {
-    fn apply(&self, tokens: &mut [Token]) {
+    fn apply(&self, tokens: &mut Vec<Token>) {
         apply_rendaku_inplace(tokens);
     }
 }
