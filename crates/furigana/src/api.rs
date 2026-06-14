@@ -8,7 +8,7 @@ use crate::analyzer::Analyzer;
 use crate::dict::Dict;
 use crate::error::Result;
 use crate::reading::{tokens_to_hiragana, tokens_to_ruby, ReadingToken};
-use crate::rules::RulesData;
+use crate::rules::{CompatData, RulesData};
 use crate::scoring::analyze::{AlternativeReading, AnalyzeResult, Token as AnalyzeToken};
 use crate::scoring::bracket::AccentPhrase;
 use crate::scoring::numbers::NumberCandidateProvider;
@@ -425,10 +425,22 @@ impl FuriganaBuilder {
     /// - ルールファイルパース失敗 ([`crate::FuriganaError::Toml`])
     /// - 辞書ファイル/ディレクトリ I/O 失敗
     pub fn build(self) -> Result<Furigana> {
-        let rules = match self.rules_dir.as_ref() {
+        let mut rules = match self.rules_dir.as_ref() {
             Some(dir) => crate::loader::load_rules_dir(dir)?,
             None => crate::embedded::rules()?,
         };
+
+        // 異体字正規化 (compat) は `load_rules_dir` が rules_dir しか走査しないが、
+        // ja-furigana-dict 配布では `compat.toml` が **core/ に同梱**される。 production の
+        // wrapper のように rules_dir と core_dict_dir を別 path で mount すると compat が
+        // 一切読まれず 髙→高 / 﨑→崎 が無効化される (構造的 trap)。 ここで core / user dict
+        // 配下の `role = "compat"` も拾って rules.compat に補完する (rules_dir 由来を優先)。
+        for d in &self.core_dict_dirs {
+            load_compat_into(&mut rules.compat, d)?;
+        }
+        for d in &self.user_dict_dirs {
+            load_compat_into(&mut rules.compat, d)?;
+        }
 
         let mut dict = Dict::new();
         for d in &self.core_dict_dirs {
@@ -467,6 +479,27 @@ impl FuriganaBuilder {
             loanwords: Arc::new(loanwords_map),
         })
     }
+}
+
+/// `dir` 配下を再帰 scan し、 `role = "compat"` の TOML file (`compat.toml`) から
+/// 異体字 → 標準字 map を `out` に補完する。
+///
+/// 既に `out` に存在する key (= rules_dir 由来) は上書きしない (rules_dir 優先)。
+/// 複数 dir / file に同 variant があれば最初に読んだ方を残す。
+fn load_compat_into(out: &mut CompatData, dir: &Path) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    crate::loader::for_each_toml_in_dir(dir, |content, from, role| {
+        if role != Some("compat") {
+            return Ok(());
+        }
+        let parsed: CompatData = crate::loader::parse_toml(content, from)?;
+        for (variant, canonical) in parsed.map {
+            out.map.entry(variant).or_insert(canonical);
+        }
+        Ok(())
+    })
 }
 
 /// `dir` 配下を再帰 scan し、 `role = "loanwords"` の TOML file から
@@ -874,6 +907,36 @@ mod tests {
         assert_eq!(r.tokens[0].reading, "カツシカ");
         // range は原文 byte 全域 (葛 3 + IVS 4 + 飾 3 = 10 byte)
         assert_eq!(r.tokens[0].range, 0..input.len());
+    }
+
+    #[test]
+    fn compat_loaded_from_core_dict_dir_not_just_rules_dir() {
+        // production の wrapper は rules_dir と core_dict_dir を別 path で mount する。
+        // compat.toml は dict 配布で core/ に同梱されるので、 core_dict_dir 経由でも
+        // 読まれて 髙→高 の異体字正規化が効くこと (回帰: 旧実装は rules_dir のみ走査で
+        // compat が production で完全に dead だった)。
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_compat_core_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("compat.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"compat\"\n\n[map]\n\"髙\" = \"高\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("entries.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"jukugo\"\n\n[entries]\n\"高田\" = \"タカダ\"\n",
+        )
+        .unwrap();
+        let f = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        // 髙田 (異体字) → core 同梱 compat で 高田 を lookup (たかだ)、 表示は 髙 を保持
+        assert_eq!(f.to_ruby("髙田"), "{髙田|たかだ}");
     }
 
     // ─── analyze() (F1) tests ────────────────────────────────────────────────

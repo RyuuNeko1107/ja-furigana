@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-06-14
+
+### Fixed
+
+- **compat (異体字) を core_dict_dir からも読み込む** (`api.rs`): `load_rules_dir` は
+  `rules_dir` しか走査しないが、 ja-furigana-dict 配布では `compat.toml` が **core/ に同梱**
+  される。 production の wrapper のように `rules_dir` と `core_dict_dir` を別 path で mount すると
+  compat が一切読まれず、 **髙→高 / 﨑→崎 が production で完全に dead** だった (0.1.13 で配線した
+  正規化のうち compat 分のみ無効。 NFKC / IVS は `CompatData` 非依存なので動作していた)。
+  `FuriganaBuilder::build` で core / user dict 配下の `role = "compat"` も拾って `rules.compat`
+  へ補完するようにした (`rules_dir` 由来を優先)。 これで分離 mount でも `髙田 → {髙田|たかだ}` /
+  `山﨑 → {山﨑|やまざき}` が効く。
+
 ## [0.1.13] - 2026-06-14
 
 ### Fixed
