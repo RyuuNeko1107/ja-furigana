@@ -376,33 +376,129 @@ fn is_variation_selector(c: char) -> bool {
 ///
 /// `compat_map` の variant → canonical 変換を、NFKC の後に適用する。
 /// 入力が空なら空文字列を返す。
+///
+/// 表示 surface も正規化したい呼び出し側はこちら、 lookup だけ正規化して表示は
+/// 原文を保つ場合は [`normalize_text_aligned`] を使う (production の `to_*` / `analyze`
+/// は後者)。 両者の正規化テキストは一致する (本関数は aligned 版の `.text` を返す)。
 #[must_use]
 pub fn normalize_text(s: &str, compat: &CompatData) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-    // 異体字セレクタ (IVS / VS) を除去 (NFKC/NFC では剥がれない)。人名・地名の
-    // 異体字付き漢字 (葛飾/辻 等) を base char に揃えて dict lookup を通す。
-    // filter を NFKC イテレータに直接チェーンし、中間 String alloc を避ける。
-    let nfkc: String = s
-        .chars()
-        .filter(|&c| !is_variation_selector(c))
-        .nfkc()
-        .collect();
-    // 異体字置換 (1 文字単位)
+    normalize_text_aligned(s, compat).text
+}
+
+/// 1 文字を NFKC → compat 置換 → NFC した断片を返す。
+///
+/// [`normalize_text_aligned`] が unit ごとに呼ぶ。 NFKC は **1 文字単位** で適用する
+/// (旧 `normalize_text` の whole-string NFKC と、 結合文字列を跨がない実用入力では
+/// 一致する)。 compat は variant → canonical の先頭 1 文字で置換 (= 旧実装と同挙動)。
+fn normalize_char_piece(ch: char, compat: &CompatData) -> String {
+    let nfkc: String = ch.to_string().nfkc().collect();
     let replaced: String = nfkc
         .chars()
         .map(|c| {
-            let cs = c.to_string();
-            if let Some(canonical) = compat.lookup(&cs) {
-                canonical.chars().next().unwrap_or(c)
-            } else {
-                c
-            }
+            compat
+                .lookup(&c.to_string())
+                .and_then(|canonical| canonical.chars().next())
+                .unwrap_or(c)
         })
         .collect();
-    // 安全のため NFC で正規化結合
     replaced.nfc().collect()
+}
+
+/// 正規化テキスト + 原文への char 単位 alignment。
+///
+/// `text` は dict lookup / 形態素解析に渡す正規化形 ([`normalize_text`] と一致)。
+/// `units` で 「正規化後 byte 位置 → 原文 byte 範囲」 を保持し、 解析後に各 token の
+/// surface を原文 (= 異体字 / IVS / 全角を保ったまま) へ戻せる。
+///
+/// production の `to_ruby` 等は 「lookup は正規化形、 表示は原文 surface」 を満たすため
+/// これを使う (例: `髙田` → 高田 で lookup → 表示は `{髙田|たかだ}`)。
+pub(crate) struct NormalizedText {
+    /// lookup 用の正規化テキスト
+    pub text: String,
+    /// 正規化が原文と異なるか。 false なら remap 不要 (fast path)。
+    pub changed: bool,
+    /// 正規化 unit 列 (`norm_start` 昇順、 隙間なく原文・正規化テキスト両方を覆う)。
+    units: Vec<NormUnit>,
+}
+
+/// 原文 1 文字 (+ 後続の異体字セレクタ) → 正規化テキスト上の断片 1 つの対応。
+struct NormUnit {
+    /// 正規化テキスト上の開始 byte 位置 (この unit が生成した断片の先頭)
+    norm_start: usize,
+    /// 原文上の byte 範囲
+    orig: std::ops::Range<usize>,
+}
+
+impl NormalizedText {
+    /// 正規化テキスト ([`Self::text`]) を連結した token surface 列を受け取り、
+    /// 各 token を原文 surface + 原文 byte range に対応付けて返す (token と同順)。
+    ///
+    /// 各 unit は 「正規化後 `norm_start` を含む token」 に割り当てる。 token 境界が
+    /// 多文字展開 unit (`㍻` → `平成` 等) の途中に落ちた場合、 その原文 1 文字は
+    /// 先行 token に丸ごと付き、 後続 token の原文 surface は空になる。 これにより
+    /// 「原文 surface の連結 == 原文」 の不変条件が常に保たれる。
+    pub(crate) fn remap<'a>(
+        &self,
+        orig: &str,
+        surfaces: impl IntoIterator<Item = &'a str>,
+    ) -> Vec<(String, std::ops::Range<usize>)> {
+        let mut out = Vec::new();
+        let mut cursor_norm = 0usize;
+        let mut cursor_orig = 0usize;
+        let mut ui = 0usize;
+        for surf in surfaces {
+            let te = cursor_norm + surf.len();
+            let o_start = cursor_orig;
+            let mut o_end = cursor_orig;
+            while ui < self.units.len() && self.units[ui].norm_start < te {
+                o_end = self.units[ui].orig.end;
+                ui += 1;
+            }
+            out.push((orig[o_start..o_end].to_string(), o_start..o_end));
+            cursor_orig = o_end;
+            cursor_norm = te;
+        }
+        out
+    }
+}
+
+/// テキストを正規化しつつ、 原文 surface へ戻すための alignment を保持する。
+///
+/// 異体字セレクタ (IVS / VS) は除去して直前 unit の原文範囲に併合 (= norm へは寄与
+/// しない)。 それ以外は 1 文字ごとに [`normalize_char_piece`] を適用し、 原文 1 文字 ↔
+/// 正規化断片 1 つの unit を作る。
+#[must_use]
+pub(crate) fn normalize_text_aligned(s: &str, compat: &CompatData) -> NormalizedText {
+    let mut text = String::new();
+    let mut units: Vec<NormUnit> = Vec::new();
+    for (orig_off, ch) in s.char_indices() {
+        let orig_end = orig_off + ch.len_utf8();
+        if is_variation_selector(ch) {
+            // VS は norm に出さず、 直前 unit の原文範囲を伸ばして吸収する。
+            if let Some(last) = units.last_mut() {
+                last.orig.end = orig_end;
+            } else {
+                // 先頭 orphan VS: norm 寄与ゼロの unit として記録 (表示時に原文へ復元)
+                units.push(NormUnit {
+                    norm_start: text.len(),
+                    orig: orig_off..orig_end,
+                });
+            }
+            continue;
+        }
+        let norm_start = text.len();
+        text.push_str(&normalize_char_piece(ch, compat));
+        units.push(NormUnit {
+            norm_start,
+            orig: orig_off..orig_end,
+        });
+    }
+    let changed = text != s;
+    NormalizedText {
+        text,
+        changed,
+        units,
+    }
 }
 
 #[cfg(test)]

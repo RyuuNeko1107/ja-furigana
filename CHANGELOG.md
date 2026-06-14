@@ -8,13 +8,18 @@
 
 ### Fixed
 
-- **入力正規化 (compat / IVS / NFKC) をパイプラインに配線** (`api.rs`): `tokenize` /
-  `analyze` の入口で `kana::normalize_text(input, &rules.compat)` を適用するようにした。
+- **入力正規化 (compat / IVS / NFKC) をパイプラインに配線** (`api.rs`, `kana.rs`): `tokenize` /
+  `analyze` の入口で入力を正規化してから形態素解析・辞書 lookup に渡すようにした。
   Strict→Smart engine 移行 (alpha.15) 以降 `normalize_text` が production から呼ばれておらず、
   **異体字正規化 (compat: 髙→高 / 﨑→崎)・IVS/変異セレクタ除去 (0.1.12 で追加したが未配線だった)・
   NFKC (㍻→平成 / ①→1 / 全角→半角) が全て無効**だった regression を修正。
-  corpus 1085/1085 不変。 ※入力が正規化されるため出力 surface も正規化形になる
-  (異体字は標準字で表示される)。
+  - **lookup のみ正規化し、 表示 surface は原文を保持** (`kana::normalize_text_aligned`):
+    正規化テキストで dict を引きつつ、 各 token の surface は原文へ戻す。 例: `髙田` →
+    `高田` で lookup → `{髙田|たかだ}` (異体字を保ったまま正しい読み)、 `葛󠄀飾` (IVS 付き) →
+    `{葛󠄀飾|かつしか}`、 `３本` → `{３本|さんぼん}`、 `①番` → `{①番|いちばん}`。 原文 1 文字 ↔
+    正規化断片の char 単位 alignment を保持し、 「surface 連結 == 原文」 の不変条件を維持。
+  - 正規化で何も変わらない通常の日本語入力は remap を経ない fast path で **挙動不変**。
+  - corpus 1085/1085 不変。
 
 ## [0.1.12] - 2026-06-14
 

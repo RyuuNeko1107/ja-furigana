@@ -132,14 +132,28 @@ impl Furigana {
     /// と判定される。
     #[must_use]
     pub fn tokenize(&self, text: &str) -> Vec<ReadingToken> {
-        // Step 1: 入力を正規化 (異体字→標準字 [compat]、 IVS/変異セレクタ除去、 NFKC)。
-        // 髙→高 / 葛󠄀→葛 等を解決してから形態素解析・辞書 lookup に渡す。
-        let text = crate::kana::normalize_text(text, &self.rules.compat);
-        self.pipeline()
-            .tokens(&text)
+        // Step 1: lookup 用に入力を正規化 (異体字→標準字 [compat]、 IVS/変異セレクタ除去、
+        // NFKC)。 髙→高 / 葛󠄀→葛 / ①→1 等を解決してから形態素解析・辞書 lookup に渡す。
+        // **表示 surface は原文を保つ** (lookup のみ正規化): 解析後に各 token の surface を
+        // 原文へ戻すので 髙田 は {髙田|たかだ} になる (高田 に化けない)。
+        let norm = crate::kana::normalize_text_aligned(text, &self.rules.compat);
+        let tokens = self.pipeline().tokens(&norm.text);
+        // 正規化で何も変わらない通常の日本語入力は fast path (remap 不要 = 旧挙動と同一)。
+        if !norm.changed {
+            return tokens
+                .into_iter()
+                .map(|t| ReadingToken {
+                    surface: t.surface,
+                    reading: Some(t.reading),
+                })
+                .collect();
+        }
+        let remapped = norm.remap(text, tokens.iter().map(|t| t.surface.as_str()));
+        tokens
             .into_iter()
-            .map(|t| ReadingToken {
-                surface: t.surface,
+            .zip(remapped)
+            .map(|(t, (surface, _range))| ReadingToken {
+                surface,
                 reading: Some(t.reading),
             })
             .collect()
@@ -268,9 +282,19 @@ impl Furigana {
     /// ([`crate::scoring::postpass`] の post-pass 群)、 placeholder の 「々」 は残らない。
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
-        // Step 1: 入力正規化 (異体字 [compat] / IVS / NFKC)。tokenize と同じ前処理。
-        let input = crate::kana::normalize_text(input, &self.rules.compat);
-        self.pipeline().analyze(&input)
+        // Step 1: lookup 用に入力正規化 (異体字 [compat] / IVS / NFKC)。tokenize と同じ前処理。
+        // 表示 surface は原文を保つため、 解析後に token surface / range を原文へ remap する
+        // (`candidates` / `boundary_regions` の range は正規化テキスト座標のまま = debug 用途)。
+        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let mut result = self.pipeline().analyze(&norm.text);
+        if norm.changed {
+            let remapped = norm.remap(input, result.tokens.iter().map(|t| t.surface.as_str()));
+            for (t, (surface, range)) in result.tokens.iter_mut().zip(remapped) {
+                t.surface = surface;
+                t.range = range;
+            }
+        }
+        result
     }
 
     /// accent mode 出力 (intonation.md §7.1)。
@@ -493,6 +517,9 @@ mod tests {
         "絵文字😀テスト🎉",
         "https://example.com を見て",
         "9時30分に1000円",
+        "葛\u{E0100}飾",  // IVS 付き漢字 (lookup 正規化 / 表示は IVS 保持)
+        "３本",            // 全角数字 (NFKC で半角化して lookup、 表示は全角保持)
+        "①番",            // 丸数字 (NFKC で 1 番化して lookup、 表示は丸数字保持)
         "猫{犬}",       // ruby delimiter `{` `}` を含む入力 (escape 必須)
         "a|b猫",        // ruby delimiter `|` を含む入力
         "C:\\猫\\犬",   // backslash を含む入力 (escape char 自身)
@@ -774,6 +801,64 @@ mod tests {
             .unwrap();
         let ruby = f.to_ruby("灰桜の道");
         assert!(ruby.contains("{灰桜|はいざくら}"), "expected ruby: {ruby}");
+    }
+
+    // ─── 入力正規化: lookup のみ正規化 / 表示 surface は原文保持 ───────────────
+
+    #[test]
+    fn ivs_normalized_for_lookup_but_surface_keeps_selector() {
+        // 葛飾 (IVS U+E0100 付き) は dict lookup では IVS を剥がして 「葛飾」 で hit、
+        // 表示 surface は IVS を保ったまま (= 原文尊重)。
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("葛飾", "カツシカ");
+        let input = "葛\u{E0100}飾";
+
+        // surface 連結は原文 (IVS 込み) と完全一致
+        let concat: String = f.tokenize(input).iter().map(|t| t.surface.clone()).collect();
+        assert_eq!(concat, input, "surface が IVS を保持して原文一致");
+
+        // ruby は IVS を保った surface + 正規化形で引いた読み
+        assert_eq!(f.to_ruby(input), "{葛\u{E0100}飾|かつしか}");
+        assert_eq!(f.to_hiragana(input), "かつしか");
+    }
+
+    #[test]
+    fn fullwidth_digit_normalized_for_lookup_but_surface_kept() {
+        // 全角 「３本」 は NFKC で 「3本」 に正規化して counter lookup (サンボン)、
+        // 表示 surface は全角 「３」 のまま。
+        let f = Furigana::builder()
+            .rules_dir(fixture_rules_dir())
+            .build()
+            .expect("build with rules_dir");
+        let input = "３本";
+
+        let concat: String = f.tokenize(input).iter().map(|t| t.surface.clone()).collect();
+        assert_eq!(concat, input, "全角 surface が保持される");
+        assert_eq!(f.to_ruby(input), "{３本|さんぼん}");
+        assert_eq!(f.to_hiragana(input), "さんぼん");
+    }
+
+    #[test]
+    fn plain_japanese_takes_identity_fast_path() {
+        // 正規化で何も変わらない通常入力は remap を経ず旧来どおりの surface を返す
+        // (= 異体字 / IVS / 全角を含まない大多数の入力は挙動不変)。
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("灰桜", "ハイザクラ");
+        assert_eq!(f.to_ruby("灰桜の道"), "{灰桜|はいざくら}の{道|みち}");
+    }
+
+    #[test]
+    fn analyze_remaps_surface_and_range_to_original() {
+        // analyze() も token.surface / range を原文へ戻す (reading は正規化形で解決)。
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("葛飾", "カツシカ");
+        let input = "葛\u{E0100}飾";
+        let r = f.analyze(input);
+        assert_eq!(r.tokens.len(), 1);
+        assert_eq!(r.tokens[0].surface, input, "原文 surface (IVS 込み)");
+        assert_eq!(r.tokens[0].reading, "カツシカ");
+        // range は原文 byte 全域 (葛 3 + IVS 4 + 飾 3 = 10 byte)
+        assert_eq!(r.tokens[0].range, 0..input.len());
     }
 
     // ─── analyze() (F1) tests ────────────────────────────────────────────────
