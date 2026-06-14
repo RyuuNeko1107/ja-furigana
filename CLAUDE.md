@@ -9,7 +9,7 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.1.14` (2026-06-14、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
+- **LIVE**: `0.1.16` (2026-06-14、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
   しており 0.2.0 開発分 (ScoringContext / ADR-0004 / bracket-accent parser / scoring pub(crate) 化) を
   含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.10 = **NameBoundaryPass**
   (人名+敬称の token 衝突補正、 ADR-0005 第 3 adapter)、 0.1.11 = **match_hits condition weighting**
@@ -25,9 +25,14 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
   通常入力は fast path で挙動不変)。 0.1.14 = **compat を core_dict_dir からも読み込む**
   (`FuriganaBuilder` が rules_dir に加え core/user dict の role="compat" も補完、 defense-in-depth)。
   ※production の真の compat 修正は **dict 側で `compat.toml` を core/ → rules/ へ移動** (dict v2026.06.14、
-  `load_rules_dir` が rules_dir 走査で拾うのでどの lib version でも有効)。 lib 496 + cli 48 test green。
-  本番 furigana-api は wrapper `2.0.11` で lib 0.1.14 稼働 (2026-06-14 deploy、 health gate ✓、
-  dict v2026.06.14 swap 済で 髙田→たかだ / 山﨑→やまざき / ３本→さんぼん live 確認)
+  `load_rules_dir` が rules_dir 走査で拾うのでどの lib version でも有効)。
+  0.1.15 = **複数文字 canonical の compat 完全展開** (旧字漢数字 `廿→二十` / `卅→三十` 等 5件、
+  従来は先頭1文字で `廿→二`)、 0.1.16 = **多文字展開が token 分割された際の空 surface ruby 修正**
+  (`卅→{卅|さん}{|じゅう}` を、 空 surface token の読みを直前 token に結合して `{卅|さんじゅう}` に。
+  0.1.13 surface 保持機構の latent bug)。 lib 499 + cli 48 test green。
+  既知の限界: `卅日` 等 旧字漢数字+助数詞は誤読しうる (展開後 十日=とおか と誤分割、 稀ケース)。
+  本番 furigana-api は wrapper `2.0.13` で lib 0.1.16 稼働 (2026-06-14 deploy、 health gate ✓、
+  dict v2026.06.14 swap 済で 髙田→たかだ / 廿→にじゅう / 卅→さんじゅう / ３本→さんぼん live 確認)
 - **`0.2.0` (master 実装中・未 release)**: accent **core は実装済** =
   bracket notation parse + `AccentResult`/`AccentToken` + CLI `--mode=accent`
   (`api.rs::to_accent` / `scoring/bracket.rs`、 ADR-0003)。
