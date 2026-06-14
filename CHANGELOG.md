@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **入力正規化 (compat / IVS / NFKC) をパイプラインに配線** (`api.rs`): `tokenize` /
+  `analyze` の入口で `kana::normalize_text(input, &rules.compat)` を適用するようにした。
+  Strict→Smart engine 移行 (alpha.15) 以降 `normalize_text` が production から呼ばれておらず、
+  **異体字正規化 (compat: 髙→高 / 﨑→崎)・IVS/変異セレクタ除去 (0.1.12 で追加したが未配線だった)・
+  NFKC (㍻→平成 / ①→1 / 全角→半角) が全て無効**だった regression を修正。
+  corpus 1085/1085 不変。 ※入力が正規化されるため出力 surface も正規化形になる
+  (異体字は標準字で表示される)。
+
 ## [0.1.12] - 2026-06-14
 
 ### Changed

@@ -132,8 +132,11 @@ impl Furigana {
     /// と判定される。
     #[must_use]
     pub fn tokenize(&self, text: &str) -> Vec<ReadingToken> {
+        // Step 1: 入力を正規化 (異体字→標準字 [compat]、 IVS/変異セレクタ除去、 NFKC)。
+        // 髙→高 / 葛󠄀→葛 等を解決してから形態素解析・辞書 lookup に渡す。
+        let text = crate::kana::normalize_text(text, &self.rules.compat);
         self.pipeline()
-            .tokens(text)
+            .tokens(&text)
             .into_iter()
             .map(|t| ReadingToken {
                 surface: t.surface,
@@ -265,7 +268,9 @@ impl Furigana {
     /// ([`crate::scoring::postpass`] の post-pass 群)、 placeholder の 「々」 は残らない。
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
-        self.pipeline().analyze(input)
+        // Step 1: 入力正規化 (異体字 [compat] / IVS / NFKC)。tokenize と同じ前処理。
+        let input = crate::kana::normalize_text(input, &self.rules.compat);
+        self.pipeline().analyze(&input)
     }
 
     /// accent mode 出力 (intonation.md §7.1)。
