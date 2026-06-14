@@ -9,16 +9,17 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.1.11` (2026-06-12、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
+- **LIVE**: `0.1.12` (2026-06-14、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
   しており 0.2.0 開発分 (ScoringContext / ADR-0004 / bracket-accent parser / scoring pub(crate) 化) を
-  含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.9 = 漢数字+助数詞
-  bare 読みを dict opt-in flag (`CounterRule.kanji_numeral`) で有効化、 0.1.10 = **NameBoundaryPass**
+  含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.10 = **NameBoundaryPass**
   (人名+敬称の token 衝突補正、 ADR-0005 第 3 adapter)、 0.1.11 = **match_hits condition weighting**
-  (match block の hit condition 数を literal=2/broad=1 で `Score::match_hits` に累積、 同 band・同
-  length の tie で厳密な block が勝つ。 916k A/B 217 行、 今日中/N日間 系改善。 退行は dict sweep
-  2026-06-12 で補正済)。
-  本番 furigana-api は wrapper `2.0.8` で lib 0.1.11 稼働 (2026-06-12 deploy、 今日中/複数人/教育係/
-  売却額 を本番 smoke 確認済)
+  (match block の hit condition 数を literal=2/broad=1 で `Score::match_hits` に累積)、
+  0.1.12 = **テスト品質刷新 + 実バグ修正一括** (CJK 拡張B〜H 漢字判定 [𠮷/𩸽 に furigana]、 IVS/異体字
+  セレクタ除去、 漢数字 ≥100+助数詞 [三百回目→さんびゃくかいめ、 kansuji_to_arabic を百千万億 additive +
+  〇 positional 一般化]、 romaji 無音脱落、 ruby 出力の区切り記号エスケープ、 matcher O(N²) 線形化、
+  Mutex poison 回復、 reload preload、 enumeration 決定化。 mutation testing で corpus 非依存
+  モジュールを網羅検証。 lib 491 + cli 48 test green、 corpus 1085/1085。 CHANGELOG 参照)。
+  本番 furigana-api は wrapper `2.0.9` で lib 0.1.12 稼働 (2026-06-14 deploy、 health gate ✓)
 - **`0.2.0` (master 実装中・未 release)**: accent **core は実装済** =
   bracket notation parse + `AccentResult`/`AccentToken` + CLI `--mode=accent`
   (`api.rs::to_accent` / `scoring/bracket.rs`、 ADR-0003)。
