@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-06-14
+
 ### Fixed
 
 - **入力正規化 (compat / IVS / NFKC) をパイプラインに配線** (`api.rs`, `kana.rs`): `tokenize` /
