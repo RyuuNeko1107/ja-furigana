@@ -512,17 +512,17 @@ mod tests {
         "猫が\n好きABC123",
         "猫\tいぬ",
         "人々",
-        "𠮷野家",      // CJK 拡張B漢字
-        "魚は𩸽だ",    // astral 漢字 + かな
+        "𠮷野家",   // CJK 拡張B漢字
+        "魚は𩸽だ", // astral 漢字 + かな
         "絵文字😀テスト🎉",
         "https://example.com を見て",
         "9時30分に1000円",
-        "葛\u{E0100}飾",  // IVS 付き漢字 (lookup 正規化 / 表示は IVS 保持)
-        "３本",            // 全角数字 (NFKC で半角化して lookup、 表示は全角保持)
-        "①番",            // 丸数字 (NFKC で 1 番化して lookup、 表示は丸数字保持)
-        "猫{犬}",       // ruby delimiter `{` `}` を含む入力 (escape 必須)
-        "a|b猫",        // ruby delimiter `|` を含む入力
-        "C:\\猫\\犬",   // backslash を含む入力 (escape char 自身)
+        "葛\u{E0100}飾", // IVS 付き漢字 (lookup 正規化 / 表示は IVS 保持)
+        "３本",          // 全角数字 (NFKC で半角化して lookup、 表示は全角保持)
+        "①番",           // 丸数字 (NFKC で 1 番化して lookup、 表示は丸数字保持)
+        "猫{犬}",        // ruby delimiter `{` `}` を含む入力 (escape 必須)
+        "a|b猫",         // ruby delimiter `|` を含む入力
+        "C:\\猫\\犬",    // backslash を含む入力 (escape char 自身)
     ];
 
     #[test]
@@ -540,7 +540,11 @@ mod tests {
         // (= 文字の欠落/重複/順序入替が無い = 全 byte を gap なく覆う)。
         let f = Furigana::minimal().unwrap();
         for &input in INVARIANT_INPUTS {
-            let concat: String = f.tokenize(input).iter().map(|t| t.surface.clone()).collect();
+            let concat: String = f
+                .tokenize(input)
+                .iter()
+                .map(|t| t.surface.clone())
+                .collect();
             assert_eq!(concat, input, "surface 連結が入力と不一致: {input:?}");
         }
     }
@@ -628,7 +632,10 @@ mod tests {
         assert_eq!(f.dict_size(), 2);
 
         // 個別 contains だと間の助詞「と」脱落や順序入替を見逃す。全文一致で固定。
-        assert_eq!(f.to_ruby("灰桜と黎明"), "{灰桜|はいざくら}と{黎明|れいめい}");
+        assert_eq!(
+            f.to_ruby("灰桜と黎明"),
+            "{灰桜|はいざくら}と{黎明|れいめい}"
+        );
     }
 
     #[test]
@@ -814,7 +821,11 @@ mod tests {
         let input = "葛\u{E0100}飾";
 
         // surface 連結は原文 (IVS 込み) と完全一致
-        let concat: String = f.tokenize(input).iter().map(|t| t.surface.clone()).collect();
+        let concat: String = f
+            .tokenize(input)
+            .iter()
+            .map(|t| t.surface.clone())
+            .collect();
         assert_eq!(concat, input, "surface が IVS を保持して原文一致");
 
         // ruby は IVS を保った surface + 正規化形で引いた読み
@@ -832,7 +843,11 @@ mod tests {
             .expect("build with rules_dir");
         let input = "３本";
 
-        let concat: String = f.tokenize(input).iter().map(|t| t.surface.clone()).collect();
+        let concat: String = f
+            .tokenize(input)
+            .iter()
+            .map(|t| t.surface.clone())
+            .collect();
         assert_eq!(concat, input, "全角 surface が保持される");
         assert_eq!(f.to_ruby(input), "{３本|さんぼん}");
         assert_eq!(f.to_hiragana(input), "さんぼん");

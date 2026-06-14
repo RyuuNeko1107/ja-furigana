@@ -987,7 +987,10 @@ mod tests {
         let got: Vec<&str> = d.rich_starting_with('生').map(|(s, _)| s).collect();
         let mut want = got.clone();
         want.sort_unstable();
-        assert_eq!(got, want, "列挙順が surface 昇順 (決定的) であること: {got:?}");
+        assert_eq!(
+            got, want,
+            "列挙順が surface 昇順 (決定的) であること: {got:?}"
+        );
         assert_eq!(got.len(), 5);
     }
 

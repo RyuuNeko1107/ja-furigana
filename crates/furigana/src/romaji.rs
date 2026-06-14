@@ -368,9 +368,15 @@ mod tests {
     fn sokuon_before_youon_doubles_consonant() {
         // 促音 っ の直後が拗音のとき、 peek_kana の youon lookahead で子音を重ねる。
         // (もっち=単音 と異なり、 peek_kana の i+1/lookup_youon 経路を通す)
-        assert_eq!(hiragana_to_romaji("いっしょ", RomajiStyle::Hepburn), "issho");
+        assert_eq!(
+            hiragana_to_romaji("いっしょ", RomajiStyle::Hepburn),
+            "issho"
+        );
         assert_eq!(hiragana_to_romaji("いっしょ", RomajiStyle::Kunrei), "issyo");
-        assert_eq!(hiragana_to_romaji("ぎゅっきゃ", RomajiStyle::Hepburn), "gyukkya");
+        assert_eq!(
+            hiragana_to_romaji("ぎゅっきゃ", RomajiStyle::Hepburn),
+            "gyukkya"
+        );
     }
 
     #[test]
@@ -443,22 +449,80 @@ mod tests {
         // lookup_single の各 arm を網羅し、 表の取りこぼし・改変を検出する。
         use RomajiStyle::Hepburn as H;
         let cases: &[(&str, &str)] = &[
-            ("あ", "a"), ("い", "i"), ("う", "u"), ("え", "e"), ("お", "o"),
-            ("か", "ka"), ("き", "ki"), ("く", "ku"), ("け", "ke"), ("こ", "ko"),
-            ("が", "ga"), ("ぎ", "gi"), ("ぐ", "gu"), ("げ", "ge"), ("ご", "go"),
-            ("さ", "sa"), ("し", "shi"), ("す", "su"), ("せ", "se"), ("そ", "so"),
-            ("ざ", "za"), ("じ", "ji"), ("ず", "zu"), ("ぜ", "ze"), ("ぞ", "zo"),
-            ("た", "ta"), ("ち", "chi"), ("つ", "tsu"), ("て", "te"), ("と", "to"),
-            ("だ", "da"), ("ぢ", "ji"), ("づ", "zu"), ("で", "de"), ("ど", "do"),
-            ("な", "na"), ("に", "ni"), ("ぬ", "nu"), ("ね", "ne"), ("の", "no"),
-            ("は", "ha"), ("ひ", "hi"), ("ふ", "fu"), ("へ", "he"), ("ほ", "ho"),
-            ("ば", "ba"), ("び", "bi"), ("ぶ", "bu"), ("べ", "be"), ("ぼ", "bo"),
-            ("ぱ", "pa"), ("ぴ", "pi"), ("ぷ", "pu"), ("ぺ", "pe"), ("ぽ", "po"),
-            ("ま", "ma"), ("み", "mi"), ("む", "mu"), ("め", "me"), ("も", "mo"),
-            ("や", "ya"), ("ゆ", "yu"), ("よ", "yo"),
-            ("ら", "ra"), ("り", "ri"), ("る", "ru"), ("れ", "re"), ("ろ", "ro"),
-            ("わ", "wa"), ("を", "wo"), ("ん", "n"),
-            ("ゐ", "i"), ("ゑ", "e"), ("ゔ", "vu"),
+            ("あ", "a"),
+            ("い", "i"),
+            ("う", "u"),
+            ("え", "e"),
+            ("お", "o"),
+            ("か", "ka"),
+            ("き", "ki"),
+            ("く", "ku"),
+            ("け", "ke"),
+            ("こ", "ko"),
+            ("が", "ga"),
+            ("ぎ", "gi"),
+            ("ぐ", "gu"),
+            ("げ", "ge"),
+            ("ご", "go"),
+            ("さ", "sa"),
+            ("し", "shi"),
+            ("す", "su"),
+            ("せ", "se"),
+            ("そ", "so"),
+            ("ざ", "za"),
+            ("じ", "ji"),
+            ("ず", "zu"),
+            ("ぜ", "ze"),
+            ("ぞ", "zo"),
+            ("た", "ta"),
+            ("ち", "chi"),
+            ("つ", "tsu"),
+            ("て", "te"),
+            ("と", "to"),
+            ("だ", "da"),
+            ("ぢ", "ji"),
+            ("づ", "zu"),
+            ("で", "de"),
+            ("ど", "do"),
+            ("な", "na"),
+            ("に", "ni"),
+            ("ぬ", "nu"),
+            ("ね", "ne"),
+            ("の", "no"),
+            ("は", "ha"),
+            ("ひ", "hi"),
+            ("ふ", "fu"),
+            ("へ", "he"),
+            ("ほ", "ho"),
+            ("ば", "ba"),
+            ("び", "bi"),
+            ("ぶ", "bu"),
+            ("べ", "be"),
+            ("ぼ", "bo"),
+            ("ぱ", "pa"),
+            ("ぴ", "pi"),
+            ("ぷ", "pu"),
+            ("ぺ", "pe"),
+            ("ぽ", "po"),
+            ("ま", "ma"),
+            ("み", "mi"),
+            ("む", "mu"),
+            ("め", "me"),
+            ("も", "mo"),
+            ("や", "ya"),
+            ("ゆ", "yu"),
+            ("よ", "yo"),
+            ("ら", "ra"),
+            ("り", "ri"),
+            ("る", "ru"),
+            ("れ", "re"),
+            ("ろ", "ro"),
+            ("わ", "wa"),
+            ("を", "wo"),
+            ("ん", "n"),
+            ("ゐ", "i"),
+            ("ゑ", "e"),
+            ("ゔ", "vu"),
         ];
         for (kana, romaji) in cases {
             assert_eq!(hiragana_to_romaji(kana, H), *romaji, "Hepburn {kana}");
@@ -470,17 +534,39 @@ mod tests {
         // 拗音 (ゃゅょ) 全 11 行 × 3 を網羅 (lookup_youon の各 arm を pin)。
         use RomajiStyle::Hepburn as H;
         let cases: &[(&str, &str)] = &[
-            ("きゃ", "kya"), ("きゅ", "kyu"), ("きょ", "kyo"),
-            ("ぎゃ", "gya"), ("ぎゅ", "gyu"), ("ぎょ", "gyo"),
-            ("しゃ", "sha"), ("しゅ", "shu"), ("しょ", "sho"),
-            ("じゃ", "ja"), ("じゅ", "ju"), ("じょ", "jo"),
-            ("ちゃ", "cha"), ("ちゅ", "chu"), ("ちょ", "cho"),
-            ("にゃ", "nya"), ("にゅ", "nyu"), ("にょ", "nyo"),
-            ("ひゃ", "hya"), ("ひゅ", "hyu"), ("ひょ", "hyo"),
-            ("びゃ", "bya"), ("びゅ", "byu"), ("びょ", "byo"),
-            ("ぴゃ", "pya"), ("ぴゅ", "pyu"), ("ぴょ", "pyo"),
-            ("みゃ", "mya"), ("みゅ", "myu"), ("みょ", "myo"),
-            ("りゃ", "rya"), ("りゅ", "ryu"), ("りょ", "ryo"),
+            ("きゃ", "kya"),
+            ("きゅ", "kyu"),
+            ("きょ", "kyo"),
+            ("ぎゃ", "gya"),
+            ("ぎゅ", "gyu"),
+            ("ぎょ", "gyo"),
+            ("しゃ", "sha"),
+            ("しゅ", "shu"),
+            ("しょ", "sho"),
+            ("じゃ", "ja"),
+            ("じゅ", "ju"),
+            ("じょ", "jo"),
+            ("ちゃ", "cha"),
+            ("ちゅ", "chu"),
+            ("ちょ", "cho"),
+            ("にゃ", "nya"),
+            ("にゅ", "nyu"),
+            ("にょ", "nyo"),
+            ("ひゃ", "hya"),
+            ("ひゅ", "hyu"),
+            ("ひょ", "hyo"),
+            ("びゃ", "bya"),
+            ("びゅ", "byu"),
+            ("びょ", "byo"),
+            ("ぴゃ", "pya"),
+            ("ぴゅ", "pyu"),
+            ("ぴょ", "pyo"),
+            ("みゃ", "mya"),
+            ("みゅ", "myu"),
+            ("みょ", "myo"),
+            ("りゃ", "rya"),
+            ("りゅ", "ryu"),
+            ("りょ", "ryo"),
         ];
         for (kana, romaji) in cases {
             assert_eq!(hiragana_to_romaji(kana, H), *romaji, "youon {kana}");
@@ -492,11 +578,22 @@ mod tests {
         // 訓令式が ヘボン式 と異なる arm を網羅 (単音 + 拗音)。
         use RomajiStyle::Kunrei as K;
         let cases: &[(&str, &str)] = &[
-            ("し", "si"), ("じ", "zi"), ("ち", "ti"), ("つ", "tu"),
-            ("ぢ", "zi"), ("づ", "zu"), ("ふ", "hu"),
-            ("しゃ", "sya"), ("しゅ", "syu"), ("しょ", "syo"),
-            ("じゃ", "zya"), ("じゅ", "zyu"), ("じょ", "zyo"),
-            ("ちゃ", "tya"), ("ちゅ", "tyu"), ("ちょ", "tyo"),
+            ("し", "si"),
+            ("じ", "zi"),
+            ("ち", "ti"),
+            ("つ", "tu"),
+            ("ぢ", "zi"),
+            ("づ", "zu"),
+            ("ふ", "hu"),
+            ("しゃ", "sya"),
+            ("しゅ", "syu"),
+            ("しょ", "syo"),
+            ("じゃ", "zya"),
+            ("じゅ", "zyu"),
+            ("じょ", "zyo"),
+            ("ちゃ", "tya"),
+            ("ちゅ", "tyu"),
+            ("ちょ", "tyo"),
         ];
         for (kana, romaji) in cases {
             assert_eq!(hiragana_to_romaji(kana, K), *romaji, "Kunrei {kana}");
@@ -508,8 +605,14 @@ mod tests {
         // 単独出現の小書きかな fallback (lookup_single の小書き arm)。
         use RomajiStyle::Hepburn as H;
         let cases: &[(&str, &str)] = &[
-            ("ぁ", "a"), ("ぃ", "i"), ("ぅ", "u"), ("ぇ", "e"), ("ぉ", "o"),
-            ("ゃ", "ya"), ("ゅ", "yu"), ("ょ", "yo"),
+            ("ぁ", "a"),
+            ("ぃ", "i"),
+            ("ぅ", "u"),
+            ("ぇ", "e"),
+            ("ぉ", "o"),
+            ("ゃ", "ya"),
+            ("ゅ", "yu"),
+            ("ょ", "yo"),
         ];
         for (kana, romaji) in cases {
             assert_eq!(hiragana_to_romaji(kana, H), *romaji, "small {kana}");

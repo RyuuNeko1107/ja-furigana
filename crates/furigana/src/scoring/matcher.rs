@@ -866,9 +866,17 @@ mod tests {
         // 打ち切っても match 結果は不変。
         let long_run = "鬱".repeat(MAX_LOGICAL_TOKEN_CHARS + 500);
         let fwd = next_logical_token(&long_run, 0);
-        assert_eq!(fwd.chars().count(), MAX_LOGICAL_TOKEN_CHARS, "前方走査を上限で打ち切り");
+        assert_eq!(
+            fwd.chars().count(),
+            MAX_LOGICAL_TOKEN_CHARS,
+            "前方走査を上限で打ち切り"
+        );
         let bwd = prev_logical_token(&long_run, long_run.len());
-        assert_eq!(bwd.chars().count(), MAX_LOGICAL_TOKEN_CHARS, "後方走査を上限で打ち切り");
+        assert_eq!(
+            bwd.chars().count(),
+            MAX_LOGICAL_TOKEN_CHARS,
+            "後方走査を上限で打ち切り"
+        );
         // 上限以下の通常 run は従来どおり全体を返す (truncation 無し = 正しさ保持)
         assert_eq!(next_logical_token("漢字熟語", 0), "漢字熟語");
         assert_eq!(prev_logical_token("中学校生", 9), "中学校");

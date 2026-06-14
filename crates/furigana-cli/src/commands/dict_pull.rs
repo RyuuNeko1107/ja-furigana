@@ -499,9 +499,18 @@ mod tests {
         ]);
         extract_to(&tb, &p).unwrap();
         let root = p.data_root();
-        assert!(root.join("jukugo/x.toml").exists(), "core/ prefix が剥がれて flat 配置");
-        assert!(root.join("days.toml").exists(), "rules/ prefix が剥がれて flat 配置");
-        assert!(!root.join("README.md").exists(), "未知 top-level entry は skip");
+        assert!(
+            root.join("jukugo/x.toml").exists(),
+            "core/ prefix が剥がれて flat 配置"
+        );
+        assert!(
+            root.join("days.toml").exists(),
+            "rules/ prefix が剥がれて flat 配置"
+        );
+        assert!(
+            !root.join("README.md").exists(),
+            "未知 top-level entry は skip"
+        );
         fs::remove_dir_all(&p.data_dir).ok();
     }
 
@@ -522,7 +531,10 @@ mod tests {
             "path traversal: bail せず & data_root 外に書込み (res={res:?})"
         );
         // 念のため data_dir の祖先側に evil.toml が出来ていないこと
-        assert!(escaped.is_none(), "data_root 外に evil.toml が漏れた: {escaped:?}");
+        assert!(
+            escaped.is_none(),
+            "data_root 外に evil.toml が漏れた: {escaped:?}"
+        );
         fs::remove_dir_all(&p.data_dir).ok();
     }
 
@@ -547,7 +559,10 @@ mod tests {
         let tb = build_targz(&[Tar::BigFile("core/huge.toml", MAX_PER_ENTRY_BYTES + 1)]);
         let res = extract_to(&tb, &p);
         assert!(res.is_err(), "per-entry 上限超過は bail");
-        assert!(!p.data_root().join("huge.toml").exists(), "bail 前に unpack しない");
+        assert!(
+            !p.data_root().join("huge.toml").exists(),
+            "bail 前に unpack しない"
+        );
         fs::remove_dir_all(&p.data_dir).ok();
     }
 
@@ -566,8 +581,14 @@ mod tests {
 
         assert!(p.dict_user_dir().join("mine.toml").exists(), "user/ は保持");
         assert!(p.overrides_file().exists(), "overrides.toml は保持");
-        assert!(p.data_root().join("jukugo/new.toml").exists(), "新ファイルは展開");
-        assert!(!p.data_root().join("old.toml").exists(), "旧配布ファイルは掃除");
+        assert!(
+            p.data_root().join("jukugo/new.toml").exists(),
+            "新ファイルは展開"
+        );
+        assert!(
+            !p.data_root().join("old.toml").exists(),
+            "旧配布ファイルは掃除"
+        );
         fs::remove_dir_all(&p.data_dir).ok();
     }
 

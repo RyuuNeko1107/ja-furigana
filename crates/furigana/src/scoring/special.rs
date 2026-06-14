@@ -429,11 +429,18 @@ mod tests {
         // dedup ロジック自体を検証できないので、 token 総数と内訳・range を固定する。
         let s = "https://user@example.com/page";
         let tokens = extract_protected_tokens(s);
-        assert_eq!(tokens.len(), 1, "email は URL に包含され dedup される: {tokens:?}");
+        assert_eq!(
+            tokens.len(),
+            1,
+            "email は URL に包含され dedup される: {tokens:?}"
+        );
         assert_eq!(tokens[0].kind, ProtectedKind::Url);
         assert_eq!(&s[tokens[0].range.clone()], s, "URL は全体を覆う");
         assert_eq!(
-            tokens.iter().filter(|t| t.kind == ProtectedKind::Email).count(),
+            tokens
+                .iter()
+                .filter(|t| t.kind == ProtectedKind::Email)
+                .count(),
             0,
             "包含 email token は残らない"
         );

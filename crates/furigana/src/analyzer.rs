@@ -220,10 +220,7 @@ mod tests {
         let a = analyzer();
         let tokens = a.tokenize("私は");
         // if let Some だと 「は」 が取れなければ無条件 pass していた。token 存在を強制。
-        let token = tokens
-            .iter()
-            .find(|t| t.surface == "は")
-            .expect("は token");
+        let token = tokens.iter().find(|t| t.surface == "は").expect("は token");
         // 助詞「は」は活用しないので conjugation_type は "*" → None 正規化されるはず
         assert!(token.conjugation_type.is_none());
     }

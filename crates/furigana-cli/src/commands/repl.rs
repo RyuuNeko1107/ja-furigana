@@ -419,12 +419,26 @@ mod tests {
     #[test]
     fn mode_parse_roundtrip_and_aliases() {
         for name in [
-            "all", "ruby", "hiragana", "tts", "kanji", "romaji", "romaji-kunrei", "accent",
+            "all",
+            "ruby",
+            "hiragana",
+            "tts",
+            "kanji",
+            "romaji",
+            "romaji-kunrei",
+            "accent",
         ] {
-            assert_eq!(Mode::parse(name).map(Mode::as_str), Some(name), "roundtrip {name}");
+            assert_eq!(
+                Mode::parse(name).map(Mode::as_str),
+                Some(name),
+                "roundtrip {name}"
+            );
         }
         assert_eq!(Mode::parse("hira").map(Mode::as_str), Some("hiragana"));
-        assert_eq!(Mode::parse("kunrei").map(Mode::as_str), Some("romaji-kunrei"));
+        assert_eq!(
+            Mode::parse("kunrei").map(Mode::as_str),
+            Some("romaji-kunrei")
+        );
         assert!(Mode::parse("bogus").is_none());
     }
 

@@ -301,7 +301,11 @@ mod tests {
             segs.iter().all(|s| s.chars().count() <= 5),
             "each chunk ≤5 chars: {segs:?}"
         );
-        assert_eq!(segs.concat(), "a、b、c、d、e、f、g、h、i", "no content lost");
+        assert_eq!(
+            segs.concat(),
+            "a、b、c、d、e、f、g、h、i",
+            "no content lost"
+        );
     }
 
     #[test]

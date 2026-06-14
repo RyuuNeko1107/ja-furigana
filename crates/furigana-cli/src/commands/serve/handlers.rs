@@ -109,7 +109,8 @@ pub(super) async fn do_reload(state: &AppState, source: ReloadSource) -> Result<
         // init 失敗でその 1 request が panic しないよう、 swap 前に eager init する
         // (起動時 preload と挙動を揃える)。 build と同じ spawn_blocking 内なので
         // executor を塞がない。 失敗時は swap せず旧 dict を温存し reload を atomic に保つ。
-        f.preload().map_err(|e| format!("preload after reload failed: {e}"))?;
+        f.preload()
+            .map_err(|e| format!("preload after reload failed: {e}"))?;
         Ok(f)
     })
     .await
@@ -625,9 +626,14 @@ mod tests {
     fn validate_length_boundaries() {
         assert!(validate_length("").is_err(), "空は 400");
         assert!(validate_length("あ").is_ok());
-        assert!(validate_length(&"あ".repeat(MAX_TEXT_LEN)).is_ok(), "上限ちょうどは OK");
+        assert!(
+            validate_length(&"あ".repeat(MAX_TEXT_LEN)).is_ok(),
+            "上限ちょうどは OK"
+        );
         assert_eq!(
-            validate_length(&"あ".repeat(MAX_TEXT_LEN + 1)).unwrap_err().0,
+            validate_length(&"あ".repeat(MAX_TEXT_LEN + 1))
+                .unwrap_err()
+                .0,
             StatusCode::BAD_REQUEST,
             "上限+1 は 400"
         );
@@ -638,7 +644,14 @@ mod tests {
     #[test]
     fn normalize_mode_known_through_unknown_to_default() {
         for m in [
-            "tts", "hiragana", "ruby", "kanji", "romaji", "romaji-kunrei", "analyze", "accent",
+            "tts",
+            "hiragana",
+            "ruby",
+            "kanji",
+            "romaji",
+            "romaji-kunrei",
+            "analyze",
+            "accent",
         ] {
             assert_eq!(normalize_mode(m), m, "known mode はそのまま");
         }
@@ -650,10 +663,22 @@ mod tests {
 
     #[test]
     fn detect_degraded_logic() {
-        assert!(!detect_degraded("kanji", "猫", "猫"), "kanji mode は常に false");
-        assert!(detect_degraded("hiragana", "猫", ""), "空 result は degraded");
-        assert!(detect_degraded("hiragana", "猫", "猫"), "漢字含みで result==input は degraded");
-        assert!(!detect_degraded("hiragana", "猫", "ねこ"), "解決済は not degraded");
+        assert!(
+            !detect_degraded("kanji", "猫", "猫"),
+            "kanji mode は常に false"
+        );
+        assert!(
+            detect_degraded("hiragana", "猫", ""),
+            "空 result は degraded"
+        );
+        assert!(
+            detect_degraded("hiragana", "猫", "猫"),
+            "漢字含みで result==input は degraded"
+        );
+        assert!(
+            !detect_degraded("hiragana", "猫", "ねこ"),
+            "解決済は not degraded"
+        );
         assert!(
             !detect_degraded("hiragana", "ねこ", "ねこ"),
             "漢字なしなら result==input でも not degraded"

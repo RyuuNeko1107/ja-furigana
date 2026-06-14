@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(parse_duration("1d"), Some(Duration::from_secs(86400)));
         assert_eq!(parse_duration("3600s"), Some(Duration::from_secs(3600)));
         assert_eq!(parse_duration("3600"), Some(Duration::from_secs(3600))); // 単位なし = 秒
-        // 不正 → None (= caller は default にフォールバック)
+                                                                             // 不正 → None (= caller は default にフォールバック)
         assert_eq!(parse_duration(""), None);
         assert_eq!(parse_duration("abc"), None);
         assert_eq!(parse_duration("1.5h"), None); // 非整数

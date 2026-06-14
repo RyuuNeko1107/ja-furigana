@@ -168,10 +168,19 @@ mod tests {
         let allowed = vec!["alpha-secret".to_string(), "bravo-secret".to_string()];
         assert!(tokens_match(&allowed, "alpha-secret"));
         assert!(tokens_match(&allowed, "bravo-secret"));
-        assert!(!tokens_match(&allowed, "charlie-secret"), "非メンバーは拒否");
+        assert!(
+            !tokens_match(&allowed, "charlie-secret"),
+            "非メンバーは拒否"
+        );
         // length 不一致 (prefix / 余分) は早期 false。timing-safe 比較でも結果は正しいこと。
-        assert!(!tokens_match(&allowed, "alpha-secre"), "短い prefix を通さない");
-        assert!(!tokens_match(&allowed, "alpha-secrett"), "長い superstring を通さない");
+        assert!(
+            !tokens_match(&allowed, "alpha-secre"),
+            "短い prefix を通さない"
+        );
+        assert!(
+            !tokens_match(&allowed, "alpha-secrett"),
+            "長い superstring を通さない"
+        );
         assert!(!tokens_match(&allowed, ""), "空 token を通さない");
         assert!(!tokens_match(&[], "anything"), "allowed 空なら誰も通さない");
     }
@@ -196,8 +205,14 @@ mod tests {
             Some("K")
         );
         // 小文字 bearer / 別 scheme / prefix 無しは None (誤受理しない)。
-        assert_eq!(extract_token(&req_with(&[("authorization", "bearer K")])), None);
-        assert_eq!(extract_token(&req_with(&[("authorization", "Basic K")])), None);
+        assert_eq!(
+            extract_token(&req_with(&[("authorization", "bearer K")])),
+            None
+        );
+        assert_eq!(
+            extract_token(&req_with(&[("authorization", "Basic K")])),
+            None
+        );
         assert_eq!(extract_token(&req_with(&[("authorization", "K")])), None);
     }
 

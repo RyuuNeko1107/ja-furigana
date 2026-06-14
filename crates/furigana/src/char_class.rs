@@ -351,8 +351,8 @@ mod tests {
         assert!(!is_symbol_char('あ')); // かなは記号でない
         assert!(!is_symbol_char(' ')); // 空白は除外
         assert!(!is_symbol_char('\n')); // 制御文字は除外
-        // U+2028 (LINE SEPARATOR) は whitespace なので、 一般 punctuation range
-        // (U+2000..U+206F) に入っていても記号扱いしない (guard が優先)。
+                                        // U+2028 (LINE SEPARATOR) は whitespace なので、 一般 punctuation range
+                                        // (U+2000..U+206F) に入っていても記号扱いしない (guard が優先)。
         assert!(!is_symbol_char('\u{2028}'));
     }
 }

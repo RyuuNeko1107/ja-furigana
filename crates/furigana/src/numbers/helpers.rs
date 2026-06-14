@@ -198,7 +198,10 @@ mod tests {
         assert_eq!(kansuji_to_arabic("千二百").as_deref(), Some("1200"));
         assert_eq!(kansuji_to_arabic("一千二百").as_deref(), Some("1200"));
         assert_eq!(kansuji_to_arabic("一万").as_deref(), Some("10000"));
-        assert_eq!(kansuji_to_arabic("一万二千三百四十五").as_deref(), Some("12345"));
+        assert_eq!(
+            kansuji_to_arabic("一万二千三百四十五").as_deref(),
+            Some("12345")
+        );
         assert_eq!(kansuji_to_arabic("一億").as_deref(), Some("100000000"));
         // 単位のみ (直前桁無し → 暗黙の 1) も解く (group==0 分岐)。
         assert_eq!(kansuji_to_arabic("万").as_deref(), Some("10000"));
@@ -209,8 +212,15 @@ mod tests {
     fn kansuji_to_arabic_covers_all_digits() {
         // 一〜九 を全て個別に固定 (digit_of_kansuji の各 arm を網羅)。
         for (k, n) in [
-            ("一", "1"), ("二", "2"), ("三", "3"), ("四", "4"), ("五", "5"),
-            ("六", "6"), ("七", "7"), ("八", "8"), ("九", "9"),
+            ("一", "1"),
+            ("二", "2"),
+            ("三", "3"),
+            ("四", "4"),
+            ("五", "5"),
+            ("六", "6"),
+            ("七", "7"),
+            ("八", "8"),
+            ("九", "9"),
         ] {
             assert_eq!(kansuji_to_arabic(k).as_deref(), Some(n), "digit {k}");
         }
