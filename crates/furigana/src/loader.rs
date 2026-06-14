@@ -255,11 +255,17 @@ pub const SYMBOLS_FILE: &str = "symbols.toml";
 pub const NUMERIC_PHRASES_FILE: &str = "numeric_phrases.toml";
 /// 異体字マップ。 配布物 (ja-furigana-dict release tar) 内のファイル名と一致させる。
 /// 旧 alpha 系で「`compat_map.toml`」 にしていた時代があったが、 dict 側は当初
-/// から `core/compat.toml` で配布しており、 lib が探していたファイル名と乖離して
-/// **異体字正規化が無効化されていた** (reading::tokenize_text Step 1 が no-op
-/// になり、 「髙橋」 / 「檜風呂」 等が compat 経由で標準字に変換されないまま
-/// chunker / Lindera に流れていた)。 R15 で corpus に「檜風呂に入る」 が追加され
-/// るまで気付かれなかった構造的 bug の修正。
+/// から `compat.toml` で配布しており、 lib が探していたファイル名と乖離して
+/// **異体字正規化が無効化されていた** (R15 で corpus 「檜風呂に入る」 が追加される
+/// まで気付かれなかった構造的 bug)。
+///
+/// **2026-06-14**: dict 配布での配置を `core/compat.toml` → `rules/compat.toml` に移動。
+/// `load_rules_dir` は `rules_dir` しか走査せず role="compat" を読むため、 wrapper が
+/// `rules_dir` / `core_dict_dir` を別 path で mount する production 構成では `core/` 配下の
+/// compat が一切読まれず異体字正規化が dead だった (NFKC/IVS は `CompatData` 非依存で
+/// 動作)。 compat は辞書 entry でなく入力正規化ルールなので `rules/` が本来の home。
+/// 加えて [`crate::api::FuriganaBuilder::build`] が core/user dict 配下の role="compat" も
+/// 補完読みするので、 どちらの配置でも拾える (defense-in-depth)。
 pub const COMPAT_FILE: &str = "compat.toml";
 /// 後処理ルール (Step 7 (mode 別後処理 regex))
 pub const POSTPROCESS_FILE: &str = "postprocess.toml";
