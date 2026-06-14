@@ -182,6 +182,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn number_to_katakana_edges() {
+        // 小数 (テン 区切り)
+        assert_eq!(number_to_katakana("1.5"), "イチテンゴ");
+        // ゼロ群を含む桁上がり (空の百/十群を「ゼロ」で埋めない)
+        assert_eq!(number_to_katakana("10001"), "イチマンイチ");
+        assert_eq!(number_to_katakana("100010000"), "イチオクイチマン");
+        // 不正形式 (複数ドット) は passthrough fallback
+        assert_eq!(number_to_katakana("1.2.3"), "1.2.3");
+        // 末尾ドット (空の小数部) は小数部なし
+        assert_eq!(number_to_katakana("1."), "イチ");
+    }
+
+    #[test]
     fn basic() {
         assert_eq!(number_to_katakana("0"), "ゼロ");
         assert_eq!(number_to_katakana("1"), "イチ");

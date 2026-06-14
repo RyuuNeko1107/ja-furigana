@@ -433,3 +433,22 @@ async fn shutdown_signal() {
         tracing::info!("Ctrl+C を受信、シャットダウンします");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn parse_duration_units_and_invalid() {
+        assert_eq!(parse_duration("30m"), Some(Duration::from_secs(1800)));
+        assert_eq!(parse_duration("1h"), Some(Duration::from_secs(3600)));
+        assert_eq!(parse_duration("1d"), Some(Duration::from_secs(86400)));
+        assert_eq!(parse_duration("3600s"), Some(Duration::from_secs(3600)));
+        assert_eq!(parse_duration("3600"), Some(Duration::from_secs(3600))); // 単位なし = 秒
+        // 不正 → None (= caller は default にフォールバック)
+        assert_eq!(parse_duration(""), None);
+        assert_eq!(parse_duration("abc"), None);
+        assert_eq!(parse_duration("1.5h"), None); // 非整数
+    }
+}

@@ -77,6 +77,9 @@ mod tests {
         sanitize_dict_value("phrase", "こんにちは、世界。").unwrap();
         // tab / newline / cr は許容
         sanitize_dict_value("multi", "a\tb\nc\rd").unwrap();
+        // 半角スペース (0x20) は制御文字でない (境界 `code < 0x20`) ので許可
+        sanitize_dict_value("spaced", "a b c").unwrap();
+        sanitize_dict_value("spaced", "ア イ").unwrap();
     }
 
     #[test]

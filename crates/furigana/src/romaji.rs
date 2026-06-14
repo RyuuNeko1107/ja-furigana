@@ -42,6 +42,7 @@ pub fn hiragana_to_romaji(s: &str, style: RomajiStyle) -> String {
 
         // 促音 っ → 次の子音を重ねる
         if c == 'っ' {
+            let mut geminated = false;
             if let Some(next_pair) = peek_kana(&chars, i + 1, style) {
                 if let Some(first_consonant) = next_pair.romaji.bytes().next() {
                     if !is_vowel(first_consonant as char) {
@@ -54,8 +55,14 @@ pub fn hiragana_to_romaji(s: &str, style: RomajiStyle) -> String {
                             first_consonant as char
                         };
                         out.push(to_push);
+                        geminated = true;
                     }
                 }
+            }
+            // 重ねる子音が無い (末尾 / 母音前) っ は silent drop せず、 base mora
+            // (つ = "tsu") に倒して表現する。
+            if !geminated {
+                out.push_str("tsu");
             }
             i += 1;
             continue;
@@ -90,12 +97,12 @@ pub fn hiragana_to_romaji(s: &str, style: RomajiStyle) -> String {
             continue;
         }
 
-        // 長音 ー → 直前の母音を repeat
+        // 長音 ー → 直前の母音を repeat。 直前に母音が無い (撥音後 / 文頭) 場合は
+        // silent drop せず長音マーカー "-" を出す。
         if c == 'ー' {
-            if let Some(last) = out.chars().last() {
-                if is_vowel(last) {
-                    out.push(last);
-                }
+            match out.chars().last() {
+                Some(last) if is_vowel(last) => out.push(last),
+                _ => out.push('-'),
             }
             i += 1;
             continue;
@@ -358,6 +365,24 @@ mod tests {
     }
 
     #[test]
+    fn sokuon_before_youon_doubles_consonant() {
+        // 促音 っ の直後が拗音のとき、 peek_kana の youon lookahead で子音を重ねる。
+        // (もっち=単音 と異なり、 peek_kana の i+1/lookup_youon 経路を通す)
+        assert_eq!(hiragana_to_romaji("いっしょ", RomajiStyle::Hepburn), "issho");
+        assert_eq!(hiragana_to_romaji("いっしょ", RomajiStyle::Kunrei), "issyo");
+        assert_eq!(hiragana_to_romaji("ぎゅっきゃ", RomajiStyle::Hepburn), "gyukkya");
+    }
+
+    #[test]
+    fn sokuon_orphan_not_dropped() {
+        // 重ねる子音が無い っ (末尾 / 母音前) を silent drop しない。
+        // base mora (tsu) で表現する (= っ を つ 相当に倒す)。
+        assert_eq!(hiragana_to_romaji("あっ", RomajiStyle::Hepburn), "atsu");
+        assert_eq!(hiragana_to_romaji("かっあ", RomajiStyle::Hepburn), "katsua");
+        assert_eq!(hiragana_to_romaji("っ", RomajiStyle::Hepburn), "tsu");
+    }
+
+    #[test]
     fn hatsuon_n_before_bmp() {
         // 撥音: ヘボン式は b/m/p の前で m
         assert_eq!(
@@ -396,11 +421,98 @@ mod tests {
     }
 
     #[test]
+    fn chouon_without_preceding_vowel_not_dropped() {
+        // 直前に母音が無い ー (撥音後 / 文頭) を silent drop しない。
+        // 母音 repeat できないので長音マーカー "-" を出す。
+        assert_eq!(hiragana_to_romaji("んー", RomajiStyle::Hepburn), "n-");
+        assert_eq!(hiragana_to_romaji("ー", RomajiStyle::Hepburn), "-");
+    }
+
+    #[test]
     fn katakana_input_is_normalized() {
         // 入力がカタカナでも内部で hira 化されて動く
         assert_eq!(
             hiragana_to_romaji("ハイザクラ", RomajiStyle::Hepburn),
             "haizakura"
         );
+    }
+
+    #[test]
+    fn hepburn_covers_full_gojuon() {
+        // 五十音 + 濁音 + 半濁音 + ゐゑを + ゔ を全て個別に固定 (= ヘボン式の仕様)。
+        // lookup_single の各 arm を網羅し、 表の取りこぼし・改変を検出する。
+        use RomajiStyle::Hepburn as H;
+        let cases: &[(&str, &str)] = &[
+            ("あ", "a"), ("い", "i"), ("う", "u"), ("え", "e"), ("お", "o"),
+            ("か", "ka"), ("き", "ki"), ("く", "ku"), ("け", "ke"), ("こ", "ko"),
+            ("が", "ga"), ("ぎ", "gi"), ("ぐ", "gu"), ("げ", "ge"), ("ご", "go"),
+            ("さ", "sa"), ("し", "shi"), ("す", "su"), ("せ", "se"), ("そ", "so"),
+            ("ざ", "za"), ("じ", "ji"), ("ず", "zu"), ("ぜ", "ze"), ("ぞ", "zo"),
+            ("た", "ta"), ("ち", "chi"), ("つ", "tsu"), ("て", "te"), ("と", "to"),
+            ("だ", "da"), ("ぢ", "ji"), ("づ", "zu"), ("で", "de"), ("ど", "do"),
+            ("な", "na"), ("に", "ni"), ("ぬ", "nu"), ("ね", "ne"), ("の", "no"),
+            ("は", "ha"), ("ひ", "hi"), ("ふ", "fu"), ("へ", "he"), ("ほ", "ho"),
+            ("ば", "ba"), ("び", "bi"), ("ぶ", "bu"), ("べ", "be"), ("ぼ", "bo"),
+            ("ぱ", "pa"), ("ぴ", "pi"), ("ぷ", "pu"), ("ぺ", "pe"), ("ぽ", "po"),
+            ("ま", "ma"), ("み", "mi"), ("む", "mu"), ("め", "me"), ("も", "mo"),
+            ("や", "ya"), ("ゆ", "yu"), ("よ", "yo"),
+            ("ら", "ra"), ("り", "ri"), ("る", "ru"), ("れ", "re"), ("ろ", "ro"),
+            ("わ", "wa"), ("を", "wo"), ("ん", "n"),
+            ("ゐ", "i"), ("ゑ", "e"), ("ゔ", "vu"),
+        ];
+        for (kana, romaji) in cases {
+            assert_eq!(hiragana_to_romaji(kana, H), *romaji, "Hepburn {kana}");
+        }
+    }
+
+    #[test]
+    fn hepburn_covers_all_youon() {
+        // 拗音 (ゃゅょ) 全 11 行 × 3 を網羅 (lookup_youon の各 arm を pin)。
+        use RomajiStyle::Hepburn as H;
+        let cases: &[(&str, &str)] = &[
+            ("きゃ", "kya"), ("きゅ", "kyu"), ("きょ", "kyo"),
+            ("ぎゃ", "gya"), ("ぎゅ", "gyu"), ("ぎょ", "gyo"),
+            ("しゃ", "sha"), ("しゅ", "shu"), ("しょ", "sho"),
+            ("じゃ", "ja"), ("じゅ", "ju"), ("じょ", "jo"),
+            ("ちゃ", "cha"), ("ちゅ", "chu"), ("ちょ", "cho"),
+            ("にゃ", "nya"), ("にゅ", "nyu"), ("にょ", "nyo"),
+            ("ひゃ", "hya"), ("ひゅ", "hyu"), ("ひょ", "hyo"),
+            ("びゃ", "bya"), ("びゅ", "byu"), ("びょ", "byo"),
+            ("ぴゃ", "pya"), ("ぴゅ", "pyu"), ("ぴょ", "pyo"),
+            ("みゃ", "mya"), ("みゅ", "myu"), ("みょ", "myo"),
+            ("りゃ", "rya"), ("りゅ", "ryu"), ("りょ", "ryo"),
+        ];
+        for (kana, romaji) in cases {
+            assert_eq!(hiragana_to_romaji(kana, H), *romaji, "youon {kana}");
+        }
+    }
+
+    #[test]
+    fn kunrei_covers_differences_incl_youon() {
+        // 訓令式が ヘボン式 と異なる arm を網羅 (単音 + 拗音)。
+        use RomajiStyle::Kunrei as K;
+        let cases: &[(&str, &str)] = &[
+            ("し", "si"), ("じ", "zi"), ("ち", "ti"), ("つ", "tu"),
+            ("ぢ", "zi"), ("づ", "zu"), ("ふ", "hu"),
+            ("しゃ", "sya"), ("しゅ", "syu"), ("しょ", "syo"),
+            ("じゃ", "zya"), ("じゅ", "zyu"), ("じょ", "zyo"),
+            ("ちゃ", "tya"), ("ちゅ", "tyu"), ("ちょ", "tyo"),
+        ];
+        for (kana, romaji) in cases {
+            assert_eq!(hiragana_to_romaji(kana, K), *romaji, "Kunrei {kana}");
+        }
+    }
+
+    #[test]
+    fn small_kana_standalone_fallback() {
+        // 単独出現の小書きかな fallback (lookup_single の小書き arm)。
+        use RomajiStyle::Hepburn as H;
+        let cases: &[(&str, &str)] = &[
+            ("ぁ", "a"), ("ぃ", "i"), ("ぅ", "u"), ("ぇ", "e"), ("ぉ", "o"),
+            ("ゃ", "ya"), ("ゅ", "yu"), ("ょ", "yo"),
+        ];
+        for (kana, romaji) in cases {
+            assert_eq!(hiragana_to_romaji(kana, H), *romaji, "small {kana}");
+        }
     }
 }

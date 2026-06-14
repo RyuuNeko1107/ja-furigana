@@ -272,3 +272,29 @@ fn toml_escape(s: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_user_input_rejects_control_chars() {
+        // 通常テキスト / tab・改行・CR は許容
+        validate_user_input("x", "灰桜").unwrap();
+        validate_user_input("x", "a\tb\nc\rd").unwrap();
+        // C0 制御 (NUL/BEL) と DEL は reject (cli-added.toml 破壊 / self-DoS 防御)
+        assert!(validate_user_input("x", "a\u{0}b").is_err());
+        assert!(validate_user_input("x", "a\u{7}b").is_err());
+        assert!(validate_user_input("x", "a\u{7f}b").is_err());
+    }
+
+    #[test]
+    fn toml_escape_escapes_specials_only() {
+        assert_eq!(toml_escape("ふつう"), "ふつう"); // 非対象は不変
+        assert_eq!(toml_escape("a\"b"), "a\\\"b");
+        assert_eq!(toml_escape("a\\b"), "a\\\\b");
+        assert_eq!(toml_escape("a\nb"), "a\\nb");
+        assert_eq!(toml_escape("a\rb"), "a\\rb");
+        assert_eq!(toml_escape("a\tb"), "a\\tb");
+    }
+}

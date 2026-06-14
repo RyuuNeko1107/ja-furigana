@@ -318,18 +318,17 @@ mod tests {
 
     #[test]
     fn parse_multi_phrase_consecutive_brackets() {
-        // [トウキョウ][ト]リツ → 2 phrases via consecutive [
+        // 入力 = [トウキョウ] [ト] リツ → 連続 [ で 2 phrase に分かれる。
+        // phrase 1 = 「[トウキョウ]」: 末尾に ] があり核は mora 4 → accent Some(4) (尾高)。
+        //   (cf. parse_explicit_open_flat の「[カミテ」 は ] 無しなので Some(0) 平板。
+        //    ここは ] があるので尾高で正しい。)
+        // phrase 2 = 「[ト]リツ」: ] は mora 1 の後 → accent Some(1)。
         let r = parse_bracket_notation("[トウキョウ][ト]リツ");
         assert_eq!(r.reading, "トウキョウトリツ");
         assert_eq!(r.accent_phrases.len(), 2);
-        // phrase 1: トウキョウ (no ] before second [... wait)
-        // Actually: [トウキョウ] — the ] here is accent marker, not end-of-phrase
-        // But then [ starts phrase 2, so phrase 1 is flushed with ] present
-        // ] is at mora 4 → accent = 4 (尾高)
         assert_eq!(r.accent_phrases[0].reading, "トウキョウ");
         assert_eq!(r.accent_phrases[0].mora, 4);
-        assert_eq!(r.accent_phrases[0].accent, Some(4));
-        // phrase 2: ト]リツ → accent = 1
+        assert_eq!(r.accent_phrases[0].accent, Some(4)); // 尾高 (] が末尾 mora)
         assert_eq!(r.accent_phrases[1].reading, "トリツ");
         assert_eq!(r.accent_phrases[1].mora, 3);
         assert_eq!(r.accent_phrases[1].accent, Some(1));
@@ -367,6 +366,20 @@ mod tests {
         assert_eq!(r.accent_phrases.len(), 1);
         assert_eq!(r.accent_phrases[0].mora, 3);
         assert_eq!(r.accent_phrases[0].accent, Some(0));
+    }
+
+    #[test]
+    fn parse_multi_phrase_first_phrase_without_bracket_is_unknown() {
+        // bracket 情報の無い phrase は accent 不明 = None (平板 Some(0) ではない)。
+        // multi-phrase の先頭が bracket 無しのケースを固定 (flush_phrase の
+        // `None if has_open => Some(0)` / `None => None` 分岐の後者を pin)。
+        let r = parse_bracket_notation("カミ/[テ]");
+        assert_eq!(r.reading, "カミテ");
+        assert_eq!(r.accent_phrases.len(), 2);
+        assert_eq!(r.accent_phrases[0].reading, "カミ");
+        assert_eq!(r.accent_phrases[0].accent, None); // bracket 無し = 不明
+        assert_eq!(r.accent_phrases[1].reading, "テ");
+        assert_eq!(r.accent_phrases[1].accent, Some(1));
     }
 
     // ─── intonation.md §4.1 examples ────────────────────────────────────────

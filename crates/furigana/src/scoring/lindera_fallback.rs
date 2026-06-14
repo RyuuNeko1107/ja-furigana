@@ -62,9 +62,13 @@ use crate::scoring::candidate::{Candidate, CandidateProvider, Score, ScoringCont
 fn is_real_cjk_ideograph(c: char) -> bool {
     matches!(
         c,
-        '\u{3400}'..='\u{4DBF}' |   // CJK 拡張 A
-        '\u{4E00}'..='\u{9FFF}' |   // CJK 統合漢字
-        '\u{F900}'..='\u{FAFF}'     // CJK 互換
+        '\u{3400}'..='\u{4DBF}' |    // CJK 拡張 A
+        '\u{4E00}'..='\u{9FFF}' |    // CJK 統合漢字
+        '\u{F900}'..='\u{FAFF}' |    // CJK 互換
+        '\u{20000}'..='\u{2A6DF}' |  // CJK 拡張 B
+        '\u{2A700}'..='\u{2EBEF}' |  // CJK 拡張 C/D/E/F
+        '\u{2F800}'..='\u{2FA1F}' |  // CJK 互換補助
+        '\u{30000}'..='\u{323AF}'    // CJK 拡張 G/H
     )
 }
 
@@ -229,26 +233,8 @@ mod tests {
         assert_eq!(ga.reading, "ガ");
     }
 
-    #[test]
-    fn band_50_loses_to_kanji_band_100() {
-        // band 比較の sanity: Lindera band 50 < kanji band 100。
-        // 同じ pos で kanji candidate がある場合、 PathScore.weakest_band で
-        // kanji 勝ち (= Lindera は何も無い時の最終 fallback)。
-        let lindera = Score::lindera(2);
-        let kanji = Score::kanji(2);
-        assert!(kanji > lindera);
-    }
-
-    #[test]
-    fn band_150_beats_kanji_band_100_for_compound() {
-        // ★alpha.20: 2 字以上純漢字 surface は band 150 で 単漢字 default (100) を上回る。
-        let compound = Score::lindera_compound(2);
-        let kanji = Score::kanji(1);
-        assert!(compound > kanji);
-        // ただし dict / 特殊処理 には依然負ける
-        assert!(compound < Score::dict_exact(2));
-        assert!(compound < Score::special(2));
-    }
+    // (band 値の純粋な大小比較は Score の Ord 契約であり candidate.rs で網羅済。
+    //  ここでは Provider が実際に出す Candidate.score.band を検証する。)
 
     #[test]
     fn kanji_compound_surface_gets_band_150() {
@@ -258,13 +244,15 @@ mod tests {
         let input = "最近の話";
         let p = LinderaFallbackProvider::new(&a, input);
         let cands_at_0 = p.candidates_at(&ctx(input), 0);
-        let saikin = cands_at_0.iter().find(|c| c.surface == "最近");
-        if let Some(c) = saikin {
-            assert_eq!(
-                c.score.band, 150,
-                "「最近」 (2 字純漢字) は band 150 (= lindera_compound) を期待"
-            );
-        }
+        // find が None だと旧 test は no-op で緑になっていた。候補存在を強制する。
+        let saikin = cands_at_0
+            .iter()
+            .find(|c| c.surface == "最近")
+            .unwrap_or_else(|| panic!("IPADIC は「最近」を 1 token で返すはず: {cands_at_0:?}"));
+        assert_eq!(
+            saikin.score.band, 150,
+            "「最近」 (2 字純漢字) は band 150 (= lindera_compound) を期待"
+        );
     }
 
     #[test]
@@ -274,9 +262,11 @@ mod tests {
         let input = "私";
         let p = LinderaFallbackProvider::new(&a, input);
         let cands = p.candidates_at(&ctx(input), 0);
-        if let Some(c) = cands.iter().find(|c| c.surface == "私") {
-            assert_eq!(c.score.band, 50, "単漢字 surface は band 50 維持");
-        }
+        let watashi = cands
+            .iter()
+            .find(|c| c.surface == "私")
+            .unwrap_or_else(|| panic!("「私」 token が出るはず: {cands:?}"));
+        assert_eq!(watashi.score.band, 50, "単漢字 surface は band 50 維持");
     }
 
     #[test]
@@ -285,9 +275,12 @@ mod tests {
         let a = analyzer();
         let input = "来た";
         let p = LinderaFallbackProvider::new(&a, input);
+        let cands = p.candidates_at(&ctx(input), 0);
+        // 空 Vec だと旧 for は vacuously pass。少なくとも 1 edge は出るはず。
+        assert!(!cands.is_empty(), "「来た」 は edge を生むはず");
         // Lindera が 「来」 + 「た」 と 2 token に分ける場合、 各々 1 字 → 50。
         // 仮に 1 token (「来た」) で返した場合も混在で band 50。
-        for c in p.candidates_at(&ctx(input), 0) {
+        for c in &cands {
             assert_eq!(
                 c.score.band, 50,
                 "漢字+okurigana 混在 surface は band 50 維持 ({:?})",
@@ -299,15 +292,18 @@ mod tests {
     #[test]
     fn unknown_token_falls_back_to_surface_reading() {
         // 完全に未知の記号列 等は Lindera reading None になるので surface を reading 化、
-        // 「読まないが path 上の edge にはなる」 動作 (= path 構築の safety net)。
+        // 「読まないが path 上の edge にはなる」 動作 (= path 構築の safety net = gap-passthrough)。
         let a = analyzer();
-        // 仮に Lindera が 「★」 に reading を付けなければ surface fallback
         let input = "★";
         let p = LinderaFallbackProvider::new(&a, input);
         let cands = p.candidates_at(&ctx(input), 0);
-        // edge が出るか / reading が surface fallback か (= None ではない) を check
-        if let Some(c) = cands.first() {
-            assert!(!c.reading.is_empty(), "reading should fallback to surface");
-        }
+        // safety net は「必ず」 edge を出す契約 (空だと後段で文字が消える)。
+        let first = cands
+            .first()
+            .unwrap_or_else(|| panic!("safety net は ★ にも edge を出すはず: {cands:?}"));
+        assert!(
+            !first.reading.is_empty(),
+            "reading should fallback to surface"
+        );
     }
 }

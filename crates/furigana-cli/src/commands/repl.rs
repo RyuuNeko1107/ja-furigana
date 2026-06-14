@@ -411,3 +411,33 @@ fn print_help() {
     println!("コマンド名と一致しない入力は現在の mode で変換して表示します。");
     println!("Tab: コマンド補完 / ↑↓: 履歴 / Ctrl-A,E,W,U: 行編集");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mode_parse_roundtrip_and_aliases() {
+        for name in [
+            "all", "ruby", "hiragana", "tts", "kanji", "romaji", "romaji-kunrei", "accent",
+        ] {
+            assert_eq!(Mode::parse(name).map(Mode::as_str), Some(name), "roundtrip {name}");
+        }
+        assert_eq!(Mode::parse("hira").map(Mode::as_str), Some("hiragana"));
+        assert_eq!(Mode::parse("kunrei").map(Mode::as_str), Some("romaji-kunrei"));
+        assert!(Mode::parse("bogus").is_none());
+    }
+
+    #[test]
+    fn parse_meta_recognizes_commands_only() {
+        // 既知コマンド (`:` は optional)
+        assert_eq!(parse_meta(":q"), Some(("q", "")));
+        assert_eq!(parse_meta("quit"), Some(("quit", "")));
+        assert_eq!(parse_meta(":mode hira"), Some(("mode", "hira")));
+        assert_eq!(parse_meta("mode hira"), Some(("mode", "hira")));
+        // 漢字先頭 / 通常テキストは None (= 変換側へ流す guard)
+        assert_eq!(parse_meta("灰桜"), None);
+        assert_eq!(parse_meta("猫が好き"), None);
+        assert_eq!(parse_meta("hello"), None);
+    }
+}

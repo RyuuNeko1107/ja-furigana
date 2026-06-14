@@ -89,12 +89,33 @@ pub fn tokens_to_hiragana(tokens: &[ReadingToken]) -> String {
     out
 }
 
+/// ruby markup の区切り記号 (`{` `}` `|`) および escape 文字 (`\`) を入力由来の
+/// テキストから安全にするため backslash escape して `out` に push する。
+///
+/// 入力テキストに `{` `}` `|` が含まれると、 そのまま出力すると ruby markup
+/// `{surface|reading}` と衝突して曖昧になる (例: 入力 `猫{犬}` →
+/// `{猫|ねこ}{{犬|いぬ}}` がパース不能)。 そこで素テキスト・surface 側の
+/// `\` `{` `}` `|` を `\` で escape する。 通常の日本語入力 (これらを含まない) では
+/// 何も escape されず出力は不変。 消費側は `\{` `\}` `\|` `\\` を un-escape すること。
+fn push_ruby_escaped(out: &mut String, s: &str) {
+    for c in s.chars() {
+        if matches!(c, '\\' | '{' | '}' | '|') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+}
+
 /// トークン列を `{漢字|ひらがな}` 形式の ruby 文字列に変換
 ///
 /// - 読みあり + surface が **全部 kana** → surface をそのまま (ruby 不要)
 /// - 読みあり + ひらがな化後 surface と一致 → surface をそのまま (ruby 不要)
 /// - 読みあり + その他 → `{surface|reading}`
 /// - 読みなし → surface をそのまま
+///
+/// 入力由来テキスト (素通し surface) に含まれる ruby 区切り記号 `{` `}` `|` および
+/// escape 文字 `\` は backslash escape される ([`push_ruby_escaped`])。 これらを
+/// 含まない通常入力では出力は従来と完全に同一。
 #[must_use]
 pub fn tokens_to_ruby(tokens: &[ReadingToken]) -> String {
     let mut out = String::new();
@@ -103,21 +124,21 @@ pub fn tokens_to_ruby(tokens: &[ReadingToken]) -> String {
             Some(reading) => {
                 if surface_is_all_kana(&t.surface) {
                     // user が kana で書いた surface は ruby 不要
-                    out.push_str(&t.surface);
+                    push_ruby_escaped(&mut out, &t.surface);
                     continue;
                 }
                 let hira = kana::kata_to_hira(reading);
                 if hira == t.surface {
-                    out.push_str(&t.surface);
+                    push_ruby_escaped(&mut out, &t.surface);
                 } else {
                     out.push('{');
-                    out.push_str(&t.surface);
+                    push_ruby_escaped(&mut out, &t.surface);
                     out.push('|');
-                    out.push_str(&hira);
+                    out.push_str(&hira); // reading は kana 由来で区切り記号を含まない
                     out.push('}');
                 }
             }
-            None => out.push_str(&t.surface),
+            None => push_ruby_escaped(&mut out, &t.surface),
         }
     }
     out

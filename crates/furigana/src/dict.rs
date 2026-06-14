@@ -341,6 +341,18 @@ impl Dict {
     pub fn insert(&mut self, surface: impl Into<String>, reading: impl Into<String>) {
         let s = surface.into();
         let r = reading.into();
+        // バルク TOML load (from_toml_str) と同じ per-value sanitize を runtime 追加にも
+        // 適用する (経路によらず 1 件の追加を bounded に保つ)。上限超過 / 禁止文字は
+        // OOM / Trojan-Source 経路なので、 壊れた 1 件は静かに skip する
+        // (他経路の不正 entry skip と一貫、 公開 add_reading は infallible 維持)。
+        if let Err(e) = crate::sanitize::sanitize_dict_value("dict surface (insert)", &s) {
+            tracing::debug!("add_reading skip (surface): {e}");
+            return;
+        }
+        if let Err(e) = crate::sanitize::sanitize_dict_value("dict reading (insert)", &r) {
+            tracing::debug!("add_reading skip (reading): {e}");
+            return;
+        }
         if s.chars().count() == 1 {
             self.unihan.insert(s.clone(), r.clone());
         } else {
@@ -395,6 +407,16 @@ impl Dict {
                     m.entry(c).or_default().push(k.clone());
                 }
             }
+            // 各 bucket を surface 昇順に sort して列挙順を決定的にする。
+            // HashMap の反復順は実行ごとに変わりうる (RandomState) ため、 sort しないと
+            // 同 score 候補の tie-break (= 第一発見勝ち、 engine.rs strict-greater) や
+            // analyze() の同 weight alternatives 順序が run 間で揺れる。
+            // production の tokens() 採択読みは「同 range の真の同点 = 同一 surface =
+            // 同一 HashMap key = 単一」 ゆえ元から不変だが、 列挙を決定的にして
+            // deterministic-runtime 契約 (analyze/accent JSON 含む) を明示的に守る。
+            for bucket in m.values_mut() {
+                bucket.sort_unstable();
+            }
             m
         })
     }
@@ -404,8 +426,8 @@ impl Dict {
     /// `DictBridgeProvider` が各 byte 位置で呼ぶ hot path。 全 entry の linear scan
     /// (O(M)) ではなく index 引きした小さな bucket だけを返すので O(k)。
     /// 呼び出し側は更に `surface` 全体の prefix 一致を確認すること (index は先頭
-    /// char しか保証しない)。 順序は build 時の `rich` 反復順依存 (= 元の `rich_iter`
-    /// と同じく HashMap order、 tie-break は scoring engine が決める)。
+    /// char しか保証しない)。 列挙順は **surface 昇順で決定的** (`rich_index` が
+    /// bucket を sort 済、 = HashMap 反復順に依存しない)。 tie-break は scoring engine。
     ///
     /// 内部 (DictBridgeProvider) 専用、 公開 API には載せない (= `pub(crate)`)。
     pub(crate) fn rich_starting_with(&self, c: char) -> impl Iterator<Item = (&str, &Entry)> {
@@ -950,5 +972,47 @@ mod tests {
         let d = Dict::from_toml_file(&path).expect("v2 format should accept");
         assert_eq!(d.lookup("灰桜"), Some("ハイザクラ"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rich_starting_with_enumeration_is_deterministic_sorted() {
+        // 同一先頭 char の rich entry 群が surface 昇順で列挙されること
+        // (= HashMap 反復順に依存しない決定的順序)。これにより同 score 候補の
+        // tie-break / analyze() alternatives 順序が run 間で揺れない。
+        let mut d = Dict::default();
+        // 挿入順をわざと非ソートにする
+        for s in ["生命体", "生", "生命", "生死", "生物"] {
+            d.insert(s.to_string(), "ダミー".to_string());
+        }
+        let got: Vec<&str> = d.rich_starting_with('生').map(|(s, _)| s).collect();
+        let mut want = got.clone();
+        want.sort_unstable();
+        assert_eq!(got, want, "列挙順が surface 昇順 (決定的) であること: {got:?}");
+        assert_eq!(got.len(), 5);
+    }
+
+    #[test]
+    fn insert_skips_oversized_value() {
+        // runtime の insert (= add_reading) も TOML load と同じ per-value sanitize を
+        // 通す。上限超過 reading は OOM 経路なので静かに skip され、追加されない。
+        let mut d = Dict::default();
+        let huge = "あ".repeat(crate::sanitize::MAX_DICT_VALUE_CHARS + 1);
+        d.insert("猫".to_string(), huge);
+        assert_eq!(d.lookup("猫"), None, "上限超過 reading は追加しない");
+        // 正常な追加は従来どおり通る
+        d.insert("猫".to_string(), "ネコ".to_string());
+        assert_eq!(d.lookup("猫"), Some("ネコ"));
+    }
+
+    #[test]
+    fn insert_skips_forbidden_char_value() {
+        // NULL / bidi / zero-width 等の禁止文字を含む値も skip (Trojan Source 防御)。
+        let mut d = Dict::default();
+        d.insert("犬".to_string(), "イ\u{0}ヌ".to_string());
+        assert_eq!(d.lookup("犬"), None, "禁止文字を含む reading は追加しない");
+        // 上限超過の surface 側も skip
+        let huge_surface = "漢".repeat(crate::sanitize::MAX_DICT_VALUE_CHARS + 1);
+        d.insert(huge_surface.clone(), "ヨミ".to_string());
+        assert_eq!(d.lookup(&huge_surface), None);
     }
 }

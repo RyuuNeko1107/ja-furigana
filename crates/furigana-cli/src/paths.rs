@@ -90,3 +90,27 @@ fn default_data_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("プロジェクトディレクトリの解決に失敗"))?;
     Ok(project.data_dir().to_path_buf())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_uses_overrides_and_derives_subpaths() {
+        let base = Path::new("/tmp/furi_d");
+        let p = Paths::resolve(Some(base), Some(Path::new("/tmp/c.toml"))).unwrap();
+        assert_eq!(p.data_dir, base);
+        assert_eq!(p.config_file, Path::new("/tmp/c.toml"));
+        // sub-path 導出 (OS セパレータ差を避けるため join で期待値を作る)
+        assert_eq!(p.data_root(), base.join("data"));
+        assert_eq!(p.dict_user_dir(), base.join("data").join("user"));
+        assert_eq!(p.overrides_file(), base.join("data").join("overrides.toml"));
+    }
+
+    #[test]
+    fn resolve_config_defaults_under_data_dir() {
+        let base = Path::new("/tmp/furi_d");
+        let p = Paths::resolve(Some(base), None).unwrap();
+        assert_eq!(p.config_file, base.join("config.toml"));
+    }
+}

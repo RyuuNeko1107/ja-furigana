@@ -357,14 +357,26 @@ mod tests {
 
     #[test]
     fn extract_www_url_without_scheme() {
-        let tokens = extract_protected_tokens("www.example.com を見て");
-        assert!(tokens.iter().any(|t| t.kind == ProtectedKind::Url));
+        let s = "www.example.com を見て";
+        let tokens = extract_protected_tokens(s);
+        // 「種別が含まれる」だけだと over-capture (末尾の space や「を」 を飲む) を
+        // 見逃す。抽出 range の中身を完全一致で固定する。
+        let url = tokens
+            .iter()
+            .find(|t| t.kind == ProtectedKind::Url)
+            .expect("url token");
+        assert_eq!(&s[url.range.clone()], "www.example.com");
     }
 
     #[test]
     fn extract_email() {
-        let tokens = extract_protected_tokens("foo@bar.com にメール");
-        assert!(tokens.iter().any(|t| t.kind == ProtectedKind::Email));
+        let s = "foo@bar.com にメール";
+        let tokens = extract_protected_tokens(s);
+        let email = tokens
+            .iter()
+            .find(|t| t.kind == ProtectedKind::Email)
+            .expect("email token");
+        assert_eq!(&s[email.range.clone()], "foo@bar.com");
     }
 
     // ─── Emoji extraction ────────────────────────────────────────────────────
@@ -412,15 +424,19 @@ mod tests {
 
     #[test]
     fn extract_no_duplicate_tokens_for_overlapping_url_email() {
-        // URL の中に email っぽい substring がある場合の挙動 (URL が広い range で勝つ)
-        let tokens = extract_protected_tokens("https://user@example.com/page");
-        // URL 1 つだけ、 email は包含されて消える想定
-        let url_count = tokens
-            .iter()
-            .filter(|t| t.kind == ProtectedKind::Url)
-            .count();
-        assert!(url_count >= 1);
-        // 包含 dedup で email tokens は filter される (URL に覆われる場合のみ)
+        // URL の中に email っぽい substring がある場合、 広い range の URL が勝ち、
+        // 包含される email token は dedup で消える。「URL が 1 つ以上」 だけだと
+        // dedup ロジック自体を検証できないので、 token 総数と内訳・range を固定する。
+        let s = "https://user@example.com/page";
+        let tokens = extract_protected_tokens(s);
+        assert_eq!(tokens.len(), 1, "email は URL に包含され dedup される: {tokens:?}");
+        assert_eq!(tokens[0].kind, ProtectedKind::Url);
+        assert_eq!(&s[tokens[0].range.clone()], s, "URL は全体を覆う");
+        assert_eq!(
+            tokens.iter().filter(|t| t.kind == ProtectedKind::Email).count(),
+            0,
+            "包含 email token は残らない"
+        );
     }
 
     // ─── ProtectTokenProvider ────────────────────────────────────────────────

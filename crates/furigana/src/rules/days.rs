@@ -146,9 +146,13 @@ mod tests {
     }
 
     #[test]
-    fn legacy_flat_with_meta_block_only_uses_meta_for_role() {
-        // 旧 release で [meta] が無いがあえて足したケース: top-level の "1"
-        // 等の string は entries に取り込まれ、 [meta] は Table なので silently 無視
+    fn flat_keys_after_meta_header_are_scoped_to_meta_and_ignored() {
+        // TOML scoping の固定: [meta] header の「後」に置かれた "1"="..." 等は
+        // top-level ではなく meta table 配下 (meta."1") に入るため、 entries には
+        // 現れず DaysData は空になる。
+        // = legacy flat 形式のファイルに [meta] を「前置き」してしまうと日読みが
+        //   全て失われる migration gotcha を示す回帰テスト。
+        //   (v2 format は [entries] 必須なのでこの degenerate 入力は実運用では出ない。)
         let toml_str = r#"
             [meta]
             role = "days"
@@ -156,13 +160,11 @@ mod tests {
             "1" = "ツイタチ"
             "2" = "フツカ"
         "#;
-        // ※ TOML 文法的には [meta] の前に top-level key-value が必要、 これは
-        //   後置きなので "1" "2" は [meta] 配下扱い → エラーにならず meta.1 = "..."
-        //   になるが、 [entries] が無いので top-level の meta だけ見て string が
-        //   無いので entries 空。 → このテストは「top-level に String が無いと空」
-        //   を確認する形に
         let data: DaysData = toml::from_str(toml_str).unwrap();
-        assert!(data.is_empty(), "[entries] 無し + meta 配下では entries 空");
+        assert!(
+            data.is_empty(),
+            "[meta] 後置きの flat key は meta 配下に入り entries は空"
+        );
     }
 
     #[test]

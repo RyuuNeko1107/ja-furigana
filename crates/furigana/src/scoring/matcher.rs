@@ -242,11 +242,27 @@ impl MatchCondition {
     }
 }
 
+/// pseudo-token の走査上限 (文字数)。
+///
+/// 同一 char-class が延々続く入力 (例: 同じ漢字 ×10000) で `next_logical_token` /
+/// `prev_logical_token` が run 全体を走査すると、 per-position 呼び出しと合わせて
+/// **O(N²)** になり request amplification DoS の梃子になる。 走査をこの長さで
+/// 打ち切って線形化する。
+///
+/// 正しさ: dict の match condition 値は [`crate::sanitize::MAX_DICT_VALUE_CHARS`] 以下
+/// (sanitize で保証)。 これを **超える** 長さの token は如何なる `*_eq` / `*_eq_any`
+/// とも一致せず、 `*_starts_any` は先頭から最大 condition 長、 `*_char_type` は
+/// 境界 1 文字しか見ない。 よって上限 = `MAX_DICT_VALUE_CHARS + 1` で打ち切れば
+/// 「condition より確実に長い」 ことが判別でき、 match 結果は一切変わらない。
+const MAX_LOGICAL_TOKEN_CHARS: usize = crate::sanitize::MAX_DICT_VALUE_CHARS + 1;
+
 /// 文字種が連続する範囲を 「pseudo-token」 として切り出す helper。
 ///
 /// Smart engine の `DictBridgeProvider` / `KanjiProvider` が path 構築中に
 /// MatchContext を build するために使う。 Lindera token segmentation を使わず
 /// **文字種境界** (= 漢字 / ひらがな / カタカナ / 英数 / 記号) で切る軽量実装。
+///
+/// 走査は [`MAX_LOGICAL_TOKEN_CHARS`] 文字で打ち切る (O(N²) 回避、 match 結果不変)。
 ///
 /// 日本語の助詞 / 助動詞 (= ひらがな連続)、 漢字熟語 (= 漢字連続)、 数字
 /// (= 英数連続) は概ね同 char_type で連続するため、 token-level segmentation
@@ -261,7 +277,10 @@ pub fn next_logical_token(input: &str, start: usize) -> &str {
     let tail = &input[start..];
     let mut first_class: Option<CharType> = None;
     let mut end = start;
-    for (idx, c) in tail.char_indices() {
+    for (n_chars, (idx, c)) in tail.char_indices().enumerate() {
+        if n_chars >= MAX_LOGICAL_TOKEN_CHARS {
+            break; // 異常に長い run を打ち切り (O(N²) 回避、 match 結果は不変)
+        }
         let class = classify_char(c);
         match (first_class, class) {
             (None, Some(cls)) => {
@@ -297,7 +316,10 @@ pub fn prev_logical_token(input: &str, end: usize) -> &str {
     let head = &input[..end];
     let mut last_class: Option<CharType> = None;
     let mut start = end;
-    for (idx, c) in head.char_indices().rev() {
+    for (n_chars, (idx, c)) in head.char_indices().rev().enumerate() {
+        if n_chars >= MAX_LOGICAL_TOKEN_CHARS {
+            break; // 異常に長い run を打ち切り (O(N²) 回避、 match 結果は不変)
+        }
         let class = classify_char(c);
         match (last_class, class) {
             (None, Some(cls)) => {
@@ -835,5 +857,20 @@ mod tests {
         // char-class は 英数 + 漢字 で boundary、 prev は 「月」 漢字 1 字 のみ
         // (= 「6」 と 「月」 は class 違う = 英数 vs 漢字)
         assert_eq!(prev_logical_token("6月一日", 4), "月"); // 1 ("6") + 3 ("月") = 4 bytes
+    }
+
+    #[test]
+    fn logical_token_caps_pathological_run() {
+        // 同一漢字の超長 run でも走査は MAX_LOGICAL_TOKEN_CHARS で打ち切られる
+        // (O(N²) 回避)。 上限超の token は如何なる condition とも一致しないので
+        // 打ち切っても match 結果は不変。
+        let long_run = "鬱".repeat(MAX_LOGICAL_TOKEN_CHARS + 500);
+        let fwd = next_logical_token(&long_run, 0);
+        assert_eq!(fwd.chars().count(), MAX_LOGICAL_TOKEN_CHARS, "前方走査を上限で打ち切り");
+        let bwd = prev_logical_token(&long_run, long_run.len());
+        assert_eq!(bwd.chars().count(), MAX_LOGICAL_TOKEN_CHARS, "後方走査を上限で打ち切り");
+        // 上限以下の通常 run は従来どおり全体を返す (truncation 無し = 正しさ保持)
+        assert_eq!(next_logical_token("漢字熟語", 0), "漢字熟語");
+        assert_eq!(prev_logical_token("中学校生", 9), "中学校");
     }
 }

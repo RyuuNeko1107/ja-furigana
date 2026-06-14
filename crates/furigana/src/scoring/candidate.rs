@@ -285,6 +285,9 @@ mod tests {
 
     // ─── band 値 sanity check ────────────────────────────────────────────────
 
+    // band の「絶対値」は実装の写経になるので検証しない (定数を変えれば test も
+    // 同時に書き換わり回帰検出力ゼロ)。意味があるのは band 間の「順序関係」だけ
+    // (= dict_exact > special > lindera_compound > kanji > lindera_unihan)。
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn band_values_are_correctly_ordered() {
@@ -292,11 +295,6 @@ mod tests {
         assert!(BAND_SPECIAL > BAND_LINDERA_COMPOUND);
         assert!(BAND_LINDERA_COMPOUND > BAND_KANJI);
         assert!(BAND_KANJI > BAND_LINDERA_UNIHAN);
-        assert_eq!(BAND_DICT_EXACT, 1000);
-        assert_eq!(BAND_SPECIAL, 950);
-        assert_eq!(BAND_LINDERA_COMPOUND, 150);
-        assert_eq!(BAND_KANJI, 100);
-        assert_eq!(BAND_LINDERA_UNIHAN, 50);
     }
 
     // ─── Candidate ───────────────────────────────────────────────────────────

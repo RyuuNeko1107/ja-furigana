@@ -22,8 +22,9 @@ pub(super) const NUM_PAT: &str =
 const DATE_NUM_PAT: &str = r"(?:[0-9０-９]{1,4}|[一二三四五六七八九十〇零]{1,3})";
 
 /// 漢数字 pattern (= 末尾再帰助数詞 「N 個目」 の漢数字版用)。 `kansuji_to_arabic` が
-/// 解釈できる範囲 (一〜九十百千 + 〇零)。 「一個目」 「十二回目」 等を catch する。
-const KANJI_NUM_PAT: &str = r"[一二三四五六七八九十百千〇零]{1,6}";
+/// 解釈できる範囲 (一〜九十百千万億 additive + 〇零 positional)。 「一個目」 「十二回目」
+/// 「三百回目」 「一万回目」 等を catch する。
+const KANJI_NUM_PAT: &str = r"[一二三四五六七八九十百千万億〇零]{1,9}";
 
 pub(super) static TIME_COLON_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"([0-9０-９]{1,2})[:：]([0-9０-９]{2})(?:[:：]([0-9０-９]{2}))?")

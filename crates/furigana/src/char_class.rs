@@ -61,13 +61,20 @@ pub fn is_katakana_char(c: char) -> bool {
     (KATAKANA_START..=KATAKANA_END).contains(&cp) || c == 'ヴ'
 }
 
-/// 漢字 1 文字か (CJK 統合漢字 + 拡張 A + 互換 + 々〆ヶ)
+/// 漢字 1 文字か (CJK 統合漢字 + 拡張 A〜H + 互換 + 々〆ヶ)
+///
+/// 拡張 B 以降 (astral plane、 サロゲートペア) も含む。 人名 (𠮷野家の `𠮷`) や
+/// 魚名 (`𩸽` = ほっけ) で頻出し、 落とすと furigana が振られない。
 #[must_use]
 pub fn is_kanji_char(c: char) -> bool {
     matches!(c,
-        '\u{3400}'..='\u{4DBF}' |   // CJK 拡張 A
-        '\u{4E00}'..='\u{9FFF}' |   // CJK 統合漢字
-        '\u{F900}'..='\u{FAFF}' |   // CJK 互換
+        '\u{3400}'..='\u{4DBF}' |    // CJK 拡張 A
+        '\u{4E00}'..='\u{9FFF}' |    // CJK 統合漢字
+        '\u{F900}'..='\u{FAFF}' |    // CJK 互換
+        '\u{20000}'..='\u{2A6DF}' |  // CJK 拡張 B
+        '\u{2A700}'..='\u{2EBEF}' |  // CJK 拡張 C/D/E/F
+        '\u{2F800}'..='\u{2FA1F}' |  // CJK 互換補助
+        '\u{30000}'..='\u{323AF}' |  // CJK 拡張 G/H
         '々' | '〆' | 'ヶ'
     )
 }
@@ -219,6 +226,17 @@ mod tests {
     }
 
     #[test]
+    fn classify_char_kanji_astral_planes() {
+        // CJK 拡張B以降 (サロゲートペア) も漢字判定する。人名・魚名で頻出し、
+        // 落とすと furigana が振られない。
+        assert!(is_kanji_char('𠮷')); // U+20BB7 「つちよし」(吉野家の𠮷) — 拡張B
+        assert!(is_kanji_char('𩸽')); // U+29E3D ほっけ — 拡張B
+        assert!(is_kanji_char('𫝆')); // U+2B746 — 拡張C
+        assert_eq!(classify_char('𠮷'), Some(CharType::Kanji));
+        assert_eq!(classify_char('𩸽'), Some(CharType::Kanji));
+    }
+
+    #[test]
     fn classify_char_hiragana() {
         assert_eq!(classify_char('あ'), Some(CharType::Hiragana));
         assert_eq!(classify_char('ん'), Some(CharType::Hiragana));
@@ -311,5 +329,30 @@ mod tests {
         assert!(!is_emoji_char('ア'));
         assert!(!is_emoji_char('1'));
         assert!(!is_emoji_char(' '));
+    }
+
+    #[test]
+    fn is_digit_char_ascii_and_fullwidth() {
+        assert!(is_digit_char('0'));
+        assert!(is_digit_char('9'));
+        assert!(is_digit_char('０')); // 全角 0
+        assert!(is_digit_char('９')); // 全角 9
+        assert!(!is_digit_char('a'));
+        assert!(!is_digit_char('あ'));
+        assert!(!is_digit_char('一')); // 漢数字は digit ではない
+    }
+
+    #[test]
+    fn is_symbol_char_basic() {
+        assert!(is_symbol_char('!'));
+        assert!(is_symbol_char('、'));
+        assert!(is_symbol_char('。'));
+        assert!(!is_symbol_char('a')); // 英数は記号でない
+        assert!(!is_symbol_char('あ')); // かなは記号でない
+        assert!(!is_symbol_char(' ')); // 空白は除外
+        assert!(!is_symbol_char('\n')); // 制御文字は除外
+        // U+2028 (LINE SEPARATOR) は whitespace なので、 一般 punctuation range
+        // (U+2000..U+206F) に入っていても記号扱いしない (guard が優先)。
+        assert!(!is_symbol_char('\u{2028}'));
     }
 }

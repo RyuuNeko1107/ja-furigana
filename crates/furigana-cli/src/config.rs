@@ -198,4 +198,50 @@ mod tests {
         assert_eq!(cfg.rate_limit.per_second, 50);
         assert_eq!(cfg.rate_limit.burst_size, 5);
     }
+
+    fn temp_paths(tag: &str) -> (std::path::PathBuf, Paths) {
+        let mut d = std::env::temp_dir();
+        d.push(format!("furi_cfgtest_{}_{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let cfg = d.join("config.toml");
+        (
+            d.clone(),
+            Paths {
+                data_dir: d,
+                config_file: cfg,
+            },
+        )
+    }
+
+    #[test]
+    fn load_missing_file_returns_default() {
+        let (dir, paths) = temp_paths("missing");
+        // config.toml は作らない → default が返る
+        let cfg = Config::load(&paths).unwrap();
+        assert_eq!(cfg.rate_limit.per_second, 1); // default
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_parses_existing_file() {
+        let (dir, paths) = temp_paths("valid");
+        std::fs::write(&paths.config_file, "[rate_limit]\nper_second = 20\n").unwrap();
+        let cfg = Config::load(&paths).unwrap();
+        assert_eq!(cfg.rate_limit.per_second, 20);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_errors_on_bad_toml_with_path_context() {
+        let (dir, paths) = temp_paths("bad");
+        std::fs::write(&paths.config_file, "this = = = not toml").unwrap();
+        let err = Config::load(&paths).unwrap_err();
+        // エラー文脈にファイルパスが含まれる
+        assert!(
+            format!("{err:#}").contains("config.toml"),
+            "error should mention the config path: {err:#}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

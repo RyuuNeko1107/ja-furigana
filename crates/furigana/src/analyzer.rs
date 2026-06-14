@@ -112,13 +112,14 @@ impl Analyzer {
             return Vec::new();
         }
 
-        let tokenizer = match self.tokenizer.lock() {
-            Ok(t) => t,
-            Err(poisoned) => {
-                tracing::error!("Tokenizer mutex poisoned: {poisoned}");
-                return vec![MorphToken::surface_only(text)];
-            }
-        };
+        // poison 時は lock を握り潰して surface-only に倒すと、 以降全 request が
+        // 恒久 degrade (形態素解析なし) に固定されてしまう。 poison は別 thread の
+        // panic 由来で、 `Tokenizer::tokenize` は `&self` (read-only、 内部可変は
+        // Mutex で排他) なので、 lock を奪い返して継続するのが安全 (恒久 degrade 回避)。
+        let tokenizer = self.tokenizer.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Tokenizer mutex poisoned; recovering lock and continuing");
+            poisoned.into_inner()
+        });
 
         match tokenizer.tokenize(text) {
             Ok(mut tokens) => tokens
@@ -174,20 +175,29 @@ mod tests {
     fn tokenizes_basic_japanese() {
         let a = analyzer();
         let tokens = a.tokenize("私は学生です");
-        assert!(!tokens.is_empty());
-        // 「私」が含まれる
-        assert!(tokens.iter().any(|t| t.surface == "私"));
-        // どこかしらに名詞がある
-        assert!(tokens.iter().any(|t| t.pos.as_deref() == Some("名詞")));
+        // surface 列を完全固定 (「私 が含まれる」 程度だと分割崩れを見逃す)。
+        let surfaces: Vec<&str> = tokens.iter().map(|t| t.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["私", "は", "学生", "です"]);
+        // 名詞「学生」 の品詞と読みも値で固定する。
+        let gakusei = tokens
+            .iter()
+            .find(|t| t.surface == "学生")
+            .expect("学生 token");
+        assert_eq!(gakusei.pos.as_deref(), Some("名詞"));
+        assert_eq!(gakusei.reading.as_deref(), Some("ガクセイ"));
     }
 
     #[test]
     fn returns_reading_for_known_kanji() {
         let a = analyzer();
         let tokens = a.tokenize("読書");
-        // 「読書」または分割された個別漢字に reading が付く
-        let has_reading = tokens.iter().any(|t| t.reading.is_some());
-        assert!(has_reading, "no reading found in tokens: {tokens:?}");
+        // 「どこかに reading が付く」 だと誤読でも緑になる。surface と reading を
+        // 値で固定する (IPADIC は 「読書」 を 1 token ドクショ で返す)。
+        let dokusho = tokens
+            .iter()
+            .find(|t| t.surface == "読書")
+            .expect("読書 token");
+        assert_eq!(dokusho.reading.as_deref(), Some("ドクショ"));
     }
 
     #[test]
@@ -209,10 +219,32 @@ mod tests {
         // 助詞 (e.g., は) は activation_form 等が "*" になることが多い
         let a = analyzer();
         let tokens = a.tokenize("私は");
-        let ha = tokens.iter().find(|t| t.surface == "は");
-        if let Some(token) = ha {
-            // 助詞「は」は活用しないので conjugation_type は None のはず
-            assert!(token.conjugation_type.is_none());
-        }
+        // if let Some だと 「は」 が取れなければ無条件 pass していた。token 存在を強制。
+        let token = tokens
+            .iter()
+            .find(|t| t.surface == "は")
+            .expect("は token");
+        // 助詞「は」は活用しないので conjugation_type は "*" → None 正規化されるはず
+        assert!(token.conjugation_type.is_none());
+    }
+
+    #[test]
+    fn tokenize_recovers_from_poisoned_mutex() {
+        use std::sync::Arc;
+        let a = Arc::new(analyzer());
+        // 別 thread で tokenizer lock 保持中に panic させ mutex を poison させる。
+        let a2 = Arc::clone(&a);
+        let handle = std::thread::spawn(move || {
+            let _guard = a2.tokenizer.lock().unwrap();
+            panic!("intentional panic while holding tokenizer lock");
+        });
+        assert!(handle.join().is_err(), "panic で poison したはず");
+        // poison 後も tokenize は recover して継続する (恒久 degrade に陥らない)。
+        // 旧実装は surface-only fallback (= 1 token) を返していた。
+        let tokens = a.tokenize("私は学生です");
+        assert!(
+            tokens.len() > 1,
+            "poison から回復して形態素解析が継続するはず (surface-only ではない): {tokens:?}"
+        );
     }
 }

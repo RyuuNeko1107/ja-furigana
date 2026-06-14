@@ -212,9 +212,9 @@ fn date_md_normalizes_kansuji() {
     let p = provider();
     let cands = p.candidates_at(&ctx("六月一日"), 0);
     let c = find(&cands, "六月一日").expect("date MD with kansuji");
-    // 一日 → days.toml の特殊読み (ツイタチ) を採用
-    assert!(c.reading.contains("ツイタチ"), "reading: {}", c.reading);
-    assert!(c.reading.contains("ロクガツ"), "reading: {}", c.reading);
+    // 一日 → days.toml の特殊読み (ツイタチ)。contains だと月部の脱落・順序入替を
+    // 見逃すので全文一致で固定。
+    assert_eq!(c.reading, "ロクガツツイタチ");
 }
 
 // ─── 日付 ────────────────────────────────────────────────────────────────
@@ -224,7 +224,8 @@ fn date_full_emits_single_candidate() {
     let p = provider();
     let cands = p.candidates_at(&ctx("2025年10月30日に集合"), 0);
     let c = find(&cands, "2025年10月30日").expect("date full candidate");
-    assert!(c.reading.contains("ジュウガツ"), "reading: {}", c.reading);
+    // 年・月・日すべてを完全一致で固定 (contains だと年/日の脱落を見逃す)。
+    assert_eq!(c.reading, "ニセンニジュウゴネンジュウガツサンジュウニチ");
     assert_eq!(c.score.band, BAND_SPECIAL);
 }
 
@@ -234,8 +235,7 @@ fn date_md_uses_special_day_reading() {
     let p = provider();
     let cands = p.candidates_at(&ctx("1月1日に集合"), 0);
     let c = find(&cands, "1月1日").expect("date MD candidate");
-    assert!(c.reading.contains("イチガツ"), "reading: {}", c.reading);
-    assert!(c.reading.contains("ツイタチ"), "reading: {}", c.reading);
+    assert_eq!(c.reading, "イチガツツイタチ");
 }
 
 // ─── 時刻 ────────────────────────────────────────────────────────────────
@@ -245,12 +245,8 @@ fn time_colon_basic() {
     let p = provider();
     let cands = p.candidates_at(&ctx("9:30に集合"), 0);
     let c = find(&cands, "9:30").expect("time colon candidate");
-    assert!(c.reading.contains("クジ"), "reading: {}", c.reading);
-    assert!(
-        c.reading.contains("サンジュッフン") || c.reading.contains("サンジュップン"),
-        "reading: {}",
-        c.reading,
-    );
+    // 時・分を通して全文固定 (fixture rules が決定する促音形を pin)。
+    assert_eq!(c.reading, "クジサンジュップン");
 }
 
 #[test]
@@ -258,7 +254,8 @@ fn time_jp_full() {
     let p = provider();
     let cands = p.candidates_at(&ctx("9時30分に集合"), 0);
     let c = find(&cands, "9時30分").expect("time JP candidate");
-    assert!(c.reading.contains("クジ"), "reading: {}", c.reading);
+    // 旧 test は分部 (30分) を一切見ていなかった。全文固定。
+    assert_eq!(c.reading, "クジサンジュップン");
 }
 
 #[test]
@@ -277,11 +274,10 @@ fn scale_with_trailing_unit_when_units_table_has_kanji_unit() {
     // build_scale_regex の trailing_unit は None になる。 scale candidate は 「3万」 で出る。
     let p = provider();
     let cands = p.candidates_at(&ctx("3万円のもの"), 0);
-    // chunker の split_scale テストと同じく、 「3万」 OR 「3万円」 のどちらかが候補化される
-    let has_scale = cands
-        .iter()
-        .any(|c| (c.surface == "3万" || c.surface == "3万円") && !c.reading.is_empty());
-    assert!(has_scale, "no scale candidate found: {cands:?}");
+    // fixture units に 「円」 は無いので scale candidate は 「3万」。!is_empty() だと
+    // 誤読でも緑になるので読みを完全一致で固定する。
+    let c = find(&cands, "3万").expect("scale candidate 3万");
+    assert_eq!(c.reading, "サンマン");
 }
 
 #[test]
@@ -289,7 +285,7 @@ fn scale_without_trailing_unit() {
     let p = provider();
     let cands = p.candidates_at(&ctx("3万"), 0);
     let c = find(&cands, "3万").expect("scale candidate");
-    assert!(c.reading.contains("マン"), "reading: {}", c.reading);
+    assert_eq!(c.reading, "サンマン");
 }
 
 // ─── SI 単位 ─────────────────────────────────────────────────────────────
@@ -299,8 +295,8 @@ fn si_unit_basic() {
     let p = provider();
     let cands = p.candidates_at(&ctx("100km先"), 0);
     let c = find(&cands, "100km").expect("SI unit candidate");
-    assert!(c.reading.contains("ヒャク"), "reading: {}", c.reading);
-    assert!(c.reading.contains("キロメートル"), "reading: {}", c.reading);
+    // 数値部+単位部を通して固定 (順序 「キロメートルヒャク」 等の誤結合を排除)。
+    assert_eq!(c.reading, "ヒャクキロメートル");
 }
 
 // ─── 記号 ────────────────────────────────────────────────────────────────
@@ -379,7 +375,8 @@ fn bare_digit_basic() {
     let p = provider();
     let cands = p.candidates_at(&ctx("12345です"), 0);
     let c = find(&cands, "12345").expect("bare digit candidate");
-    assert!(!c.reading.is_empty());
+    // 数値合成の本丸経路。!is_empty() だと桁上がりの誤りを見逃すので完全一致で固定。
+    assert_eq!(c.reading, "イチマンニセンサンビャクヨンジュウゴ");
     assert_eq!(c.score.band, BAND_SPECIAL);
 }
 
@@ -434,5 +431,5 @@ fn digit_regex_is_static_and_works_with_empty_rules() {
     let p = NumberCandidateProvider::new(&RulesData::default());
     let cands = p.candidates_at(&ctx("42x"), 0);
     let c = find(&cands, "42").expect("bare digit candidate even with empty rules");
-    assert!(!c.reading.is_empty());
+    assert_eq!(c.reading, "ヨンジュウニ");
 }

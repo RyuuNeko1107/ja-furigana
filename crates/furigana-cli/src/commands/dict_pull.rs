@@ -382,4 +382,249 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }
+
+    // ─── extract_to security tests ───────────────────────────────────────────
+    //
+    // extract_to は信頼できない tarball を展開する security-critical 経路。
+    // path traversal / symlink / archive bomb / prefix 剥がし / 既存保持 を検証する。
+    //
+    // 注: count / total ガードは prefix 判定 (core/rules 以外は continue で skip) より
+    // **前**に発火するため、 entry 名を skip 対象にすれば unpack されず disk を汚さずに
+    // 検証できる。 total bomb は ~200MB の zero stream を decompress するので CPU は重め
+    // だが disk 書き込みは無い。
+
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::{Read, Write};
+
+    /// 生 tar (512B header 手構築) を gzip して返す。 `tar::Builder` は `..` を含む
+    /// path の書き込みを拒否するため、 path traversal 攻撃 tarball の再現には
+    /// header を手で組む必要がある (= 悪意ある配布者 / 改竄 archive の模擬)。
+    fn raw_targz_single(name: &str, content: &[u8]) -> Vec<u8> {
+        let mut header = [0u8; 512];
+        let nb = name.as_bytes();
+        header[..nb.len()].copy_from_slice(nb);
+        header[100..108].copy_from_slice(b"0000644\0");
+        header[108..116].copy_from_slice(b"0000000\0");
+        header[116..124].copy_from_slice(b"0000000\0");
+        header[124..136].copy_from_slice(format!("{:011o}\0", content.len()).as_bytes());
+        header[136..148].copy_from_slice(b"00000000000\0");
+        header[156] = b'0'; // typeflag = regular
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        // checksum: 該当 8 byte を space 埋めして全 byte 和を octal で書く
+        for b in &mut header[148..156] {
+            *b = b' ';
+        }
+        let sum: u32 = header.iter().map(|&b| u32::from(b)).sum();
+        header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+
+        let mut tar = Vec::new();
+        tar.extend_from_slice(&header);
+        tar.extend_from_slice(content);
+        let pad = (512 - content.len() % 512) % 512;
+        tar.extend(std::iter::repeat_n(0u8, pad));
+        tar.extend(std::iter::repeat_n(0u8, 1024)); // end-of-archive marker
+
+        let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(&tar).unwrap();
+        enc.finish().unwrap()
+    }
+
+    enum Tar<'a> {
+        File(&'a str, &'a [u8]),
+        Dir(&'a str),
+        Symlink(&'a str, &'a str),
+        /// header.size を詐称した巨大 entry (per-entry bomb 用、 実 content は zero stream)
+        BigFile(&'a str, u64),
+    }
+
+    fn build_targz(entries: &[Tar]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        for e in entries {
+            match e {
+                Tar::File(path, data) => {
+                    let mut h = tar::Header::new_gnu();
+                    h.set_size(data.len() as u64);
+                    h.set_entry_type(tar::EntryType::Regular);
+                    h.set_mode(0o644);
+                    builder.append_data(&mut h, path, &data[..]).unwrap();
+                }
+                Tar::Dir(path) => {
+                    let mut h = tar::Header::new_gnu();
+                    h.set_size(0);
+                    h.set_entry_type(tar::EntryType::Directory);
+                    h.set_mode(0o755);
+                    builder.append_data(&mut h, path, std::io::empty()).unwrap();
+                }
+                Tar::Symlink(path, target) => {
+                    let mut h = tar::Header::new_gnu();
+                    h.set_entry_type(tar::EntryType::Symlink);
+                    h.set_size(0);
+                    h.set_mode(0o777);
+                    builder.append_link(&mut h, path, target).unwrap();
+                }
+                Tar::BigFile(path, size) => {
+                    let mut h = tar::Header::new_gnu();
+                    h.set_size(*size);
+                    h.set_entry_type(tar::EntryType::Regular);
+                    h.set_mode(0o644);
+                    let reader = std::io::repeat(0u8).take(*size);
+                    builder.append_data(&mut h, path, reader).unwrap();
+                }
+            }
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn temp_paths(tag: &str) -> Paths {
+        let mut d = std::env::temp_dir();
+        d.push(format!("furigana_pulltest_{}_{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        Paths {
+            data_dir: d.clone(),
+            config_file: d.join("config.toml"),
+        }
+    }
+
+    #[test]
+    fn extract_to_flattens_core_and_rules_prefixes() {
+        let p = temp_paths("flatten");
+        let tb = build_targz(&[
+            Tar::Dir("core/"),
+            Tar::File("core/jukugo/x.toml", b"[entries]\n"),
+            Tar::File("rules/days.toml", b"[meta]\n"),
+            Tar::File("README.md", b"ignored top-level"),
+        ]);
+        extract_to(&tb, &p).unwrap();
+        let root = p.data_root();
+        assert!(root.join("jukugo/x.toml").exists(), "core/ prefix が剥がれて flat 配置");
+        assert!(root.join("days.toml").exists(), "rules/ prefix が剥がれて flat 配置");
+        assert!(!root.join("README.md").exists(), "未知 top-level entry は skip");
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn extract_to_rejects_or_contains_path_traversal() {
+        let p = temp_paths("traversal");
+        // 手構築 raw tar で core/ prefix 付きの ../ traversal を仕込む。
+        let tb = raw_targz_single("core/../../../../evil.toml", b"PWNED");
+        let res = extract_to(&tb, &p);
+        // bail するのが理想だが、 少なくとも data_root の外に evil.toml が書かれないこと。
+        let escaped = p
+            .data_dir
+            .parent()
+            .map(|g| g.join("evil.toml"))
+            .filter(|x| x.exists());
+        assert!(
+            res.is_err() || escaped.is_none(),
+            "path traversal: bail せず & data_root 外に書込み (res={res:?})"
+        );
+        // 念のため data_dir の祖先側に evil.toml が出来ていないこと
+        assert!(escaped.is_none(), "data_root 外に evil.toml が漏れた: {escaped:?}");
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn extract_to_rejects_symlink_entry() {
+        let p = temp_paths("symlink");
+        let tb = build_targz(&[Tar::Symlink("core/link.toml", "/etc/passwd")]);
+        let res = extract_to(&tb, &p);
+        assert!(res.is_err(), "symlink entry は reject されるべき");
+        assert!(
+            format!("{:#}", res.unwrap_err()).contains("entry type"),
+            "symlink reject は entry type エラーであること"
+        );
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn extract_to_rejects_oversized_entry_before_unpack() {
+        let p = temp_paths("bigentry");
+        // header.size を上限+1 に詐称。 unpack 前 (header check) で bail するので
+        // 実 disk 書き込みは発生しない。
+        let tb = build_targz(&[Tar::BigFile("core/huge.toml", MAX_PER_ENTRY_BYTES + 1)]);
+        let res = extract_to(&tb, &p);
+        assert!(res.is_err(), "per-entry 上限超過は bail");
+        assert!(!p.data_root().join("huge.toml").exists(), "bail 前に unpack しない");
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn extract_to_preserves_user_dir_and_overrides() {
+        let p = temp_paths("preserve");
+        // 既存の user データと overrides を作っておく
+        fs::create_dir_all(p.dict_user_dir()).unwrap();
+        fs::write(p.dict_user_dir().join("mine.toml"), b"[entries]\n").unwrap();
+        fs::write(p.overrides_file(), b"[entries]\n").unwrap();
+        // 旧配布ファイルも 1 つ置く (これは消えるべき)
+        fs::write(p.data_root().join("old.toml"), b"stale").unwrap();
+
+        let tb = build_targz(&[Tar::File("core/jukugo/new.toml", b"[entries]\n")]);
+        extract_to(&tb, &p).unwrap();
+
+        assert!(p.dict_user_dir().join("mine.toml").exists(), "user/ は保持");
+        assert!(p.overrides_file().exists(), "overrides.toml は保持");
+        assert!(p.data_root().join("jukugo/new.toml").exists(), "新ファイルは展開");
+        assert!(!p.data_root().join("old.toml").exists(), "旧配布ファイルは掃除");
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    /// `prefix/i.bin` という skip 対象 entry を count 個並べた tar.gz。
+    /// `size` を指定すると header.size を詐称 (zero stream content)、 None なら空 entry。
+    fn targz_skippable(prefix: &str, count: usize, size: Option<u64>) -> Vec<u8> {
+        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        for i in 0..count {
+            let mut h = tar::Header::new_gnu();
+            h.set_entry_type(tar::EntryType::Regular);
+            h.set_mode(0o644);
+            let name = format!("{prefix}/{i}.bin");
+            if let Some(sz) = size {
+                h.set_size(sz);
+                builder
+                    .append_data(&mut h, name, std::io::repeat(0u8).take(sz))
+                    .unwrap();
+            } else {
+                h.set_size(0);
+                builder.append_data(&mut h, name, std::io::empty()).unwrap();
+            }
+        }
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn extract_to_rejects_too_many_entries() {
+        let p = temp_paths("countbomb");
+        // MAX_ENTRY_COUNT+1 個の skip 対象 (非 core/rules) entry。 count guard は
+        // prefix 判定より前なので unpack されず disk を汚さずに発火する。
+        let tb = targz_skippable("junk", MAX_ENTRY_COUNT + 1, None);
+        let res = extract_to(&tb, &p);
+        assert!(res.is_err(), "entry 数上限超過は bail");
+        assert!(
+            format!("{:#}", res.unwrap_err()).contains("entry 数"),
+            "entry 数上限エラーであること"
+        );
+        // skip 対象なので何も展開されていない
+        assert_eq!(fs::read_dir(p.data_root()).unwrap().count(), 0);
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn extract_to_rejects_total_uncompressed_overflow() {
+        let p = temp_paths("totalbomb");
+        // 各 entry は per-entry 上限 (10MB) 未満だが、 合計が 200MB を超える。
+        // 21 × 9.9MB ≈ 207.9MB > 200MB。 skip 対象名なので unpack されず disk ゼロ。
+        let per = (MAX_PER_ENTRY_BYTES * 99) / 100; // 9.9MB
+        let count = (MAX_UNCOMPRESSED_TOTAL / per) as usize + 1;
+        let tb = targz_skippable("junk", count, Some(per));
+        let res = extract_to(&tb, &p);
+        assert!(res.is_err(), "展開合計上限超過は bail");
+        assert!(
+            format!("{:#}", res.unwrap_err()).contains("展開合計"),
+            "展開合計上限エラーであること"
+        );
+        assert_eq!(fs::read_dir(p.data_root()).unwrap().count(), 0);
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
 }

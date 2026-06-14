@@ -157,6 +157,12 @@ impl Furigana {
     /// 例: `"灰桜の道"` → `"{灰桜|はいざくら}の{道|みち}"`
     /// 漢字を含まない部分はそのまま、読みなし部分も surface のまま。
     /// 出力直前に `postprocess.toml` の `mode = "ruby"` ルールを適用。
+    ///
+    /// **escape 規約**: 入力テキストに ruby 区切り記号 `{` `}` `|` や escape 文字 `\`
+    /// が含まれる場合、 markup との衝突を避けるため素テキスト側でこれらを `\` で
+    /// escape する (例: 入力 `"猫{犬}"` → `"{猫|ねこ}\{{犬|いぬ}\}"`)。 出力を機械的に
+    /// パースする側は `\{` `\}` `\|` `\\` を un-escape すること。 これらの記号を含まない
+    /// 通常の日本語入力では escape は発生せず、 出力は従来と完全に同一。
     #[must_use]
     pub fn to_ruby(&self, text: &str) -> String {
         let ruby = tokens_to_ruby(&self.tokenize(text));
@@ -466,6 +472,105 @@ fn load_loanwords_into(out: &mut HashMap<String, String>, dir: &Path) -> Result<
 mod tests {
     use super::*;
 
+    /// 不変条件テスト群で使う代表入力 (漢字/かな/英数/記号/改行/tab/絵文字/
+    /// astral 漢字/踊り字/混在)。
+    const INVARIANT_INPUTS: &[&str] = &[
+        "",
+        "こんにちは",
+        "灰桜",
+        "猫が好き",
+        "猫API犬",
+        "猫が\n好きABC123",
+        "猫\tいぬ",
+        "人々",
+        "𠮷野家",      // CJK 拡張B漢字
+        "魚は𩸽だ",    // astral 漢字 + かな
+        "絵文字😀テスト🎉",
+        "https://example.com を見て",
+        "9時30分に1000円",
+        "猫{犬}",       // ruby delimiter `{` `}` を含む入力 (escape 必須)
+        "a|b猫",        // ruby delimiter `|` を含む入力
+        "C:\\猫\\犬",   // backslash を含む入力 (escape char 自身)
+    ];
+
+    #[test]
+    fn to_hiragana_keeps_kana_surface_verbatim() {
+        // 全 kana surface は表記そのまま維持する (surface_is_all_kana 分岐)。
+        // カタカナ語はカタカナのまま (こーひー化しない)、 助詞も surface 維持。
+        let f = Furigana::minimal().unwrap();
+        assert_eq!(f.to_hiragana("コーヒー"), "コーヒー");
+        assert_eq!(f.to_hiragana("猫は好き"), "ねこはすき");
+    }
+
+    #[test]
+    fn invariant_surface_concat_equals_input() {
+        // 不変条件: token の surface を連結すると入力と完全一致する
+        // (= 文字の欠落/重複/順序入替が無い = 全 byte を gap なく覆う)。
+        let f = Furigana::minimal().unwrap();
+        for &input in INVARIANT_INPUTS {
+            let concat: String = f.tokenize(input).iter().map(|t| t.surface.clone()).collect();
+            assert_eq!(concat, input, "surface 連結が入力と不一致: {input:?}");
+        }
+    }
+
+    #[test]
+    fn invariant_ruby_stripped_equals_hiragana() {
+        // 不変条件: to_ruby から ruby markup `{surface|reading}` を読みに畳むと
+        // to_hiragana と一致する (2 つの公開経路の読みが整合)。
+        let f = Furigana::minimal().unwrap();
+        for &input in INVARIANT_INPUTS {
+            let ruby = f.to_ruby(input);
+            let stripped = strip_ruby_markup(&ruby);
+            assert_eq!(
+                stripped,
+                f.to_hiragana(input),
+                "ruby-strip と to_hiragana が不一致: {input:?} (ruby={ruby:?})"
+            );
+        }
+    }
+
+    /// `{surface|reading}` → reading に畳み、 markup 外の素テキストはそのまま残す
+    /// (テスト用 ruby パーサ)。 `\{` `\}` `\|` `\\` の escape を un-escape する。
+    fn strip_ruby_markup(ruby: &str) -> String {
+        let mut out = String::new();
+        let mut chars = ruby.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                // 素テキスト中の escape → un-escape
+                '\\' => {
+                    if let Some(lit) = chars.next() {
+                        out.push(lit);
+                    }
+                }
+                '{' => {
+                    // surface を読み飛ばし、 unescaped `|` 以降の reading を un-escape
+                    // して取り、 unescaped `}` で閉じる。
+                    let mut seen_pipe = false;
+                    let mut reading = String::new();
+                    while let Some(inner) = chars.next() {
+                        match inner {
+                            '\\' => {
+                                let lit = chars.next();
+                                if seen_pipe {
+                                    if let Some(l) = lit {
+                                        reading.push(l);
+                                    }
+                                }
+                            }
+                            '|' if !seen_pipe => seen_pipe = true,
+                            '}' => break,
+                            other if seen_pipe => reading.push(other),
+                            _ => {} // surface char (discard)
+                        }
+                    }
+                    out.push_str(&reading);
+                }
+                other => out.push(other),
+            }
+        }
+        out
+    }
+
     #[test]
     fn minimal_init_works() {
         let f = Furigana::minimal().expect("minimal init failed");
@@ -477,8 +582,8 @@ mod tests {
     fn add_reading_then_to_ruby() {
         let mut f = Furigana::minimal().unwrap();
         f.add_reading("灰桜", "ハイザクラ");
-        let ruby = f.to_ruby("灰桜");
-        assert!(ruby.contains("はいざくら"), "ruby: {ruby}");
+        // contains だと ruby markup (`{…|…}`) が落ちても緑になる。完全一致で固定。
+        assert_eq!(f.to_ruby("灰桜"), "{灰桜|はいざくら}");
     }
 
     #[test]
@@ -490,17 +595,16 @@ mod tests {
             .unwrap();
         assert_eq!(f.dict_size(), 2);
 
-        let ruby = f.to_ruby("灰桜と黎明");
-        assert!(ruby.contains("はいざくら"));
-        assert!(ruby.contains("れいめい"));
+        // 個別 contains だと間の助詞「と」脱落や順序入替を見逃す。全文一致で固定。
+        assert_eq!(f.to_ruby("灰桜と黎明"), "{灰桜|はいざくら}と{黎明|れいめい}");
     }
 
     #[test]
     fn to_hiragana_basic() {
         let mut f = Furigana::minimal().unwrap();
         f.add_reading("灰桜", "ハイザクラ");
-        let h = f.to_hiragana("灰桜の道");
-        assert!(h.starts_with("はいざくら"), "h: {h}");
+        // starts_with だと末尾「の道」の変換が未検証。全文一致で固定。
+        assert_eq!(f.to_hiragana("灰桜の道"), "はいざくらのみち");
     }
 
     #[test]
@@ -541,6 +645,32 @@ mod tests {
         let ruby = f.to_ruby("灰桜\n道");
         assert!(ruby.contains('\n'), "改行が保持される: {ruby}");
         assert!(!ruby.is_empty());
+    }
+
+    #[test]
+    fn nonempty_input_never_blanks_out_with_format_gap_chars() {
+        // 不変条件ガード: 漢字の間に Lindera が落としうる format/幅ゼロ文字が挟まっても
+        // safety net (gap passthrough) が働き、非空入力は決して空出力にならない。
+        // (監査で「ZWSP 等で safety net 全廃 → 空出力」が疑われたが、実際には Lindera が
+        //  これらを token 保持するため再現せず。回帰防止のためガードとして固定する。)
+        let f = Furigana::minimal().unwrap();
+        for &gap in &[
+            "\u{200B}", // ZWSP
+            "\u{FEFF}", // BOM / ZWNBSP
+            "\u{200D}", // ZWJ
+            "\u{00AD}", // SOFT HYPHEN
+            "\u{200E}", // LRM
+            "\u{2060}", // WORD JOINER
+            "\u{FE0F}", // VS16
+        ] {
+            let input = format!("猫{gap}犬");
+            let out = f.to_hiragana(&input);
+            assert!(
+                !out.is_empty(),
+                "blank out on gap char U+{:04X}",
+                gap.chars().next().unwrap() as u32
+            );
+        }
     }
 
     #[test]
@@ -603,6 +733,12 @@ mod tests {
         let opts = TtsOptions::default();
         let segs = f.segment_tts("ぶん1。ぶん2。ぶん3。", &opts, 60);
         assert_eq!(segs.len(), 3);
+        // len だけだと ["", "", ""] のような空 split でも緑になる。
+        // 各 segment が非空で文末「。」を保持していることまで固定する。
+        for (i, s) in segs.iter().enumerate() {
+            assert!(!s.is_empty(), "segment {i} is empty: {segs:?}");
+            assert!(s.ends_with('。'), "segment {i} keeps period: {s:?}");
+        }
     }
 
     #[test]

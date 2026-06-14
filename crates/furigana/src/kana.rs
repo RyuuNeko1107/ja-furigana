@@ -362,7 +362,17 @@ pub fn zen_to_han(s: &str) -> String {
 
 // ─── 正規化 ──────────────────────────────────────────────────────────────────
 
-/// テキスト正規化: NFKC → 異体字置換 → NFC
+/// 異体字セレクタ (variation selector) か。
+///
+/// NFKC/NFC では剥がれないが、 dict lookup では base char に揃えたいので除去する。
+/// - U+FE00〜U+FE0F: Variation Selectors (VS1〜VS16、 BMP)
+/// - U+E0100〜U+E01EF: Variation Selectors Supplement (IVS)
+#[inline]
+fn is_variation_selector(c: char) -> bool {
+    matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+}
+
+/// テキスト正規化: 異体字セレクタ除去 → NFKC → 異体字置換 → NFC
 ///
 /// `compat_map` の variant → canonical 変換を、NFKC の後に適用する。
 /// 入力が空なら空文字列を返す。
@@ -371,8 +381,14 @@ pub fn normalize_text(s: &str, compat: &CompatData) -> String {
     if s.is_empty() {
         return String::new();
     }
-    // NFKC で結合・互換正規化
-    let nfkc: String = s.nfkc().collect();
+    // 異体字セレクタ (IVS / VS) を除去 (NFKC/NFC では剥がれない)。人名・地名の
+    // 異体字付き漢字 (葛飾/辻 等) を base char に揃えて dict lookup を通す。
+    // filter を NFKC イテレータに直接チェーンし、中間 String alloc を避ける。
+    let nfkc: String = s
+        .chars()
+        .filter(|&c| !is_variation_selector(c))
+        .nfkc()
+        .collect();
     // 異体字置換 (1 文字単位)
     let replaced: String = nfkc
         .chars()
@@ -543,6 +559,15 @@ mod tests {
     }
 
     #[test]
+    fn normalize_text_strips_variation_selectors() {
+        let compat = make_compat(&[]);
+        // IVS / 異体字セレクタ付き漢字は base char に正規化され dict lookup できる。
+        // NFKC/NFC は VS を剥がさないので明示除去が要る。人名 (葛飾/辻 等) で頻出。
+        assert_eq!(normalize_text("葛\u{E0100}飾", &compat), "葛飾"); // IVS (VS Supplement)
+        assert_eq!(normalize_text("辻\u{FE00}", &compat), "辻"); // VS1 (BMP)
+    }
+
+    #[test]
     fn normalize_text_applies_nfkc() {
         let compat = make_compat(&[]);
         // 全角数字 NFKC → 半角
@@ -553,5 +578,67 @@ mod tests {
     fn normalize_text_empty() {
         let compat = make_compat(&[]);
         assert_eq!(normalize_text("", &compat), "");
+    }
+
+    #[test]
+    fn voice_first_kana_covers_rendaku_table() {
+        // 先頭かなの連濁 (清音→濁音)。カタカナ・ひらがな両方の各 arm を網羅。
+        let pairs = [
+            ("カ", "ガ"), ("キ", "ギ"), ("ク", "グ"), ("ケ", "ゲ"), ("コ", "ゴ"),
+            ("サ", "ザ"), ("シ", "ジ"), ("ス", "ズ"), ("セ", "ゼ"), ("ソ", "ゾ"),
+            ("タ", "ダ"), ("チ", "ヂ"), ("ツ", "ヅ"), ("テ", "デ"), ("ト", "ド"),
+            ("ハ", "バ"), ("ヒ", "ビ"), ("フ", "ブ"), ("ヘ", "ベ"), ("ホ", "ボ"),
+            ("か", "が"), ("き", "ぎ"), ("く", "ぐ"), ("け", "げ"), ("こ", "ご"),
+            ("さ", "ざ"), ("し", "じ"), ("す", "ず"), ("せ", "ぜ"), ("そ", "ぞ"),
+            ("た", "だ"), ("ち", "ぢ"), ("つ", "づ"), ("て", "で"), ("と", "ど"),
+            ("は", "ば"), ("ひ", "び"), ("ふ", "ぶ"), ("へ", "べ"), ("ほ", "ぼ"),
+        ];
+        for (clean, voiced) in pairs {
+            assert_eq!(voice_first_kana(clean).as_deref(), Some(voiced), "{clean}→{voiced}");
+        }
+        // 2 文字目以降は保持
+        assert_eq!(voice_first_kana("カミ").as_deref(), Some("ガミ"));
+        assert_eq!(voice_first_kana("ひと").as_deref(), Some("びと")); // 人々→ひとびと
+        // 連濁不可 (母音 / ナマヤラワ / 既濁音 / 半濁音 / 空) は None
+        for none in ["ア", "ナ", "マ", "ヤ", "ラ", "ワ", "ン", "ガ", "パ", "あ", "な", "ん", ""] {
+            assert_eq!(voice_first_kana(none), None, "{none} は連濁不可");
+        }
+    }
+
+    #[test]
+    fn normalize_long_vowel_expands_by_vowel_grade() {
+        // ー を直前かなの母音段で展開: ア段→ア / イ段→イ / ウ段→ウ / エ段→イ / オ段→ウ。
+        assert_eq!(normalize_long_vowel("カー"), "カア"); // a
+        assert_eq!(normalize_long_vowel("キー"), "キイ"); // i
+        assert_eq!(normalize_long_vowel("クー"), "クウ"); // u
+        assert_eq!(normalize_long_vowel("ケー"), "ケイ"); // e → イ
+        assert_eq!(normalize_long_vowel("コー"), "コウ"); // o → ウ
+        assert_eq!(normalize_long_vowel("サー"), "サア");
+        assert_eq!(normalize_long_vowel("スー"), "スウ");
+        assert_eq!(normalize_long_vowel("ソー"), "ソウ");
+        assert_eq!(normalize_long_vowel("ネー"), "ネイ");
+        assert_eq!(normalize_long_vowel("ガッコー"), "ガッコウ"); // 実例
+        // 先頭の ー は展開しない (i>0 ガード)、 ー 以外は不変
+        assert_eq!(normalize_long_vowel("ーカ"), "ーカ");
+        assert_eq!(normalize_long_vowel("ネコ"), "ネコ");
+    }
+
+    #[test]
+    fn zen_to_han_converts_fullwidth() {
+        // 全角英数記号 → 半角 (各 arm を個別に固定)。
+        assert_eq!(zen_to_han("ＡＢＣ"), "ABC");
+        assert_eq!(zen_to_han("ａｂｃ"), "abc");
+        assert_eq!(zen_to_han("１２３"), "123");
+        // 記号 arm を網羅: － \u{2212} ＋ ～ 〜 ％ ． ， ／
+        assert_eq!(zen_to_han("－"), "-");
+        assert_eq!(zen_to_han("\u{2212}"), "-");
+        assert_eq!(zen_to_han("＋"), "+");
+        assert_eq!(zen_to_han("～"), "~");
+        assert_eq!(zen_to_han("〜"), "~");
+        assert_eq!(zen_to_han("％"), "%");
+        assert_eq!(zen_to_han("．"), ".");
+        assert_eq!(zen_to_han("，"), ",");
+        assert_eq!(zen_to_han("／"), "/");
+        assert_eq!(zen_to_han("漢字"), "漢字"); // 非対象は不変
     }
 }

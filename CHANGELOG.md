@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **ruby 出力の区切り記号 escape** (`reading/output.rs`): `to_ruby` で、 入力テキスト由来の
+  ruby 区切り記号 `{` `}` `|` および escape 文字 `\` を `\` で escape するようにした
+  (例: 入力 `"猫{犬}"` → `"{猫|ねこ}\{{犬|いぬ}\}"`)。 従来はこれらが素通りして markup
+  `{surface|reading}` と衝突し曖昧な出力になっていた。 **これらの記号を含まない通常の
+  日本語入力では出力は完全に同一** (corpus 1085/1085 不変)。 出力を機械パースする側は
+  `\{` `\}` `\|` `\\` を un-escape すること。
+- **候補列挙の決定化** (`dict.rs`): `rich` prefix index の bucket を surface 昇順に sort し、
+  HashMap 反復順に依存しない決定的な列挙にした。 production の読みは元から決定的だが、
+  `analyze()` / `to_accent()` の同 weight alternatives 順序が run 間で揺れないことを保証。
+
+### Fixed
+
+- **CJK 拡張 B〜H 漢字の furigana** (`char_class.rs`): `𠮷` (吉野家) / `𩸽` (ほっけ) 等の
+  astral plane 漢字を漢字判定するようにした (従来は記号扱いで読みが付かなかった)。
+- **異体字セレクタ (IVS / VS) 除去** (`kana.rs`): `normalize_text` で `葛飾` (IVS 付き) /
+  `辻` (VS1) 等を base char に正規化し dict lookup を通す (NFKC/NFC では剥がれないため)。
+- **漢数字 ≥100 + 助数詞の読み** (`numbers/helpers.rs`, `scoring/numbers/patterns.rs`):
+  `三百回目` → 「三百かいめ」 のような化けを修正。 `kansuji_to_arabic` を百/千/万/億の
+  additive + `〇` positional (二〇二五=2025) 対応に一般化し、 counter の漢数字 pattern に
+  `万`/`億` を追加 (`一万回目` → 「いちまんかいめ」)。
+- **ローマ字の無音脱落** (`romaji.rs`): 末尾/母音前の `っ` (`あっ`) と直前に母音が無い `ー`
+  (`んー`) を silent drop せず、 それぞれ `tsu` / `-` で表すようにした。
+- **同 char-class 連続入力の O(N²)** (`scoring/matcher.rs`): `next/prev_logical_token` の
+  走査を上限で打ち切り、 同一漢字の長大連続 (`鬱`×10000 等) での request amplification を解消。
+- **Mutex poison からの回復** (`analyzer.rs`): tokenizer mutex が poison しても
+  `into_inner()` で lock を奪い返し、 恒久 degrade に陥らないようにした。
+- **runtime 辞書追加の sanitize** (`dict.rs`): `add_reading` / `insert` もバルク load と同じ
+  per-value sanitize (文字数上限 + 禁止文字) を通し、 不正な 1 件は静かに skip する。
+- **serve metrics の accent 計上** (`furigana-cli`): `record_request` の accent mode 欠落を修正。
+
 ## [0.1.11] - 2026-06-12
 
 match condition 数の重み付き tie-break (= 厳密な dict match block が同点で勝つ)。

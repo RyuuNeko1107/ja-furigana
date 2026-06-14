@@ -198,12 +198,17 @@ pub fn segment_for_tts(text: &str, max_len: usize) -> Vec<String> {
 mod tests {
     use super::*;
 
+    // (TtsOptions::default() の各 field 値を読み戻すだけの写経 test は削除。
+    //  default の振る舞いは normalize_inserts_pauses / normalize_drops_period_when_disabled
+    //  が観測可能な出力で検証している。)
+
     #[test]
-    fn default_options() {
-        let o = TtsOptions::default();
-        assert_eq!(o.short_pause, " ");
-        assert_eq!(o.long_pause, "   ");
-        assert!(o.keep_period);
+    fn insert_pause_after_respects_next_char() {
+        // target 直後が非空白なら pause、 空白が続く or 末尾なら pause 無し。
+        assert_eq!(insert_pause_after("あ。い", &['。'], "_"), "あ。_い");
+        assert_eq!(insert_pause_after("あ。 い", &['。'], "_"), "あ。 い"); // 空白続き
+        assert_eq!(insert_pause_after("あ。", &['。'], "_"), "あ。"); // 末尾は pause 無し
+        assert_eq!(insert_pause_after("ぬこ", &['。'], "_"), "ぬこ"); // target 無し
     }
 
     #[test]
@@ -287,10 +292,16 @@ mod tests {
 
     #[test]
     fn segment_falls_back_to_comma_when_too_long() {
-        // max=10、3 文を 1 文ずつだと収まらないが「、」で再分割で詰める
+        // max=5 を超える長文は「、」で再分割して詰める。
         let segs = segment_for_tts("a、b、c、d、e、f、g、h、i", 5);
-        // 各 chunk が 5 文字以内
-        assert!(segs.iter().all(|s| s.chars().count() <= 5));
+        // 空 Vec でも all(...) は vacuously true。非空かつ全 chunk ≤5、かつ
+        // 全文を欠落なく再構成できることまで固定する。
+        assert!(!segs.is_empty(), "segments should not be empty: {segs:?}");
+        assert!(
+            segs.iter().all(|s| s.chars().count() <= 5),
+            "each chunk ≤5 chars: {segs:?}"
+        );
+        assert_eq!(segs.concat(), "a、b、c、d、e、f、g、h、i", "no content lost");
     }
 
     #[test]
@@ -303,15 +314,17 @@ mod tests {
         // max_len=0 は内部で 1 に clamp される (slice::chunks(0) panic 回避)。
         // REPORT-002 回帰: 非空文を 0 で分割しても panic せず 1 文字ずつになる。
         let segs = segment_for_tts("あいう。", 0);
-        assert!(!segs.is_empty());
-        assert!(segs
-            .iter()
-            .all(|s| s.chars().count() <= 1 || s.ends_with('。')));
+        // clamp 後 max=1 で 1 文字ずつに分割。末尾の単独「。」は punct-only chunk
+        // として filter される (segment_filters_punct_only と同じ仕様) ため結果は
+        // ["あ","い","う"]。緩い `|| ends_with` をやめ実挙動を完全固定する。
+        assert_eq!(segs, vec!["あ", "い", "う"]);
     }
 
     #[test]
     fn segment_filters_punct_only() {
+        // 句読点のみの入力はフィルタされ空になる。旧 `is_empty() || ...` は
+        // どちらでも緑になり検証になっていなかった。空であることを直接固定する。
         let segs = segment_for_tts("。！？", 60);
-        assert!(segs.is_empty() || segs.iter().all(|s| s != "。" && s != "、"));
+        assert_eq!(segs, Vec::<String>::new());
     }
 }

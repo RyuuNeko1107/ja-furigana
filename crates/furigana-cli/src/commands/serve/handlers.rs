@@ -102,10 +102,18 @@ pub(super) async fn admin_reload(State(state): State<AppState>) -> Result<Json<V
 pub(super) async fn do_reload(state: &AppState, source: ReloadSource) -> Result<usize, String> {
     let old_size = state.furigana.read().await.dict_size();
     let paths = state.paths.clone();
-    let new = tokio::task::spawn_blocking(move || crate::commands::build_furigana(&paths))
-        .await
-        .map_err(|e| format!("reload task join error: {e}"))?
-        .map_err(|e| format!("build_furigana failed: {e}"))?;
+    let new = tokio::task::spawn_blocking(move || -> Result<furigana::Furigana, String> {
+        let f = crate::commands::build_furigana(&paths)
+            .map_err(|e| format!("build_furigana failed: {e}"))?;
+        // reload 直後の最初の request が同期 analyzer init コストを払わない /
+        // init 失敗でその 1 request が panic しないよう、 swap 前に eager init する
+        // (起動時 preload と挙動を揃える)。 build と同じ spawn_blocking 内なので
+        // executor を塞がない。 失敗時は swap せず旧 dict を温存し reload を atomic に保つ。
+        f.preload().map_err(|e| format!("preload after reload failed: {e}"))?;
+        Ok(f)
+    })
+    .await
+    .map_err(|e| format!("reload task join error: {e}"))??;
     let new_arc = std::sync::Arc::new(new);
     let dict_size = new_arc.dict_size();
     *state.furigana.write().await = new_arc;
@@ -555,5 +563,100 @@ mod tests {
             ..base_params()
         };
         assert!(validate_params(&p).is_err());
+    }
+
+    // ─── decode_text ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn decode_text_plain_text() {
+        let p = FuriganaParams {
+            text: Some("猫".into()),
+            text_b64: None,
+            ..base_params()
+        };
+        assert_eq!(decode_text(&p).unwrap(), "猫");
+    }
+
+    #[test]
+    fn decode_text_b64_decodes_and_takes_precedence() {
+        // "54yr" (URL_SAFE_NO_PAD base64) = "猫"。text より text_b64 が優先。
+        let p = FuriganaParams {
+            text: Some("犬".into()),
+            text_b64: Some("54yr".into()),
+            ..base_params()
+        };
+        assert_eq!(decode_text(&p).unwrap(), "猫");
+    }
+
+    #[test]
+    fn decode_text_invalid_base64_is_400() {
+        let p = FuriganaParams {
+            text: None,
+            text_b64: Some("!!!not base64!!!".into()),
+            ..base_params()
+        };
+        assert_eq!(decode_text(&p).unwrap_err().0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn decode_text_invalid_utf8_is_400() {
+        // "_w" = URL_SAFE_NO_PAD base64 of [0xFF] = 不正 UTF-8。
+        let p = FuriganaParams {
+            text: None,
+            text_b64: Some("_w".into()),
+            ..base_params()
+        };
+        assert_eq!(decode_text(&p).unwrap_err().0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn decode_text_missing_both_is_400() {
+        let p = FuriganaParams {
+            text: None,
+            text_b64: None,
+            ..base_params()
+        };
+        assert_eq!(decode_text(&p).unwrap_err().0, StatusCode::BAD_REQUEST);
+    }
+
+    // ─── validate_length ──────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_length_boundaries() {
+        assert!(validate_length("").is_err(), "空は 400");
+        assert!(validate_length("あ").is_ok());
+        assert!(validate_length(&"あ".repeat(MAX_TEXT_LEN)).is_ok(), "上限ちょうどは OK");
+        assert_eq!(
+            validate_length(&"あ".repeat(MAX_TEXT_LEN + 1)).unwrap_err().0,
+            StatusCode::BAD_REQUEST,
+            "上限+1 は 400"
+        );
+    }
+
+    // ─── normalize_mode ───────────────────────────────────────────────────────
+
+    #[test]
+    fn normalize_mode_known_through_unknown_to_default() {
+        for m in [
+            "tts", "hiragana", "ruby", "kanji", "romaji", "romaji-kunrei", "analyze", "accent",
+        ] {
+            assert_eq!(normalize_mode(m), m, "known mode はそのまま");
+        }
+        assert_eq!(normalize_mode("bogus"), default_mode());
+        assert_eq!(normalize_mode(""), default_mode());
+    }
+
+    // ─── detect_degraded ──────────────────────────────────────────────────────
+
+    #[test]
+    fn detect_degraded_logic() {
+        assert!(!detect_degraded("kanji", "猫", "猫"), "kanji mode は常に false");
+        assert!(detect_degraded("hiragana", "猫", ""), "空 result は degraded");
+        assert!(detect_degraded("hiragana", "猫", "猫"), "漢字含みで result==input は degraded");
+        assert!(!detect_degraded("hiragana", "猫", "ねこ"), "解決済は not degraded");
+        assert!(
+            !detect_degraded("hiragana", "ねこ", "ねこ"),
+            "漢字なしなら result==input でも not degraded"
+        );
     }
 }

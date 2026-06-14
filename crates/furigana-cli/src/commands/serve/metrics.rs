@@ -19,6 +19,7 @@ pub(super) struct ServerMetrics {
     req_romaji: AtomicU64,
     req_romaji_kunrei: AtomicU64,
     req_analyze: AtomicU64,
+    req_accent: AtomicU64,
     // latency histogram (= total ms、 bucket cumulative count)
     latency_buckets: [AtomicU64; 9],
     latency_sum_ms: AtomicU64,
@@ -43,6 +44,7 @@ impl ServerMetrics {
             "romaji" => &self.req_romaji,
             "romaji-kunrei" => &self.req_romaji_kunrei,
             "analyze" => &self.req_analyze,
+            "accent" => &self.req_accent,
             _ => return,
         };
         counter.fetch_add(1, Relaxed);
@@ -98,6 +100,7 @@ impl ServerMetrics {
             ("romaji", &self.req_romaji),
             ("romaji-kunrei", &self.req_romaji_kunrei),
             ("analyze", &self.req_analyze),
+            ("accent", &self.req_accent),
         ] {
             out.push_str(&format!(
                 "furigana_requests_total{{mode=\"{}\"}} {}\n",
@@ -173,5 +176,37 @@ impl ServerMetrics {
         ));
 
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accent_requests_are_counted() {
+        // 回帰: record_request に "accent" arm が無く、accent mode が per-mode counter /
+        // latency histogram から欠落していた (handlers.rs:245 が "accent" で呼ぶ)。
+        let m = ServerMetrics::default();
+        m.record_request("accent", 12.0);
+        m.record_request("accent", 30.0);
+        let rendered = m.render();
+        assert!(
+            rendered.contains("furigana_requests_total{mode=\"accent\"} 2"),
+            "accent counter missing/zero:\n{rendered}"
+        );
+        // latency にも計上される (count が 2)
+        assert!(
+            rendered.contains("furigana_request_duration_ms_count 2"),
+            "accent not counted in latency:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn unknown_mode_is_dropped_not_counted() {
+        // 未知 mode は従来どおり無視 (latency も増えない)。
+        let m = ServerMetrics::default();
+        m.record_request("bogus", 10.0);
+        assert!(m.render().contains("furigana_request_duration_ms_count 0"));
     }
 }
