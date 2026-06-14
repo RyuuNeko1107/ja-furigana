@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-06-14
+
+### Fixed
+
+- **多文字展開が token 分割された際の空 surface ruby** (`api.rs`): 原文 1 文字が複数文字に
+  展開され (例: compat `卅 → 三十`、 または NFKC `㍻ → 平成`)、 その展開が解析で複数 token に
+  分割されると、 surface 保持 remap が後続 token に **空 surface** を割り当て、 `to_ruby` が
+  `{卅|さん}{|じゅう}` のような壊れた ruby を出していた (0.1.13 surface 保持機構の latent bug、
+  0.1.15 の多文字 compat で顕在化)。 空 surface token の reading / accent_phrases / range を直前
+  token に結合して 1 token に畳むようにし (`卅 → {卅|さんじゅう}`)、 `tokenize` / `analyze` 両経路で
+  「原文 1 文字 → 1 出力 token」 を保証。 corpus 1085/1085 不変。
+  - 既知の限界: `卅日` のように展開後に counter と結合する語 (三**十日**=とおか と誤分割) は
+    まだ誤読しうる (= 旧字漢数字 + 助数詞の稀ケース)。 bare `廿`/`卅` と `廿日`(はつか) は正しい。
+
 ## [0.1.15] - 2026-06-14
 
 ### Fixed

@@ -149,14 +149,25 @@ impl Furigana {
                 .collect();
         }
         let remapped = norm.remap(text, tokens.iter().map(|t| t.surface.as_str()));
-        tokens
-            .into_iter()
-            .zip(remapped)
-            .map(|(t, (surface, _range))| ReadingToken {
+        let mut out: Vec<ReadingToken> = Vec::with_capacity(tokens.len());
+        for (t, (surface, _range)) in tokens.into_iter().zip(remapped) {
+            // 原文 1 文字が複数文字に展開され (例: 廿 → 二十)、 その展開が token 分割された
+            // 場合、 後続 token は空 surface になる。 その読みを直前 token に結合して落とす
+            // (= 原文 1 文字 → 1 出力 token、 `{|じゅう}` のような空 surface ruby を防ぐ)。
+            if surface.is_empty() {
+                if let Some(last) = out.last_mut() {
+                    if let Some(r) = last.reading.as_mut() {
+                        r.push_str(&t.reading);
+                    }
+                    continue;
+                }
+            }
+            out.push(ReadingToken {
                 surface,
                 reading: Some(t.reading),
-            })
-            .collect()
+            });
+        }
+        out
     }
 
     /// テキスト → ひらがな文字列
@@ -289,10 +300,26 @@ impl Furigana {
         let mut result = self.pipeline().analyze(&norm.text);
         if norm.changed {
             let remapped = norm.remap(input, result.tokens.iter().map(|t| t.surface.as_str()));
-            for (t, (surface, range)) in result.tokens.iter_mut().zip(remapped) {
+            // tokenize と同じ規約: 多文字展開の分割で空 surface になった token は直前 token に
+            // reading / accent_phrases / range を結合して落とす (= 原文 1 文字 → 1 token)。
+            // candidates / path_indices は正規化座標の debug 集約なので据え置き。
+            let mut merged: Vec<AnalyzeToken> = Vec::with_capacity(result.tokens.len());
+            for (mut t, (surface, range)) in
+                std::mem::take(&mut result.tokens).into_iter().zip(remapped)
+            {
+                if surface.is_empty() {
+                    if let Some(last) = merged.last_mut() {
+                        last.reading.push_str(&t.reading);
+                        last.range.end = range.end;
+                        last.accent_phrases.append(&mut t.accent_phrases);
+                        continue;
+                    }
+                }
                 t.surface = surface;
                 t.range = range;
+                merged.push(t);
             }
+            result.tokens = merged;
         }
         result
     }
@@ -968,6 +995,43 @@ mod tests {
         // surface 連結は原文一致 (1→2 文字展開でも不変条件維持)
         let concat: String = f.tokenize("廿").iter().map(|t| t.surface.clone()).collect();
         assert_eq!(concat, "廿");
+    }
+
+    #[test]
+    fn multichar_compat_merges_split_expansion_into_one_token() {
+        // 展開後の norm が複数 token に分割されるケース (卅 → 三十 → 三 + 十) で、
+        // 空 surface token を作らず読みを結合して 1 token にする
+        // (回帰: `{卅|さん}{|じゅう}` のような空 surface ruby を防ぐ)。
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_multichar_split_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("compat.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"compat\"\n\n[map]\n\"卅\" = \"三十\"\n",
+        )
+        .unwrap();
+        // 「三十」 を entry にせず 「三」「十」 個別だけ登録 → path は 2 token に分割される
+        std::fs::write(
+            dir.join("entries.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"jukugo\"\n\n[entries]\n\"三\" = \"サン\"\n\"十\" = \"ジュウ\"\n",
+        )
+        .unwrap();
+        let f = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        // 分割された 三+十 の読みを結合し、 surface は 卅 のまま 1 token
+        let toks = f.tokenize("卅");
+        assert_eq!(toks.len(), 1, "1 token に結合される: {toks:?}");
+        assert_eq!(toks[0].surface, "卅");
+        assert_eq!(f.to_ruby("卅"), "{卅|さんじゅう}");
+        assert!(
+            !f.to_ruby("卅").contains("{|"),
+            "空 surface ruby を出さない"
+        );
     }
 
     // ─── analyze() (F1) tests ────────────────────────────────────────────────
