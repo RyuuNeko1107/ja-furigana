@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-06-14
+
+### Fixed
+
+- **複数文字 canonical の compat 正規化** (`kana.rs`): `compat.toml` の variant → canonical で
+  canonical が複数文字の entry (旧字漢数字 `廿 → 二十` / `卅 → 三十` / `卌 → 四十` / `丗`/`卄`) を
+  **完全展開**するようにした。 従来は `normalize_char_piece` (旧 `normalize_text` 由来) が canonical の
+  **先頭 1 文字しか採らず** `廿 → 二` と十を落としていた (`廿日 → 二日` で読み崩れ)。 1 文字が複数文字に
+  展開されても `normalize_text_aligned` の char 単位 alignment が surface を原文へ remap するので、
+  `廿 → {廿|にじゅう}` のように表示は原文を保つ (`㍻ → 平成` と同じ扱い)。 corpus 1085/1085 不変。
+
 ## [0.1.14] - 2026-06-14
 
 ### Fixed

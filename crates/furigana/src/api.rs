@@ -939,6 +939,37 @@ mod tests {
         assert_eq!(f.to_ruby("髙田"), "{髙田|たかだ}");
     }
 
+    #[test]
+    fn multichar_compat_normalized_for_lookup_keeps_original_surface() {
+        // canonical 複数文字の compat (廿 = 二十、 旧字漢数字) で lookup し、 表示 surface は
+        // 廿 を保持する。 1 文字 → 2 文字展開でも alignment が崩れないことの回帰ガード。
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_multichar_compat_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("compat.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"compat\"\n\n[map]\n\"廿\" = \"二十\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("entries.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"jukugo\"\n\n[entries]\n\"二十\" = \"ニジュウ\"\n",
+        )
+        .unwrap();
+        let f = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        // 廿 → 二十 で lookup (ニジュウ)、 surface は 廿 のまま
+        assert_eq!(f.to_ruby("廿"), "{廿|にじゅう}");
+        // surface 連結は原文一致 (1→2 文字展開でも不変条件維持)
+        let concat: String = f.tokenize("廿").iter().map(|t| t.surface.clone()).collect();
+        assert_eq!(concat, "廿");
+    }
+
     // ─── analyze() (F1) tests ────────────────────────────────────────────────
 
     #[test]

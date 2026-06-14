@@ -389,18 +389,20 @@ pub fn normalize_text(s: &str, compat: &CompatData) -> String {
 ///
 /// [`normalize_text_aligned`] が unit ごとに呼ぶ。 NFKC は **1 文字単位** で適用する
 /// (旧 `normalize_text` の whole-string NFKC と、 結合文字列を跨がない実用入力では
-/// 一致する)。 compat は variant → canonical の先頭 1 文字で置換 (= 旧実装と同挙動)。
+/// 一致する)。 compat は variant → canonical の **全体** で置換する (= `廿 → 二十`
+/// `卅 → 三十` のような旧字漢数字の複数文字 canonical も完全展開。 旧実装は先頭 1 文字
+/// しか採らず `廿 → 二` と十を落としていた)。 1 文字が複数文字に展開されても、
+/// `normalize_text_aligned` の alignment は unit 単位 (= 原文 1 文字 ↔ 正規化断片) で
+/// 扱うため surface 保持に影響しない (`㍻ → 平成` と同じ扱い)。
 fn normalize_char_piece(ch: char, compat: &CompatData) -> String {
     let nfkc: String = ch.to_string().nfkc().collect();
-    let replaced: String = nfkc
-        .chars()
-        .map(|c| {
-            compat
-                .lookup(&c.to_string())
-                .and_then(|canonical| canonical.chars().next())
-                .unwrap_or(c)
-        })
-        .collect();
+    let mut replaced = String::with_capacity(nfkc.len());
+    for c in nfkc.chars() {
+        match compat.lookup(&c.to_string()) {
+            Some(canonical) => replaced.push_str(canonical),
+            None => replaced.push(c),
+        }
+    }
     replaced.nfc().collect()
 }
 
@@ -668,6 +670,15 @@ mod tests {
         let compat = make_compat(&[]);
         // 全角数字 NFKC → 半角
         assert_eq!(normalize_text("１２３", &compat), "123");
+    }
+
+    #[test]
+    fn normalize_text_expands_multichar_canonical() {
+        // canonical が複数文字の compat (旧字漢数字 廿=二十 / 卅=三十) を完全展開する
+        // (旧実装は先頭 1 文字のみで 廿→二 と十を落としていた)。
+        let compat = make_compat(&[("廿", "二十"), ("卅", "三十")]);
+        assert_eq!(normalize_text("廿日", &compat), "二十日");
+        assert_eq!(normalize_text("卅", &compat), "三十");
     }
 
     #[test]
