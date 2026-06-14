@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-06-14
+
 ### Changed
 
 - **ruby 出力の区切り記号 escape** (`reading/output.rs`): `to_ruby` で、 入力テキスト由来の
