@@ -149,6 +149,10 @@ cargo bench --bench scaling                  # 入力長スケーリング + all
 
 ## 注意点
 
-- **branch protection 一時 OFF** (master): alpha.7 → alpha.8 経緯、 stable cut 前に復元
+- **branch protection ON** (master): required status checks = Lint / Test (ubuntu/windows) /
+  Security audit / License audit / Analyze (rust)=CodeQL / Corpus regression /
+  Diff coverage (llvm-cov+diff-cover) / Mutation (changed lines)。strict=true、
+  enforce_admins=false (オーナーは unsigned で直 push 可、 既存履歴も admin bypass)。
+  テスト要件フレームワーク (`../テスト要件/`) の CI ゲートを 2026-06-17 に追加
 - **publish policy** (2026-05-11 再更新): **alpha 期間中は crates.io publish しない** (= 0.1.0 stable 再開)、 加えて **alpha.10 は GitHub release も skip** (= 4 commit は master push 済の内部 milestone label として残す)。 次の release は alpha.10 + alpha.11 work をまとめた alpha.11+。 既 publish 済 (`alpha.1` 〜 `alpha.9`) は metadata 不変のまま yank しない
 - **dict version compat**: alpha.10 lib は `[meta] schema_version = "2"` のみ accept、 旧 format dict は parse error (= dict v2 化と coordinated)
