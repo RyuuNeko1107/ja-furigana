@@ -176,6 +176,21 @@ mod tests {
         assert_eq!(euphonic_counter_read("ゼロ", "時", "0", &c, &d), "レイジ");
     }
 
+    /// replacement の適用条件は「digit 一致 **かつ** kana が from で終わる」(両方)で
+    /// なければならない。数値カナと raw_num が整合する正規呼び出しでは 2 条件は同値だが、
+    /// ends_with guard は「digit 一致だけで誤って truncate し、from を含まない kana を
+    /// 破壊する」のを防ぐ防御契約。digit=4 (repl[4] from=ヨン) でも kana が ヨン で
+    /// 終わらなければ置換してはならない。
+    /// (故障モデル: guard を緩めると「ナナ」を ヨン 長で切って「ヨ」へ誤置換 = ヨジ)
+    #[test]
+    fn replacement_needs_kana_suffix_not_just_digit() {
+        let c = load_counters();
+        let d = load_days();
+        // raw=4 は repl[4] の digit に一致するが num_kata="ナナ" は ヨン で終わらない。
+        // 正しくは無置換で default ジ を付けるのみ → "ナナジ"。
+        assert_eq!(euphonic_counter_read("ナナ", "時", "4", &c, &d), "ナナジ");
+    }
+
     #[test]
     fn month_specials() {
         let c = load_counters();

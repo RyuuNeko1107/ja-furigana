@@ -167,3 +167,60 @@ impl<'a> CandidateProvider for DictBridgeProvider<'a> {
         out
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dict::Dict;
+    use crate::scoring::boundary::BoundaryAnalysis;
+    use crate::scoring::candidate::BAND_DICT_EXACT;
+
+    fn ctx(input: &str) -> ScoringContext<'_> {
+        let boundary = Box::leak(Box::new(BoundaryAnalysis::empty()));
+        ScoringContext { input, boundary }
+    }
+
+    /// dedup 契約: 1 字 surface が rich entry にある時、emit_entries が char_emitted を
+    /// 立てて下位 phase (kanji block / unihan fallback) を抑止する。これが壊れると
+    /// 同じ 1 字に rich と unihan の二重候補が出る。
+    /// (故障モデル: `char_count == 1` 判定の反転、または `if !char_emitted` guard の
+    ///  ! 欠落で、unihan fallback が同一候補を重複 emit する)
+    #[test]
+    fn single_char_rich_entry_not_duplicated_by_fallback() {
+        // simple entry は 1 字を rich と unihan の両方へ登録する。dedup が無いと
+        // unihan fallback が同じ「犬」候補を二重に出してしまう。
+        let dict = Dict::from_toml_str("[entries]\n\"犬\" = \"イヌ\"\n", "t.toml").unwrap();
+        let provider = DictBridgeProvider::new(&dict);
+        let cands = provider.candidates_at(&ctx("犬"), 0);
+        assert_eq!(
+            cands.len(),
+            1,
+            "1字 rich entry が重複してはならない: {cands:?}"
+        );
+        assert_eq!(cands[0].reading, "イヌ");
+        assert_eq!(cands[0].range, 0..3);
+    }
+
+    /// jukugo (≥2 字) は BAND_DICT_EXACT で、surface 全体の range を持つ。
+    #[test]
+    fn jukugo_entry_uses_dict_exact_band_and_full_range() {
+        let dict = Dict::from_toml_str("[entries]\n\"猫舌\" = \"ネコジタ\"\n", "t.toml").unwrap();
+        let provider = DictBridgeProvider::new(&dict);
+        let cands = provider.candidates_at(&ctx("猫舌だ"), 0);
+        let neko = cands
+            .iter()
+            .find(|c| c.surface == "猫舌")
+            .expect("猫舌 候補");
+        assert_eq!(neko.reading, "ネコジタ");
+        assert_eq!(neko.range, 0..6, "2 字 (各 3 byte) の full range");
+        assert_eq!(neko.score.band, BAND_DICT_EXACT);
+    }
+
+    /// 先頭 char で始まらない位置では候補を出さない (tail.starts_with guard)。
+    #[test]
+    fn no_candidate_when_surface_does_not_match_tail() {
+        let dict = Dict::from_toml_str("[entries]\n\"犬\" = \"イヌ\"\n", "t.toml").unwrap();
+        let provider = DictBridgeProvider::new(&dict);
+        // 入力に「犬」が無いので候補ゼロ
+        assert!(provider.candidates_at(&ctx("猫"), 0).is_empty());
+    }
+}
