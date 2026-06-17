@@ -16,7 +16,10 @@ exclude_re = [
 ]
 
 # 注記 (除外せず backlog 扱いの既知等価変異):
-# - matcher.rs の MAX_LOGICAL_TOKEN_CHARS = MAX_DICT_VALUE_CHARS + 1 の `+` → `*` 変異は
-#   挙動中立 (1024+1 vs 1024*1 はどちらも「最長 condition より長い」打ち切り境界として
-#   等価。doc コメントの正しさ論証参照)。const 初期化子で fn 名が無く regex 除外しづらい
-#   ため、nightly full-mutation の既知 survivor として記録のみ。
+# - matcher.rs の MAX_LOGICAL_TOKEN_CHARS = MAX_DICT_VALUE_CHARS + 1 の `+` → `-`/`*` 変異は
+#   挙動中立 (1024±1 / 1024*1 はどれも「最長 condition より長い」打ち切り境界として等価。
+#   doc コメントの正しさ論証参照)。const 初期化子で fn 名が無く regex 除外しづらい。
+# - matcher.rs next_logical_token の `end = start + idx + c.len_utf8()` (None→Some 分岐) の
+#   `+` → `-` 変異は等価: この分岐は token 先頭 char でのみ発火し idx は常に 0 なので
+#   start+0 == start-0。
+# いずれも nightly full-mutation の既知 survivor として記録のみ (除外せず backlog)。

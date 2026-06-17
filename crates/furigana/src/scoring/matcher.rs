@@ -546,6 +546,51 @@ mod tests {
         assert_eq!(cond.context_hits(&MatchContext::with_next("ない")), None);
     }
 
+    #[test]
+    fn context_hits_next_eq_any_is_literal_weight() {
+        let cond = MatchCondition {
+            next_eq_any: vec!["から".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_next("から")),
+            Some(HIT_WEIGHT_LITERAL)
+        );
+        assert_eq!(cond.context_hits(&MatchContext::with_next("まで")), None);
+    }
+
+    #[test]
+    fn context_hits_next2_starts_any_is_broad_weight() {
+        let cond = MatchCondition {
+            next2_starts_any: vec!["旅".into()],
+            ..Default::default()
+        };
+        // next2 のみ指定 → with_all(prev=None, next=None, next2=Some)
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_all(None, None, Some("旅行"))),
+            Some(HIT_WEIGHT_BROAD)
+        );
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_all(None, None, Some("集団"))),
+            None
+        );
+    }
+
+    #[test]
+    fn context_hits_prev_char_type_is_broad_weight() {
+        let cond = MatchCondition {
+            prev_char_type: Some(CharType::Kanji),
+            ..Default::default()
+        };
+        // prev token 末尾が漢字 → BROAD hit
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_prev("漢")),
+            Some(HIT_WEIGHT_BROAD)
+        );
+        // 末尾がひらがな → miss
+        assert_eq!(cond.context_hits(&MatchContext::with_prev("あ")), None);
+    }
+
     // ─── prev_char_type ──────────────────────────────────────────────────────
 
     #[test]
