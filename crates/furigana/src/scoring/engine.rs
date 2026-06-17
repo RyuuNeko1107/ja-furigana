@@ -456,4 +456,31 @@ mod tests {
         assert_eq!(path.len(), 1);
         assert_eq!(path[0].surface, "猫");
     }
+
+    /// range.end が input 長を超える壊れた候補は skip される。
+    /// (故障モデル: `next_pos > n || next_pos <= pos` guard を緩めると、範囲外 next_pos で
+    ///  dp[next_pos] が添字範囲外 panic する。0-length 側だけでは dp[pos] が既に最適で
+    ///  更新されず mutant を区別できないため、out-of-bounds 側を明示的に固定する)
+    #[test]
+    fn solve_path_skips_out_of_bounds_candidate() {
+        struct OobProvider;
+        impl CandidateProvider for OobProvider {
+            fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+                // input 末尾を超える range を返す壊れた provider
+                vec![Candidate::new(
+                    "猫猫",
+                    "ネコネコ",
+                    pos..ctx.input.len() + 3,
+                    Score::dict_exact(2),
+                )]
+            }
+        }
+        let chars = CharProvider {
+            score: Score::kanji(1),
+        };
+        // 範囲外候補は無視され、char fallback で解決 (skip しないと dp 添字 panic)
+        let path = solve_path(&ctx("猫"), &[&OobProvider, &chars]);
+        assert_eq!(path.len(), 1);
+        assert_eq!(path[0].surface, "猫");
+    }
 }
