@@ -502,6 +502,50 @@ mod tests {
         assert!(!cond.matches_context(&MatchContext::with_next("じる")));
     }
 
+    // ─── context_hits の重み (literal=2 / broad=1) ───────────────────────────
+    // matches_context (bool) では検出できない hit 重みの累積を固定する。
+    // (故障モデル: 各条件の `hits += W` を壊すと Score::match_hits 第 3 軸が崩れ、
+    //  同 band / 同 length で「より厳密な条件で書いた block」が勝てなくなる)
+
+    #[test]
+    fn context_hits_prev_eq_any_is_literal_weight() {
+        let cond = MatchCondition {
+            prev_eq_any: vec!["段".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_prev("段")),
+            Some(HIT_WEIGHT_LITERAL)
+        );
+        assert_eq!(cond.context_hits(&MatchContext::with_prev("丘")), None);
+    }
+
+    #[test]
+    fn context_hits_prev_ends_any_is_broad_weight() {
+        let cond = MatchCondition {
+            prev_ends_any: vec!["けて".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_prev("かけて")),
+            Some(HIT_WEIGHT_BROAD)
+        );
+        assert_eq!(cond.context_hits(&MatchContext::with_prev("かく")), None);
+    }
+
+    #[test]
+    fn context_hits_next_starts_any_is_broad_weight() {
+        let cond = MatchCondition {
+            next_starts_any: vec!["ける".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::with_next("けるかも")),
+            Some(HIT_WEIGHT_BROAD)
+        );
+        assert_eq!(cond.context_hits(&MatchContext::with_next("ない")), None);
+    }
+
     // ─── prev_char_type ──────────────────────────────────────────────────────
 
     #[test]
