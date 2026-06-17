@@ -129,6 +129,15 @@ impl<'a> DictBridgeProvider<'a> {
         true
     }
 
+    /// unihan (1 字) フォールバック。
+    ///
+    /// ★後方互換のために残す legacy 経路。現行の loading では **到達しない**:
+    /// unihan map は必ず `Dict::insert` (= 1 字 simple entry で rich と対) か
+    /// `[[kanji]]` block (= kanji index に載る) 経由で埋まるため、この関数に来る前に
+    /// `char_emitted` が立つ (entries / kanji block phase で emit 済)。
+    /// = mutation は等価変異になるので `.cargo/mutants.toml` で除外している。
+    /// 将来 unihan-only の load 経路 (rich にも kanji にも載らない 1 字 reading) を
+    /// 追加する場合は、その除外を外して本フォールバックを直接テストすること。
     fn emit_unihan(&self, pos: usize, tail: &str, first_len: usize, out: &mut Vec<Candidate>) {
         let surface = &tail[..first_len];
         if let Some(reading) = self.dict.lookup_unihan(surface) {

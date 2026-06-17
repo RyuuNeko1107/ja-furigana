@@ -1,0 +1,12 @@
+# cargo-mutants 設定 (テスト要件 STEP7 / §10)。
+#
+# exclude_re: 「等価変異 (どうテストしても殺せない / 到達不能コード)」を survivor ノイズと
+# して出し続けないための除外。除外は必ず根拠とセットで記録する (= 安易な mutation 回避は
+# 禁止。下記は到達不能の証明付き)。
+exclude_re = [
+    # DictBridgeProvider::emit_unihan — 後方互換の legacy フォールバック。
+    # unihan map は必ず rich (insert) か kanji block と対で埋まるため、char_emitted が
+    # 先に立ち本関数に到達しない (dict_bridge.rs の doc コメント参照)。到達不能 = 等価変異。
+    # 将来 unihan-only の load 経路を足したら、この除外を消してフォールバックを直接テストする。
+    "emit_unihan",
+]
