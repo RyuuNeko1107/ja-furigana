@@ -1,0 +1,93 @@
+name: Nightly (full mutation + flaky)
+
+# テスト要件「運用-統制とCI」§8 定期実行 / §10 テストスイート自体の観測 に対応。
+# PR を遅くしないため、高コストな full mutation と flaky 検出はここ (定期) に隔離する。
+on:
+  schedule:
+    # 毎日 18:00 UTC = 03:00 JST
+    - cron: "0 18 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ── full mutation: mutation score のトレンド計測 (§10) ──────────────────────
+  # PR の差分 mutation と違い、全コードに変異を注入して「テストが守れていない箇所」を
+  # 棚卸しする。surviving mutant は即バグではない (= 改善 backlog) ため job 自体は
+  # 落とさず (continue-on-error)、レポートを artifact 化してスコア低下を追う。
+  full-mutation:
+    name: Full mutation (trend)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-mutation
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Run full mutation (lib crate)
+        run: |
+          cargo mutants --no-shuffle -j 2 --timeout 120 \
+            --package ja-furigana \
+            || true   # surviving mutant は backlog 扱い。レポートを残して継続。
+
+      - name: Upload full mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-full
+          path: mutants.out/
+          if-no-files-found: ignore
+
+  # ── flaky 検出: 同一コードで非決定的に失敗するテストを能動的に炙り出す (§2) ──
+  # libtest は実行順をシャッフルしないため、並列度を変えて N 回反復し、
+  # スレッド競合・グローバル状態・順序依存・実時刻/乱数依存を露出させる。
+  # 1 回でも失敗したら flaky 候補として job を fail させる (retry/sleep で隠さない)。
+  flaky-detection:
+    name: Flaky detection (repeat x10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-flaky
+
+      - name: Build tests once
+        run: cargo test --workspace --no-run
+
+      - name: Repeat test suite with varying parallelism
+        run: |
+          set -e
+          fail=0
+          for i in $(seq 1 10); do
+            threads=$(( (i % 4) + 1 ))
+            echo "::group::run $i (--test-threads=$threads)"
+            if ! cargo test --workspace -- --test-threads="$threads"; then
+              echo "::error::flaky candidate: run $i failed (threads=$threads)"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail

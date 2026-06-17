@@ -208,3 +208,112 @@ jobs:
           python3 ja-furigana-dict/tools/test_inline_rules.py \
             --binary "$GITHUB_WORKSPACE/ja-furigana/target/release/furigana" \
             --data-dir "$GITHUB_WORKSPACE/data-staging"
+
+  # ── 差分カバレッジ ゲート (テスト要件 STEP7 / 階層 T1+ 必須) ──────────────────
+  # 変更した行が新規/既存テストでカバーされているかを PR で強制する。
+  # 全体カバレッジ閾値ではなく「当該変更の差分行」を見るので、無関係な未カバー領域に
+  # 引っ張られず、追加コードのテスト漏れだけを検出できる (テスト要件 用語: 差分カバレッジ)。
+  diff-coverage:
+    name: Diff coverage (llvm-cov + diff-cover)
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0     # diff-cover が base branch と比較するため全履歴が要る
+
+      - name: Install Rust toolchain (stable + llvm-tools)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Generate lcov coverage
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install diff-cover
+        run: pip install "diff-cover>=9"
+
+      # PR でのみ差分ゲートを発火。push (master 直) では総量レポートのみ。
+      - name: Diff coverage gate (changed lines >= 80%)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          diff-cover lcov.info \
+            --compare-branch "origin/${{ github.base_ref }}" \
+            --fail-under 80 \
+            --markdown-report diff-cover.md
+          cat diff-cover.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            lcov.info
+            diff-cover.md
+          if-no-files-found: ignore
+
+  # ── mutation (差分) ゲート (テスト要件 STEP7 / 階層 T2 で必須、PR は「一部=差分」) ──
+  # 変更行に注入した変異をテストが検出 (=fail) できるかを確認する。
+  # 「テストが通っている」だけでは、その行を何に書き換えても緑のままの「実質未検証」を
+  # 見逃す。cargo-mutants --in-diff で当該 PR が触った行のみ高速に検査する。
+  mutation-diff:
+    name: Mutation (changed lines)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo / target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mutation
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Compute PR diff (merge-base)
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          git diff "origin/${{ github.base_ref }}...HEAD" -- '*.rs' > pr.diff
+          echo "--- changed Rust lines ---"; wc -l pr.diff
+
+      # 生存変異 (caught されなかった変異) があれば cargo-mutants は非0で fail。
+      # diff に .rs 変更が無い (= dict/doc のみの PR) 場合は変異対象ゼロで即 pass。
+      - name: Mutation test on changed lines
+        run: |
+          cargo mutants --no-shuffle -j 2 --timeout 120 \
+            --in-diff pr.diff \
+            --package ja-furigana
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-diff
+          path: mutants.out/
+          if-no-files-found: ignore
