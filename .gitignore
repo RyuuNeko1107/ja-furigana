@@ -30,3 +30,7 @@ Thumbs.db
 # Local config
 .env
 .env.local
+
+# cargo-mutants 作業ディレクトリ
+mutants.out/
+mutants.out.old/
