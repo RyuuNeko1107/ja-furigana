@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- **サンプル `examples/voicevox-reading-bridge/`**: 誤読した単語だけ読みを直して
+  VOICEVOX に喋らせる棒読みちゃん互換ローカルサーバー (Node.js 単体、 依存ゼロ)。
+  節ごとに ja-furigana と VOICEVOX 自身の読みを phoneme 列で比較し、 LCS diff で
+  ズレた token だけ読みカナに置換する (韻律はエンジン任せ、 読みだけ修正 —
+  アクセント記法の全上書き / 全文ひらがな化より抑揚が自然、 実聴比較に基づく設計)。
+  `furigana serve` + VOICEVOX でローカル完結で動く。
+
 ## [0.1.17] - 2026-07-04
 
 ### Added
