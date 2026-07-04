@@ -33,6 +33,7 @@
 //!
 //! 詳細: `docs/PROPOSALS/scoring-engine.md` §5.6
 
+pub mod accent_estimate;
 pub mod analyze;
 pub mod boundary;
 pub mod bracket;
@@ -47,6 +48,7 @@ pub mod matcher;
 pub mod names;
 pub mod numbers;
 pub mod odoriji;
+pub mod phonojoin;
 pub mod pipeline;
 pub mod postpass;
 pub mod special;

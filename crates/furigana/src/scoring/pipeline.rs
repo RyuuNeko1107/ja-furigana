@@ -21,6 +21,7 @@
 
 use crate::analyzer::Analyzer;
 use crate::dict::Dict;
+use crate::scoring::accent_estimate;
 use crate::scoring::analyze::{
     analyze as run_analyze, analyze_tokens as run_analyze_tokens, AnalyzeResult, Token,
 };
@@ -45,6 +46,9 @@ pub struct Pipeline<'a> {
     number_provider: &'a NumberCandidateProvider,
     loanwords: &'a Arc<HashMap<String, String>>,
     analyzer: &'a Analyzer,
+    /// rule-based accent 推定の opt-in flag (ADR-0007)。 post-pass 適用後に
+    /// [`crate::scoring::accent_estimate::estimate`] を走らせるかどうか。
+    estimate_accent: bool,
 }
 
 impl<'a> Pipeline<'a> {
@@ -54,12 +58,14 @@ impl<'a> Pipeline<'a> {
         number_provider: &'a NumberCandidateProvider,
         loanwords: &'a Arc<HashMap<String, String>>,
         analyzer: &'a Analyzer,
+        estimate_accent: bool,
     ) -> Self {
         Self {
             dict,
             number_provider,
             loanwords,
             analyzer,
+            estimate_accent,
         }
     }
 
@@ -71,6 +77,9 @@ impl<'a> Pipeline<'a> {
     pub fn tokens(&self, input: &str) -> Vec<Token> {
         let mut tokens = self.with_providers(input, run_analyze_tokens);
         postpass::apply_all(&mut tokens, self.dict, self.analyzer);
+        if self.estimate_accent {
+            accent_estimate::estimate(&mut tokens, self.analyzer);
+        }
         tokens
     }
 
@@ -82,6 +91,9 @@ impl<'a> Pipeline<'a> {
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
         let mut result = self.with_providers(input, run_analyze);
         postpass::apply_all(&mut result.tokens, self.dict, self.analyzer);
+        if self.estimate_accent {
+            accent_estimate::estimate(&mut result.tokens, self.analyzer);
+        }
         result
     }
 

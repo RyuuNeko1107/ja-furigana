@@ -33,7 +33,7 @@ use crate::scoring::postpass::ReadingPostPass;
 ///
 /// 「君」 は 暴君 / 諸君 等の非敬称があるが、 本 pass は 「X+君 の X を直前 token と
 /// 結合すると辞書 / 固有名詞 hit する」 場合のみ発火するため誤爆面では同列。
-const SUFFIXES: &[(&str, &str)] = &[
+pub(crate) const SUFFIXES: &[(&str, &str)] = &[
     ("さん", "サン"),
     ("ちゃん", "チャン"),
     ("くん", "クン"),
@@ -133,6 +133,7 @@ impl NameBoundaryPass<'_> {
         prev.accent_phrases = parsed.accent_phrases;
         prev.ambiguous = false;
         prev.alternatives.clear();
+        prev.is_name = true;
 
         let cur = &mut tokens[i];
         cur.surface = suffix.to_string();
@@ -184,6 +185,7 @@ impl NameBoundaryPass<'_> {
         name.accent_phrases = parsed.accent_phrases;
         name.ambiguous = false;
         name.alternatives.clear();
+        name.is_name = true;
         tokens.remove(i - 1);
 
         let cur = &mut tokens[i - 1];
@@ -221,6 +223,7 @@ mod tests {
             accent_phrases: Vec::new(),
             ambiguous: false,
             alternatives: Vec::new(),
+            is_name: false,
         }
     }
 

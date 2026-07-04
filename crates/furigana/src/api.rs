@@ -49,6 +49,12 @@ pub struct Furigana {
     /// value はカタカナ reading。
     /// [`AlphabetPassthroughProvider`] に渡して band 1000 で hit させる。
     loanwords: Arc<HashMap<String, String>>,
+    /// rule-based accent 推定の opt-in flag (ADR-0007、 default false)。
+    ///
+    /// true のとき dict bracket を持たない token に外来語 -3 rule / 人名 rule で
+    /// accent を推定し `estimated: true` で埋める。 読み出力 (`to_hiragana` 等) には
+    /// 一切影響しない (accent_phrases のみ)。
+    estimate_accent: bool,
 }
 
 impl Furigana {
@@ -115,6 +121,7 @@ impl Furigana {
             &self.number_provider,
             &self.loanwords,
             self.analyzer(),
+            self.estimate_accent,
         )
     }
 
@@ -398,6 +405,7 @@ pub struct FuriganaBuilder {
     user_dict_dirs: Vec<PathBuf>,
     overrides_files: Vec<PathBuf>,
     extra_entries: Vec<(String, String)>,
+    estimate_accent: bool,
 }
 
 impl FuriganaBuilder {
@@ -439,6 +447,20 @@ impl FuriganaBuilder {
     #[must_use]
     pub fn add_entry(mut self, surface: impl Into<String>, reading: impl Into<String>) -> Self {
         self.extra_entries.push((surface.into(), reading.into()));
+        self
+    }
+
+    /// rule-based accent 推定を有効化する (opt-in、 ADR-0007。 default: off)。
+    ///
+    /// 有効時、 dict bracket notation を持たない token に **決定論的な frozen rule**
+    /// (外来語 -3 rule / 人名 rule) で accent を推定し、 `AccentPhrase` の
+    /// `estimated: true` で真値 (dict 由来) と区別できる形で埋める。
+    /// 推定できない token は従来どおり `accent_phrases` 空 (= accent 不明)。
+    ///
+    /// 読み出力 (`to_hiragana` / `to_ruby` 等) には影響しない。
+    #[must_use]
+    pub fn estimate_accent(mut self, enabled: bool) -> Self {
+        self.estimate_accent = enabled;
         self
     }
 
@@ -504,6 +526,7 @@ impl FuriganaBuilder {
             dict,
             number_provider,
             loanwords: Arc::new(loanwords_map),
+            estimate_accent: self.estimate_accent,
         })
     }
 }
@@ -1161,6 +1184,83 @@ mod tests {
         let r = f.to_accent("猫");
         assert_eq!(r.tokens[0].reading, "ネコ");
         assert!(r.tokens[0].accent_phrases.is_empty());
+    }
+
+    // ─── accent 推定 (opt-in、 ADR-0007) ─────────────────────────────────────
+
+    #[test]
+    fn estimate_accent_fills_loanword_by_minus3_rule() {
+        let f = Furigana::builder().estimate_accent(true).build().unwrap();
+        let r = f.to_accent("カーテン");
+        assert_eq!(r.tokens[0].reading, "カーテン"); // 長音保持 (カアテン 化けの回帰 pin)
+        let p = &r.tokens[0].accent_phrases[0];
+        assert_eq!(p.reading, "カーテン");
+        assert_eq!(p.mora, 4);
+        assert_eq!(p.accent, Some(1)); // -3 = ー → 左シフト → カ]ーテン
+        assert!(p.estimated);
+    }
+
+    #[test]
+    fn estimate_accent_flags_name_via_honorific_context() {
+        // 田中 は IPADIC 人名 (敬称文脈の standalone 照会で is_name 補完)
+        let f = Furigana::builder().estimate_accent(true).build().unwrap();
+        let r = f.to_accent("田中さん");
+        let tanaka = &r.tokens[0];
+        assert_eq!(tanaka.surface, "田中");
+        let p = &tanaka.accent_phrases[0];
+        assert_eq!(p.accent, Some(1)); // 3 mora 姓 → -3 = タ]ナカ
+        assert!(p.estimated);
+        // 敬称そのものは推定対象外
+        assert!(r.tokens[1].accent_phrases.is_empty());
+    }
+
+    #[test]
+    fn estimate_accent_off_by_default() {
+        // flag なし = ADR-0002 の従来挙動 (不明は accent_phrases 空)
+        let f = Furigana::minimal().unwrap();
+        let r = f.to_accent("カーテン");
+        assert!(r.tokens[0].accent_phrases.is_empty());
+    }
+
+    #[test]
+    fn estimate_accent_does_not_change_readings() {
+        // 推定 on/off で読み出力は完全一致 (accent_phrases のみの差)
+        let on = Furigana::builder().estimate_accent(true).build().unwrap();
+        let off = Furigana::minimal().unwrap();
+        for input in ["田中さんとカーテン", "烈核の一撃", "猫が好き"] {
+            assert_eq!(on.to_hiragana(input), off.to_hiragana(input));
+            assert_eq!(on.to_ruby(input), off.to_ruby(input));
+        }
+    }
+
+    #[test]
+    fn estimated_field_absent_in_dict_bracket_json() {
+        // dict bracket 由来 (真値) の JSON には estimated が出ない (additive 互換)
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("雨", "ア]メ");
+        let json = serde_json::to_string(&f.to_accent("雨")).unwrap();
+        assert!(!json.contains("estimated"), "json = {json}");
+    }
+
+    // ─── OOV 促音便 join (default on、 ADR-0008) ─────────────────────────────
+
+    #[test]
+    fn oov_kanji_chain_gets_sokuonbin() {
+        // 烈核 (辞書/IPADIC に無い合成語) が単漢字 chain になったとき ガクコウ 型の
+        // べた読みでなく促音便が入る
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("烈", "レツ");
+        f.add_reading("核", "カク");
+        assert_eq!(f.to_hiragana("烈核"), "れっかく");
+    }
+
+    #[test]
+    fn known_word_boundary_not_geminated() {
+        // multi-char token (実単語) が絡む join は促音便しない
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("圧縮", "アッシュク");
+        f.add_reading("率", "リツ");
+        assert_eq!(f.to_hiragana("圧縮率"), "あっしゅくりつ");
     }
 
     #[test]

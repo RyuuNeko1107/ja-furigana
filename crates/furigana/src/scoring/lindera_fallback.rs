@@ -78,9 +78,10 @@ fn is_real_cjk_ideograph(c: char) -> bool {
 /// で位置 lookup (= 通常 input なら数十 edges 程度、 amortized 軽量)。
 #[derive(Debug, Clone, Default)]
 pub struct LinderaFallbackProvider {
-    /// (byte_start, byte_end, reading) の 3-tuple。
+    /// (byte_start, byte_end, reading, is_name) の 4-tuple。
     /// reading は カタカナ (Lindera 由来) または surface fallback。
-    edges: Vec<(usize, usize, String)>,
+    /// is_name は IPADIC 品詞 = 名詞/固有名詞/人名 のとき true (accent 推定用、 ADR-0007)。
+    edges: Vec<(usize, usize, String, bool)>,
 }
 
 impl LinderaFallbackProvider {
@@ -118,8 +119,11 @@ impl LinderaFallbackProvider {
             let end = byte_pos + surface_len;
             // reading: Lindera details[7] (= カタカナ)、 無ければ surface fallback
             // (= 記号 / 未知語、 reading = surface で 「読まない」 扱い)
+            let is_name = tok.pos.as_deref() == Some("名詞")
+                && tok.pos_detail.as_deref() == Some("固有名詞")
+                && tok.pos_detail2.as_deref() == Some("人名");
             let reading = tok.reading.unwrap_or_else(|| tok.surface.clone());
-            edges.push((byte_pos, end, reading));
+            edges.push((byte_pos, end, reading, is_name));
             byte_pos = end;
         }
         // 末尾に Lindera が落とした空白 / 改行が残る場合も passthrough で補う
@@ -149,14 +153,14 @@ impl LinderaFallbackProvider {
         input: &str,
         start: usize,
         end: usize,
-        edges: &mut Vec<(usize, usize, String)>,
+        edges: &mut Vec<(usize, usize, String, bool)>,
     ) -> bool {
         if start >= end {
             return true;
         }
         let gap = &input[start..end];
         if gap.chars().all(|c| c.is_whitespace() || c.is_control()) {
-            edges.push((start, end, gap.to_string()));
+            edges.push((start, end, gap.to_string(), false));
             true
         } else {
             false
@@ -169,8 +173,8 @@ impl CandidateProvider for LinderaFallbackProvider {
         let input = ctx.input;
         self.edges
             .iter()
-            .filter(|(start, _, _)| *start == pos)
-            .map(|(start, end, reading)| {
+            .filter(|(start, _, _, _)| *start == pos)
+            .map(|(start, end, reading, is_name)| {
                 let surface = &input[*start..*end];
                 let char_count = surface.chars().count();
                 let length = u8::try_from(char_count).unwrap_or(u8::MAX);
@@ -187,6 +191,7 @@ impl CandidateProvider for LinderaFallbackProvider {
                     Score::lindera(length)
                 };
                 Candidate::new(surface.to_string(), reading.clone(), *start..*end, score)
+                    .with_name_flag(*is_name)
             })
             .collect()
     }

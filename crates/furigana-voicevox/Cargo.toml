@@ -1,0 +1,25 @@
+[package]
+name = "ja-furigana-voicevox"
+description = "VOICEVOX adapter for ja-furigana — converts accent output to AquesTalk-like kana notation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+# 形態素解析辞書の選択を lib へ pass-through (CLI と同じ流儀)。
+default = ["dict-ipadic"]
+dict-ipadic = ["furigana/dict-ipadic"]
+dict-unidic = ["furigana/dict-unidic"]
+
+[dependencies]
+# crates.io 上の crate 名は `ja-furigana` (import 名は lib 名 = `furigana`)。
+furigana = { package = "ja-furigana", path = "../furigana", version = "=0.1.17", default-features = false }
+
+[lints]
+workspace = true

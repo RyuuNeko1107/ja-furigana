@@ -131,6 +131,7 @@ mod tests {
             accent_phrases: Vec::new(),
             ambiguous: false,
             alternatives: Vec::new(),
+            is_name: false,
         }
     }
 

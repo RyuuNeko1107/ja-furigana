@@ -31,6 +31,11 @@ pub struct AccentPhrase {
     pub reading: String,
     pub mora: u8,
     pub accent: Option<u8>,
+    /// 推定 accent flag (ADR-0007)。 dict bracket 由来 (= 真値) は `false` で
+    /// serialize されない = 既存 JSON 出力は不変。 `estimate_accent` opt-in 時の
+    /// rule-based 推定のみ `true`。
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub estimated: bool,
 }
 
 /// `parse_bracket_notation` の戻り値。
@@ -42,8 +47,27 @@ pub struct ParsedReading {
 
 // ─── mora ───────────────────────────────────────────────────────────────────
 
-fn is_combining_small_kana(c: char) -> bool {
-    matches!(c, 'ャ' | 'ュ' | 'ョ' | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ')
+pub(crate) fn is_combining_small_kana(c: char) -> bool {
+    // dict reading は 訓=ひらがな / 音=カタカナ の混在慣習なので両 script を見る
+    // (ひらがな側を見落とすと "[ちゃわん" 等の拗音入りひらがな reading で mora が狂う)
+    matches!(
+        c,
+        'ャ' | 'ュ'
+            | 'ョ'
+            | 'ァ'
+            | 'ィ'
+            | 'ゥ'
+            | 'ェ'
+            | 'ォ'
+            | 'ゃ'
+            | 'ゅ'
+            | 'ょ'
+            | 'ぁ'
+            | 'ぃ'
+            | 'ぅ'
+            | 'ぇ'
+            | 'ぉ'
+    )
 }
 
 /// カタカナ reading の mora 数を数える。
@@ -161,6 +185,7 @@ fn flush_phrase(
         reading: std::mem::take(kana),
         mora: *mora,
         accent,
+        estimated: false,
     });
     *mora = 0;
     *accent_pos = None;
@@ -214,6 +239,22 @@ mod tests {
         assert_eq!(count_mora("ファン"), 2); // ファ(1) ン(2)
         assert_eq!(count_mora("ティ"), 1); // ティ(1)
         assert_eq!(count_mora("フォーク"), 3); // フォ(1) ー(2) ク(3)
+    }
+
+    #[test]
+    fn mora_hiragana_youon() {
+        // dict reading は訓=ひらがな慣習: ひらがな拗音も 1 mora 合算
+        assert_eq!(count_mora("ちゃわん"), 3); // ちゃ(1) わ(2) ん(3)
+        assert_eq!(count_mora("きょう"), 2); // きょ(1) う(2)
+    }
+
+    #[test]
+    fn parse_hiragana_reading_with_brackets() {
+        // ひらがな reading + bracket でも mora / accent が正しい
+        let r = parse_bracket_notation("[ちゃ]わん");
+        assert_eq!(r.reading, "ちゃわん");
+        assert_eq!(r.accent_phrases[0].mora, 3);
+        assert_eq!(r.accent_phrases[0].accent, Some(1));
     }
 
     #[test]

@@ -169,6 +169,7 @@ mod tests {
                 accent_phrases: Vec::new(),
                 ambiguous: false,
                 alternatives: Vec::new(),
+                is_name: false,
             },
             Token {
                 surface: "の".into(),
@@ -177,6 +178,7 @@ mod tests {
                 accent_phrases: Vec::new(),
                 ambiguous: false,
                 alternatives: Vec::new(),
+                is_name: false,
             },
             Token {
                 surface: "道".into(),
@@ -185,6 +187,7 @@ mod tests {
                 accent_phrases: Vec::new(),
                 ambiguous: false,
                 alternatives: Vec::new(),
+                is_name: false,
             },
         ];
         let candidates = vec![

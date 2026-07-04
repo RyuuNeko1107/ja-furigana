@@ -3,10 +3,11 @@ resolver = "2"
 members = [
     "crates/furigana",
     "crates/furigana-cli",
+    "crates/furigana-voicevox",
 ]
 
 [workspace.package]
-version = "0.1.16"
+version = "0.1.17"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT"

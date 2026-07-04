@@ -49,6 +49,10 @@ pub struct Token {
     /// 代替読み候補 (採択されなかった候補、weight 降順)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub alternatives: Vec<AlternativeReading>,
+    /// 人名 token flag (crate 内部、 accent 推定用。 ADR-0007)。
+    /// 由来: Lindera 固有名詞/人名 candidate、 または NameBoundaryPass の人名補正。
+    #[serde(skip)]
+    pub(crate) is_name: bool,
 }
 
 impl Token {
@@ -63,6 +67,7 @@ impl Token {
             accent_phrases: parsed.accent_phrases,
             ambiguous: false,
             alternatives: Vec::new(),
+            is_name: c.is_name,
         }
     }
 }

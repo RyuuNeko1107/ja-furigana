@@ -17,7 +17,8 @@ pub struct Args {
     /// 変換対象テキスト
     text: String,
 
-    /// 変換モード: `tts` (default) | `hiragana` | `ruby` | `kanji` | `romaji` | `romaji-kunrei` | `analyze` | `accent`
+    /// 変換モード: `tts` (default) | `hiragana` | `ruby` | `kanji` | `romaji` | `romaji-kunrei` |
+    /// `analyze` | `accent` | `voicevox-aques` | `bouyomi`
     #[arg(short, long, default_value = "tts")]
     mode: String,
 
@@ -44,6 +45,11 @@ pub struct Args {
     /// TTS: `。` を残さず削除する
     #[arg(long)]
     drop_period: bool,
+
+    /// accent/analyze: dict bracket が無い token にも rule-based accent 推定を適用する
+    /// (ADR-0007。 推定 phrase は `"estimated": true` で真値と区別される)
+    #[arg(long)]
+    estimate_accent: bool,
 }
 
 /// 実行
@@ -58,9 +64,11 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         for core in &args.core_dict_dir {
             b = b.core_dict_dir(core);
         }
-        b.build()?
+        b.estimate_accent(args.estimate_accent).build()?
     } else {
-        super::build_furigana(paths)?
+        super::furigana_builder(paths)
+            .estimate_accent(args.estimate_accent)
+            .build()?
     };
 
     let result = match args.mode.as_str() {
@@ -69,13 +77,21 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         "hiragana" | "hira" => f.to_hiragana(&args.text),
         "romaji" => f.to_romaji(&args.text, RomajiStyle::Hepburn),
         "romaji-kunrei" | "kunrei" => f.to_romaji(&args.text, RomajiStyle::Kunrei),
-        "tts" => {
+        // 棒読みちゃん (互換サーバー含む) へ流すテキストは tts mode と同一
+        // (= 読み化 + pause 整形。 棒読みちゃん側の漢字誤読を bypass する)
+        "tts" | "bouyomi" => {
             let opts = TtsOptions {
                 short_pause: args.short_pause,
                 long_pause: args.long_pause,
                 keep_period: !args.drop_period,
             };
             f.to_tts(&args.text, &opts)
+        }
+        // VOICEVOX AquesTalk-風記法 (ADR-0001 adapter crate 経由)。
+        // POST /accent_phrases?is_kana=true にそのまま渡せる。
+        // dict bracket / --estimate-accent が無い token は平板 fallback。
+        "voicevox-aques" | "voicevox" => {
+            ja_furigana_voicevox::to_aques_kana(&f.to_accent(&args.text))
         }
         // Smart engine debug API (★F1): AnalyzeResult を JSON pretty 出力。
         // alpha.10 段階の experimental、 path 採択 / 候補列 / boundary region を inspect 用途。
@@ -88,7 +104,7 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
             serde_json::to_string_pretty(&result).context("serialize AccentResult to JSON")?
         }
         other => bail!(
-            "未知の mode: {other} (使用可能: tts | hiragana | ruby | kanji | romaji | romaji-kunrei | analyze | accent)"
+            "未知の mode: {other} (使用可能: tts | bouyomi | hiragana | ruby | kanji | romaji | romaji-kunrei | analyze | accent | voicevox-aques)"
         ),
     };
 

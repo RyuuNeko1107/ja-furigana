@@ -6,6 +6,48 @@
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-07-04
+
+### Added
+
+- **rule-based accent 推定 (opt-in、 ADR-0007)** (`scoring/accent_estimate.rs`):
+  `FuriganaBuilder::estimate_accent(true)` / CLI `--estimate-accent` で、 dict bracket
+  notation (真値) を持たない token に **決定論的な frozen rule** で accent 核位置を推定する。
+  - 外来語 (カタカナ surface / 英字 surface + loanword カタカナ読み): -3 rule
+    (後ろから 3 モーラ目に核、 特殊拍 ッ/ン/ー は左シフト。 `カーテン → カ]ーテン`)
+  - 人名 (Lindera 固有名詞/人名 candidate・NameBoundaryPass 補正・敬称文脈の standalone
+    照会): 4 モーラ以上 = 平板、 3 モーラ以下 = -3 rule、 ロー/ロウ 終わり (太郎系) は
+    長さ問わず -3 (`田中さん → タ]ナカ` / `山本 → 平板 0` / `シンタロウ → シンタ]ロウ`)
+  - 和語/漢語の一般語は推定しない (強い規則なし、 `accent: None` のまま正直な出力)
+  - 推定 phrase は `AccentPhrase` の新 field `estimated: true` で真値と区別
+    (dict 由来では serialize されず、 既存 JSON 出力は byte 不変。 schema_version "1" 据え置き)
+  - default off = ADR-0002 の従来挙動そのまま。 読み出力 (`to_hiragana` 等) には一切影響しない
+- **VOICEVOX adapter crate `ja-furigana-voicevox`** (ADR-0001): [`AccentResult`] を
+  AquesTalk-風記法 (kana 記法) に変換する `to_aques_kana()`。 accent phrase `/` 連結 +
+  核モーラ直後 `'` (平板/不明は末尾 `'`)、 ひらがな助詞は直前 phrase へ連結
+  (`雨が → ア'メガ`、 尾高は核維持 `ハナ'ガ`)、 助詞 は/へ/を の発音変換 (ワ/エ/オ)、
+  句読点は `、` (pause)、 疑問文は末尾 `？`。 VOICEVOX `POST /accent_phrases?is_kana=true`
+  にそのまま渡せる (0.25.2 実機で kana parse + accent 反映を確認済)。
+- **CLI mode 追加**: `--mode=voicevox-aques` (adapter 経由の kana 記法出力) と
+  `--mode=bouyomi` (= `tts` の alias、 棒読みちゃん系へ流す読み化+pause 整形テキスト)。
+  `--estimate-accent` flag も追加 (accent/analyze/voicevox-aques 向け)。
+- **OOV 漢字複合語の促音便 join (default on、 ADR-0008)** (`scoring/phonojoin.rs`):
+  dict にも IPADIC にも無い漢字語が単漢字 default のべた連結になったとき、 隣接する
+  単漢字 token 同士の連結部に標準的な促音便を適用 (`烈核 → レツ+カク → レッカク`、
+  `チ/ツ+ハ行 → ッ+パ行` のハ行半濁化含む)。 multi-char token が絡む join (= 実単語境界) は
+  触らない。 キ の gemination と連濁は語彙依存のため対象外。 corpus 2723/2723 不変。
+
+### Fixed
+
+- **ひらがな reading の bracket parse で拗音が 2 mora に数えられる** (`bracket.rs`):
+  mora 判定がカタカナ小書きしか見ておらず、 訓読み (ひらがな) reading に bracket を
+  付けると accent 核位置がずれた。 dict の bracket 蓄積 (訓=ひらがな慣習) の前提修正。
+- **IPADIC 外来語 reading の長音符が母音に化ける** (`analyzer.rs`): UniDic 用の
+  長音正規化 (`normalize_long_vowel`) が IPADIC 経路にも無条件適用されており、
+  `カーテン → カアテン` のように外来語 reading の `ー` が母音化けしていた
+  (読み出力はカナ surface passthrough で隠れるため不可視だったが、 accent 出力で顕在化)。
+  feature gate で UniDic build のみに限定。
+
 ## [0.1.16] - 2026-06-14
 
 ### Fixed

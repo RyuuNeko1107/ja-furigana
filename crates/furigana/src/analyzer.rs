@@ -27,6 +27,8 @@ pub struct MorphToken {
     pub pos: Option<String>,
     /// 品詞細分類 1 (IPADIC details[1]) — 普通名詞 / 固有名詞 / 数 等
     pub pos_detail: Option<String>,
+    /// 品詞細分類 2 (IPADIC details[2]) — 人名 / 地域 / 組織 等 (固有名詞の下位分類)
+    pub pos_detail2: Option<String>,
     /// 活用型 (IPADIC details[4]) — 五段・カ行イ音便 / 一段 等
     pub conjugation_type: Option<String>,
     /// 活用形 (IPADIC details[5]) — 基本形 / 連用形 等
@@ -43,6 +45,7 @@ impl MorphToken {
             reading: None,
             pos: None,
             pos_detail: None,
+            pos_detail2: None,
             conjugation_type: None,
             conjugation_form: None,
             base_form: None,
@@ -135,14 +138,20 @@ impl Analyzer {
                     };
                     // ★alpha.17: UniDic は pron が長音符 「ー」 で長音を表すので
                     // (例: 「学校=ガッコー」)、 表記読み (「ガッコウ」) に正規化する。
-                    // IPADIC は元々 表記読み なので no-op (= ー が出ない pattern)。
+                    // IPADIC では適用しない: 外来語 reading は正当に ー を含み
+                    // (カーテン 等)、 正規化すると カアテン に化ける (0.2.0 で修正、
+                    // 旧実装は無条件適用で IPADIC 外来語の長音が母音化けしていた)。
+                    #[cfg(all(feature = "dict-unidic", not(feature = "dict-ipadic")))]
                     let reading =
                         get_detail(FIELD_READING).map(|r| crate::kana::normalize_long_vowel(&r));
+                    #[cfg(all(feature = "dict-ipadic", not(feature = "dict-unidic")))]
+                    let reading = get_detail(FIELD_READING);
                     MorphToken {
                         surface,
                         reading,
                         pos: details.first().map(ToString::to_string),
                         pos_detail: get_detail(1),
+                        pos_detail2: get_detail(2),
                         conjugation_type: get_detail(4),
                         conjugation_form: get_detail(5),
                         base_form: get_detail(FIELD_BASE_FORM),

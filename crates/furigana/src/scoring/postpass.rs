@@ -21,6 +21,7 @@ use crate::scoring::analyze::Token;
 use crate::scoring::contextual::HaraSukuPass;
 use crate::scoring::names::NameBoundaryPass;
 use crate::scoring::odoriji::RendakuPass;
+use crate::scoring::phonojoin::SokuonJoinPass;
 
 /// path 確定後の token 列を in-place で補正する post-pass。
 ///
@@ -36,12 +37,15 @@ pub trait ReadingPostPass {
 
 /// `tokens` に全 post-pass を適用順に回す。 [`crate::scoring::pipeline::Pipeline`] が呼ぶ。
 ///
-/// 適用順: 連濁 → 腹+空く → 人名+敬称境界。 連濁は隣接 token の reading を参照する
-/// ため、 reading を書き換える他 pass より前に置く。 人名境界 pass は dict / 形態素
-/// 辞書を読み source に使うため参照を取る (= const 配列でなく本関数で束ねる)。
+/// 適用順: 連濁 → 腹+空く → 人名+敬称境界 → OOV 促音便 join。 連濁は隣接 token の
+/// reading を参照するため、 reading を書き換える他 pass より前に置く。 人名境界 pass は
+/// dict / 形態素辞書を読み source に使うため参照を取る (= const 配列でなく本関数で束ねる)。
+/// 促音便 join (ADR-0008) は 「単漢字 chain がそのまま残った = 真の OOV」 が確定した
+/// 最後に置く (先に走ると NameBoundaryPass が merge する単漢字対を触りうる)。
 pub fn apply_all(tokens: &mut Vec<Token>, dict: &Dict, analyzer: &Analyzer) {
     let name_boundary = NameBoundaryPass::new(dict, analyzer);
-    let passes: [&dyn ReadingPostPass; 3] = [&RendakuPass, &HaraSukuPass, &name_boundary];
+    let passes: [&dyn ReadingPostPass; 4] =
+        [&RendakuPass, &HaraSukuPass, &name_boundary, &SokuonJoinPass];
     for pass in passes {
         pass.apply(tokens);
     }

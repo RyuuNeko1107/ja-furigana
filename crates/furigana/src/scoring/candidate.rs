@@ -182,6 +182,10 @@ pub struct Candidate {
     pub range: Range<usize>,
     /// score tuple
     pub score: Score,
+    /// 人名 candidate flag (IPADIC 固有名詞/人名 由来、 accent 推定用。 ADR-0007)。
+    /// serialize しない (= analyze JSON 出力は不変)。
+    #[serde(skip)]
+    pub(crate) is_name: bool,
 }
 
 impl Candidate {
@@ -204,7 +208,15 @@ impl Candidate {
             reading: reading.into(),
             range,
             score,
+            is_name: false,
         }
+    }
+
+    /// 人名 flag を立てて返す (builder 風、 ADR-0007)。
+    #[must_use]
+    pub(crate) fn with_name_flag(mut self, is_name: bool) -> Self {
+        self.is_name = is_name;
+        self
     }
 }
 

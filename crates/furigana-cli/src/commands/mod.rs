@@ -8,7 +8,7 @@ pub mod serve;
 
 use crate::paths::Paths;
 use anyhow::Result;
-use furigana::Furigana;
+use furigana::{Furigana, FuriganaBuilder};
 
 /// CLI サブコマンドが共通で使う Furigana インスタンスを構築する
 ///
@@ -22,6 +22,12 @@ use furigana::Furigana;
 /// すべて [`furigana-dict`](https://github.com/RyuuNeko1107/ja-furigana-dict)
 /// から `furigana dict pull` で取得する想定。
 pub fn build_furigana(paths: &Paths) -> Result<Furigana> {
+    Ok(furigana_builder(paths).build()?)
+}
+
+/// [`build_furigana`] の builder 版 — 呼び出し側が追加オプション
+/// (例: `estimate_accent`) を載せてから build したい場合に使う。
+pub fn furigana_builder(paths: &Paths) -> FuriganaBuilder {
     let mut b = Furigana::builder();
     let mut data_loaded = false;
 
@@ -58,5 +64,5 @@ pub fn build_furigana(paths: &Paths) -> Result<Furigana> {
         );
     }
 
-    Ok(b.build()?)
+    b
 }
