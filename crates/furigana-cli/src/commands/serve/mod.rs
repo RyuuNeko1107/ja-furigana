@@ -64,6 +64,12 @@ pub struct Args {
     /// (network なし環境でも壊れない)。`config.toml [auto_update].pin` で版を固定可。
     #[arg(long)]
     pub auto_pull: bool,
+
+    /// rule-based accent 推定を有効化する (ADR-0007)。 mode=accent / voicevox-aques で
+    /// dict bracket が無い token にも外来語 -3 rule / 人名 rule の推定 accent が付く
+    /// (推定 phrase は `"estimated": true` で真値と区別)。 読み出力には影響しない。
+    #[arg(long)]
+    pub estimate_accent: bool,
 }
 
 pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
@@ -83,7 +89,9 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
         }
     }
 
-    let furigana_inner = super::build_furigana(paths)?;
+    let furigana_inner = super::furigana_builder(paths)
+        .estimate_accent(args.estimate_accent)
+        .build()?;
     // server は最初のリクエストレイテンシを下げるため、Lindera analyzer を eager init。
     // build_furigana 自体は lazy なので listen 前にここで明示的に init して
     // 起動失敗を listen 前に検知できるようにもする。
@@ -110,6 +118,7 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
         admin_tokens: Arc::new(admin_tokens),
         paths: Arc::new(paths.clone()),
         metrics: server_metrics,
+        estimate_accent: args.estimate_accent,
     };
 
     let cors = build_cors(cfg);

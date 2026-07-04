@@ -102,8 +102,12 @@ pub(super) async fn admin_reload(State(state): State<AppState>) -> Result<Json<V
 pub(super) async fn do_reload(state: &AppState, source: ReloadSource) -> Result<usize, String> {
     let old_size = state.furigana.read().await.dict_size();
     let paths = state.paths.clone();
+    let estimate_accent = state.estimate_accent;
     let new = tokio::task::spawn_blocking(move || -> Result<furigana::Furigana, String> {
-        let f = crate::commands::build_furigana(&paths)
+        // 起動 flag (estimate_accent) を reload 後も維持する
+        let f = crate::commands::furigana_builder(&paths)
+            .estimate_accent(estimate_accent)
+            .build()
             .map_err(|e| format!("build_furigana failed: {e}"))?;
         // reload 直後の最初の request が同期 analyzer init コストを払わない /
         // init 失敗でその 1 request が panic しないよう、 swap 前に eager init する
@@ -260,6 +264,36 @@ fn process(
             timings_ms,
             analyze: None,
             accent: Some(accent_result),
+        }));
+    }
+
+    if mode == "voicevox-aques" {
+        // VOICEVOX AquesTalk-風記法 (ADR-0001 adapter crate 経由)。
+        // result にはそのまま POST /accent_phrases?is_kana=true へ渡せる文字列が入る。
+        let convert_start = Instant::now();
+        let result = ja_furigana_voicevox::to_aques_kana(&f.to_accent(&text));
+        let t_convert_ms = convert_start.elapsed().as_secs_f64() * 1000.0;
+        let t_total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
+
+        let timings_ms = if params.debug {
+            Some(json!({
+                "total": round1(t_total_ms),
+                "tokenize": 0.0,
+                "convert": round1(t_convert_ms),
+            }))
+        } else {
+            None
+        };
+
+        state.metrics.record_request(&mode, t_total_ms);
+
+        return Ok(Json(FuriganaResponse {
+            result,
+            mode,
+            segments: None,
+            timings_ms,
+            analyze: None,
+            accent: None,
         }));
     }
 
@@ -472,7 +506,10 @@ fn validate_params(params: &FuriganaParams) -> Result<(), ApiError> {
 fn normalize_mode(mode: &str) -> String {
     match mode {
         "tts" | "hiragana" | "ruby" | "kanji" | "romaji" | "romaji-kunrei" | "analyze"
-        | "accent" => mode.to_string(),
+        | "accent" | "voicevox-aques" => mode.to_string(),
+        // alias: 棒読みちゃん系へ流すテキストは tts と同一、 voicevox は正式名へ寄せる
+        "bouyomi" => "tts".to_string(),
+        "voicevox" => "voicevox-aques".to_string(),
         _ => default_mode(),
     }
 }
@@ -652,9 +689,13 @@ mod tests {
             "romaji-kunrei",
             "analyze",
             "accent",
+            "voicevox-aques",
         ] {
             assert_eq!(normalize_mode(m), m, "known mode はそのまま");
         }
+        // alias
+        assert_eq!(normalize_mode("bouyomi"), "tts");
+        assert_eq!(normalize_mode("voicevox"), "voicevox-aques");
         assert_eq!(normalize_mode("bogus"), default_mode());
         assert_eq!(normalize_mode(""), default_mode());
     }

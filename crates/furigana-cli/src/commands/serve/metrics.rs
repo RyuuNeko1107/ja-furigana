@@ -20,6 +20,7 @@ pub(super) struct ServerMetrics {
     req_romaji_kunrei: AtomicU64,
     req_analyze: AtomicU64,
     req_accent: AtomicU64,
+    req_voicevox_aques: AtomicU64,
     // latency histogram (= total ms、 bucket cumulative count)
     latency_buckets: [AtomicU64; 9],
     latency_sum_ms: AtomicU64,
@@ -45,6 +46,7 @@ impl ServerMetrics {
             "romaji-kunrei" => &self.req_romaji_kunrei,
             "analyze" => &self.req_analyze,
             "accent" => &self.req_accent,
+            "voicevox-aques" => &self.req_voicevox_aques,
             _ => return,
         };
         counter.fetch_add(1, Relaxed);
@@ -101,6 +103,7 @@ impl ServerMetrics {
             ("romaji-kunrei", &self.req_romaji_kunrei),
             ("analyze", &self.req_analyze),
             ("accent", &self.req_accent),
+            ("voicevox-aques", &self.req_voicevox_aques),
         ] {
             out.push_str(&format!(
                 "furigana_requests_total{{mode=\"{}\"}} {}\n",

@@ -44,6 +44,9 @@ pub(super) struct AppState {
     pub(super) admin_tokens: Arc<Vec<String>>,
     pub(super) paths: Arc<Paths>,
     pub(super) metrics: Arc<ServerMetrics>,
+    /// rule-based accent 推定 (ADR-0007) の opt-in。 起動 flag `--estimate-accent` 由来、
+    /// reload / auto-update での Furigana 再構築時にも維持する。
+    pub(super) estimate_accent: bool,
 }
 
 /// `/furigana` のクエリ / body パラメータ
