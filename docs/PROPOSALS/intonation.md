@@ -1,5 +1,15 @@
 # Proposal: アクセント (intonation) 機能
 
+> **⚠️ 2026-07-04 注記: 本 doc は設計当時の proposal であり、 確定仕様は ADR が優先する。**
+> 主な差分:
+> - `/` phrase 区切りは **廃止** (ADR-0003: `[` `]` の 2 記号のみ、 連続 `[` が phrase 境界。 `/` は strip 互換のみ)
+> - `rules/accent/` 階層・fractions rule は **0.2.0 に入れない** (ADR-0002 consequences)
+> - `--mode=voicevox-aques` は lib 内 mode ではなく **別 crate `ja-furigana-voicevox`** が提供 (ADR-0001、 実装済)
+> - accent 推定は **opt-in で導入済** (ADR-0007: `estimate_accent(true)`、 外来語 -3 rule / 人名 rule、
+>   `estimated: true` marker)。 「推定しない」 は default 挙動の話に変わった
+> - dict bracket は **UniDic aType からの offline 生成 tool** (`furigana-dict/tools/gen_accent_brackets.py`)
+>   で機械蓄積する (手書き PR 前提は撤回、 2026-07-04 に第 1 弾 3,122 entry 適用済)
+
 **Status**: **Planned for 0.2.0 stable** (2026-05-10 update、 元 Postponed → 0.2.0 target に格上げ)
 **Target**: **0.2.0 stable** (0.1.0 stable cut 後の次 minor stable)
 **Scope**: 「読み」 だけでなく 「東京式アクセント核位置」 も扱える ja-furigana lib への拡張、 辞書側韻律対応
