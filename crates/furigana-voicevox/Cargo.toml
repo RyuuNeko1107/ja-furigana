@@ -19,7 +19,7 @@ dict-unidic = ["furigana/dict-unidic"]
 
 [dependencies]
 # crates.io 上の crate 名は `ja-furigana` (import 名は lib 名 = `furigana`)。
-furigana = { package = "ja-furigana", path = "../furigana", version = "=0.1.17", default-features = false }
+furigana = { package = "ja-furigana", path = "../furigana", version = "=0.2.0", default-features = false }
 
 [lints]
 workspace = true

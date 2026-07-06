@@ -4,10 +4,21 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
-## [Unreleased]
+## [0.2.0] - 2026-07-06
+
+**0.2.0 stable cut**。 0.2.0 の中身 (bracket notation parse + `AccentResult` /
+`--mode=accent` の accent core、 opt-in accent 推定、 VOICEVOX adapter crate、
+OOV 促音便 join) は 0.1.x patch 期間中に実質 0.2.0-preview として出荷済みで、
+本 release はそれを SemVer 上も正式に安定化するもの。 0.1.17 からの破壊的変更はなし
+(公開 API / TOML スキーマ / CLI 引数 / HTTP レスポンスすべて互換)。
 
 ### Added
 
+- **`furigana serve` の accent / TTS 配線を CLI lookup と同等に**:
+  `--estimate-accent` flag (reload / auto-update 経由の Furigana 再 build でも維持) と
+  HTTP `mode=voicevox-aques` (adapter 経由の AquesTalk-風記法、 `result` を
+  そのまま VOICEVOX `POST /accent_phrases?is_kana=true` へ渡せる) を追加。
+  alias `bouyomi` (= `tts`) / `voicevox` (= `voicevox-aques`) と metrics counter も対応。
 - **サンプル `examples/voicevox-reading-bridge/`**: 誤読した単語だけ読みを直して
   VOICEVOX に喋らせる棒読みちゃん互換ローカルサーバー (Node.js 単体、 依存ゼロ)。
   節ごとに ja-furigana と VOICEVOX 自身の読みを phoneme 列で比較し、 LCS diff で
@@ -1274,7 +1285,7 @@ ja-furigana-dict 側で `core/works/game/touhou.toml`、`core/works/anime/<title
      で yank、 alpha.1 / alpha.2 は yank 済み (rename 前 crate name)。
      ─────────────────────────────────────────────────────────────────── -->
 
-[Unreleased]: https://github.com/RyuuNeko1107/ja-furigana/compare/v0.1.0-alpha.9...HEAD
+[0.2.0]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.2.0
 [0.1.0-alpha.9]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.1.0-alpha.9
 [0.1.0-alpha.8]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.1.0-alpha.8
 [0.1.0-alpha.6]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.1.0-alpha.6

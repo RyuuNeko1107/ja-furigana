@@ -10,7 +10,7 @@
 > - dict bracket は **UniDic aType からの offline 生成 tool** (`furigana-dict/tools/gen_accent_brackets.py`)
 >   で機械蓄積する (手書き PR 前提は撤回、 2026-07-04 に第 1 弾 3,122 entry 適用済)
 
-**Status**: **Planned for 0.2.0 stable** (2026-05-10 update、 元 Postponed → 0.2.0 target に格上げ)
+**Status**: **Shipped in 0.2.0** (2026-07-06 release。 経緯: Postponed → Planned for 0.2.0 [2026-05-10] → 出荷。 確定仕様との差分は冒頭注記の ADR 参照)
 **Target**: **0.2.0 stable** (0.1.0 stable cut 後の次 minor stable)
 **Scope**: 「読み」 だけでなく 「東京式アクセント核位置」 も扱える ja-furigana lib への拡張、 辞書側韻律対応
 

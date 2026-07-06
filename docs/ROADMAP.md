@@ -5,26 +5,23 @@ ja-furigana の中長期計画。 **完了履歴は [CHANGELOG.md](../CHANGELOG.
 
 > 戻る: [README](../README.md)
 
-## ステータス概観 (2026-06-11 更新)
+## ステータス概観 (2026-07-06 更新)
 
-**v0.1.0 stable cut 完了 (2026-05-12)**、 現 LIVE は `0.1.7` (2026-06-10)。
-master は 0.2.0 開発分 (accent core = bracket parse + `--mode=accent`、 Pipeline facade、
-numeric_phrases 再統合) を含む実質 0.2.0-preview。 corpus regression は
-`furigana-corpus-check` で 802/802 (100%)。
+**v0.2.0 stable cut 完了 (2026-07-06)**。 0.2.0 = intonation milestone:
+accent core (bracket parse + `AccentResult` + `--mode=accent`) に加え、
+opt-in の rule-based accent 推定 (ADR-0007)、 OOV 促音便 join (ADR-0008)、
+VOICEVOX adapter crate `ja-furigana-voicevox` (ADR-0001) まで含めて安定化。
+UniDic aType → bracket 注釈の offline 生成 tool は dict repo 側で完成
+(`tools/gen_accent_brackets.py`、 core/jukugo に bracket 3,122 件適用済 =
+dict v2026.07.04)。 runtime 形態素辞書は IPADIC 据え置き確定
+(2026-06-11 A/B 評価: corpus で IPADIC 100% vs UniDic 95.9%、 詳細は
+[ARCHITECTURE.md](./ARCHITECTURE.md) 設計判断メモ)。
 
-0.2.0 に向けた lib 側残件は実質ゼロ — 残りは dict 側の bracket notation 蓄積と、
-UniDic aType → bracket 注釈の offline 生成 tool (dict repo 側 tooling)。
-runtime 形態素辞書は IPADIC 据え置き確定 (2026-06-11 A/B 評価: corpus で
-IPADIC 100% vs UniDic 95.9%、 詳細は [ARCHITECTURE.md](./ARCHITECTURE.md) 設計判断メモ)。
+次の主なテーマは dict 側の継続改善 (bracket notation 蓄積、 姓 suffix-match entry の
+offline 生成 tool = 「大谷さん→おおたに」 系の文脈読み切替) と、 運用で発覚した
+lib 改善の随時 sweep。
 
-`0.1.x` の間は以下が予告なく変更されうる:
-
-- 公開 Rust API (`Furigana` / `FuriganaBuilder` のメソッドシグネチャ)
-- `furigana-dict` の TOML スキーマ (新フィールド追加、廃止)
-- CLI 引数の名前 / デフォルト値
-- HTTP レスポンスの JSON フィールド名 / 構造
-
-安定版 (0.1.0 正式) 以降は SemVer で互換を守る。 Rust toolchain は **1.89+** が必要
+SemVer で互換を守る (0.2.x patch は additive only)。 Rust toolchain は **1.89+** が必要
 (`std::fs::File::lock` 安定化要求のため、 依存 rustyline 18 経由)。
 
 ## 完了済み
@@ -130,16 +127,22 @@ IPADIC 100% vs UniDic 95.9%、 詳細は [ARCHITECTURE.md](./ARCHITECTURE.md) �
 - [ ] 「○○魔館」 系 suffix 単独登録の禁止
 - [ ] 出典明示と同等の重みで規律違反を merge block
 
-#### Phase 8: 0.2.0 stable — intonation + 残 lib 改善 sweep
+#### Phase 8: 0.2.0 stable — intonation + 残 lib 改善 sweep ✅ (intonation 部は 0.2.0 で出荷済)
 
-詳細仕様: [docs/PROPOSALS/intonation.md](./PROPOSALS/intonation.md) (Status: Planned for 0.2.0 stable)
+詳細仕様: [docs/PROPOSALS/intonation.md](./PROPOSALS/intonation.md) (Status: Shipped in 0.2.0)
 
 **0.1.0 で建てた forward compat** (= bracket notation `[ ] /` strip 済 dict が大量に存在) を 0.2.0 で parse + 活用。 加えて 0.1.0 cut 後の運用で発覚した lib 改善 sweep を統合。
 
-> **進捗 (2026-06-11)**: bracket parse + `AccentPhrase` / `--mode=accent` は master 実装済。
-> `numeric_phrases` 再統合済。 UniDic aType は runtime 統合ではなく **offline bracket
-> 生成 tool** (dict repo 側) の方針に確定 (= runtime は IPADIC 据え置き)。
-> engine 別 mode (`voicevox-aques` / `voicevox-query`) は adapter crate 側 (ADR 方針)。
+> **進捗 (2026-07-06、 v0.2.0 cut)**: intonation 一式は **release 済** — bracket parse +
+> `AccentPhrase` / `--mode=accent`、 opt-in accent 推定 (ADR-0007)、 OOV 促音便 join
+> (ADR-0008)、 adapter crate `ja-furigana-voicevox` の `--mode=voicevox-aques`
+> (`voicevox-query` は不採用、 詳細は intonation.md 冒頭の ADR 差分注記)。
+> `rules/accent/` / fractions は ADR-0002 で 0.2.0 scope から除外。
+> UniDic aType は runtime 統合ではなく **offline bracket 生成 tool**
+> (dict repo `tools/gen_accent_brackets.py`、 3,122 件適用済) に確定。
+> 下記 「lib 改善 sweep」 のうち人名判定は NameBoundaryPass (ADR-0005) +
+> accent 推定の人名判定で消化済、 残り (ひらがな雑 match sweep / 顔文字 TTS silent /
+> space normalize 正式化) は 0.2.x 以降の随時 sweep。
 
 ##### 主要 機能追加 (= intonation)
 

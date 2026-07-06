@@ -9,7 +9,12 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.1.16` (2026-06-14、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
+- **LIVE**: `0.2.0` (2026-07-06 stable cut、 crates.io 3 crate publish = ja-furigana /
+  ja-furigana-voicevox / ja-furigana-cli)。 0.2.0 = intonation milestone 完了:
+  accent core (bracket parse + `AccentResult` + `--mode=accent`) + opt-in accent 推定
+  (ADR-0007) + OOV 促音便 join (ADR-0008) + VOICEVOX adapter crate (ADR-0001) +
+  serve 配線 (`--estimate-accent` / `mode=voicevox-aques`)。 0.1.17 からの破壊的変更なし。
+- (履歴) `0.1.16` (2026-06-14、 0.1.0 cut は 2026-05-12)。 0.1.x patch は master HEAD から cut
   しており 0.2.0 開発分 (ScoringContext / ADR-0004 / bracket-accent parser / scoring pub(crate) 化) を
   含む実質 0.2.0-preview (semver は user 判断で 0.1.x 据え置き)。 直近 patch: 0.1.10 = **NameBoundaryPass**
   (人名+敬称の token 衝突補正、 ADR-0005 第 3 adapter)、 0.1.11 = **match_hits condition weighting**
@@ -33,11 +38,9 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
   既知の限界: `卅日` 等 旧字漢数字+助数詞は誤読しうる (展開後 十日=とおか と誤分割、 稀ケース)。
   本番 furigana-api は wrapper `2.0.13` で lib 0.1.16 稼働 (2026-06-14 deploy、 health gate ✓、
   dict v2026.06.14 swap 済で 髙田→たかだ / 廿→にじゅう / 卅→さんじゅう / ３本→さんぼん live 確認)
-- **`0.2.0` (master 実装中・未 release)**: accent **core は実装済** =
-  bracket notation parse + `AccentResult`/`AccentToken` + CLI `--mode=accent`
-  (`api.rs::to_accent` / `scoring/bracket.rs`、 ADR-0003)。
-  **残件**: UniDic pitch accent (aType) 統合のみ (loanwords は alpha.21、
-  numeric_phrases は 2026-06-11 に再統合済)。 cut 判断は user 主導 (PROPOSALS/intonation.md)
+- UniDic aType は runtime 統合ではなく **offline bracket 生成 tool** に確定
+  (dict repo `tools/gen_accent_brackets.py`、 core/jukugo に bracket 3,122 件適用済 =
+  dict v2026.07.04)。 runtime 形態素辞書は IPADIC 据え置き (ADR-0006)
 
 ## alpha.10 task 進捗 (2026-05-11)
 
