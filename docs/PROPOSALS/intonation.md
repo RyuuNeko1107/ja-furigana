@@ -5,6 +5,12 @@
 > - `/` phrase 区切りは **廃止** (ADR-0003: `[` `]` の 2 記号のみ、 連続 `[` が phrase 境界。 `/` は strip 互換のみ)
 > - `rules/accent/` 階層・fractions rule は **0.2.0 に入れない** (ADR-0002 consequences)
 > - `--mode=voicevox-aques` は lib 内 mode ではなく **別 crate `ja-furigana-voicevox`** が提供 (ADR-0001、 実装済)
+> - **2026-08-11 追記**: engine adapter は 2 本立てになった —
+>   VOICEVOX kana 記法 (`ja-furigana-voicevox`) と **本家 AquesTalk 音声記号列**
+>   (`ja-furigana-aquestalk`、 `--mode=aquestalk`)。 両者で重複していた変換コア
+>   (モーラ分割 / accent 句構築 / 助詞連結 / 記号の扱い) は lib の
+>   `furigana::accent_symbols` へ集約し、 adapter には **記号の綴り方だけ** を残す
+>   (ADR-0009)。 本 doc の §7.2 は voicevox 版の記法を指す
 > - accent 推定は **opt-in で導入済** (ADR-0007: `estimate_accent(true)`、 外来語 -3 rule / 人名 rule、
 >   `estimated: true` marker)。 「推定しない」 は default 挙動の話に変わった
 > - dict bracket は **UniDic aType からの offline 生成 tool** (`furigana-dict/tools/gen_accent_brackets.py`)
