@@ -335,12 +335,11 @@ fn process(
         }
         _ => {
             // tts (default)
-            let opts = TtsOptions {
-                short_pause: params.short_pause.clone(),
-                long_pause: params.long_pause.clone(),
-                keep_period: params.keep_period,
-                silence_symbols: params.silence_symbols,
-            };
+            let opts = TtsOptions::default()
+                .with_short_pause(params.short_pause.clone())
+                .with_long_pause(params.long_pause.clone())
+                .with_keep_period(params.keep_period)
+                .with_silence_symbols(params.silence_symbols);
             // **Furigana::to_tts をそのまま呼ぶ**。 自前で tokenize → normalize_for_tts を
             // 組み直すと、 token filter (silence_symbols) や tts 用 postprocess ルールの
             // 適用漏れが HTTP 経路だけで起きる (実際に両方やらかした)。

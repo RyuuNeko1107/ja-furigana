@@ -93,12 +93,11 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         // 棒読みちゃん (互換サーバー含む) へ流すテキストは tts mode と同一
         // (= 読み化 + pause 整形。 棒読みちゃん側の漢字誤読を bypass する)
         "tts" | "bouyomi" => {
-            let opts = TtsOptions {
-                short_pause: args.short_pause,
-                long_pause: args.long_pause,
-                keep_period: !args.drop_period,
-                silence_symbols: args.silence_symbols,
-            };
+            let opts = TtsOptions::default()
+                .with_short_pause(args.short_pause)
+                .with_long_pause(args.long_pause)
+                .with_keep_period(!args.drop_period)
+                .with_silence_symbols(args.silence_symbols);
             f.to_tts(&args.text, &opts)
         }
         // VOICEVOX AquesTalk-風記法 (ADR-0001 adapter crate 経由)。

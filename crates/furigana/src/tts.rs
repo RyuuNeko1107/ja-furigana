@@ -15,7 +15,23 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 /// TTS 整形オプション
+///
+/// `#[non_exhaustive]` なので、 crate 外からは struct literal ではなく
+/// [`Default`] + setter で作る (今後 field が増えても壊れない):
+///
+/// ```
+/// use furigana::TtsOptions;
+///
+/// let opts = TtsOptions::default()
+///     .with_keep_period(false)
+///     .with_silence_symbols(true);
+/// assert!(!opts.keep_period);
+/// assert!(opts.silence_symbols);
+/// ```
+///
+/// field は `pub` のままなので、 生成後に直接代入してもよい。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TtsOptions {
     /// `、` (読点) の後に挿入する文字列
     pub short_pause: String,
@@ -41,6 +57,36 @@ impl Default for TtsOptions {
             keep_period: true,
             silence_symbols: false,
         }
+    }
+}
+
+impl TtsOptions {
+    /// `、` (読点) の後に挿入する文字列を差し替える。
+    #[must_use]
+    pub fn with_short_pause(mut self, pause: impl Into<String>) -> Self {
+        self.short_pause = pause.into();
+        self
+    }
+
+    /// `。！？!?` (句点等) の後に挿入する文字列を差し替える。
+    #[must_use]
+    pub fn with_long_pause(mut self, pause: impl Into<String>) -> Self {
+        self.long_pause = pause.into();
+        self
+    }
+
+    /// `。` を出力に残すか。
+    #[must_use]
+    pub fn with_keep_period(mut self, keep: bool) -> Self {
+        self.keep_period = keep;
+        self
+    }
+
+    /// 絵文字 / 顔文字パーツを読み上げ対象から外すか ([`TtsOptions::silence_symbols`])。
+    #[must_use]
+    pub fn with_silence_symbols(mut self, silence: bool) -> Self {
+        self.silence_symbols = silence;
+        self
     }
 }
 

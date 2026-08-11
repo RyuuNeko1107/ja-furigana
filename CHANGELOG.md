@@ -4,7 +4,10 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
-## [Unreleased]
+## [0.3.0] - Unreleased
+
+TTS engine adapter の 2 本立て (VOICEVOX kana 記法 + 本家 AquesTalk 音声記号列) と、
+その共有コアの lib 移設。 破壊的変更は `TtsOptions` 1 点のみ (下記 Changed 参照)。
 
 ### Added
 
@@ -44,8 +47,13 @@
 
 ### Changed
 
-- **`TtsOptions` に field 追加** (`silence_symbols`): struct literal で全 field を
-  書いていた場合は `..TtsOptions::default()` を足す必要がある (0.x の minor breaking)。
+- **⚠ 破壊的: `TtsOptions` に field 追加 (`silence_symbols`) + `#[non_exhaustive]` 化**。
+  crate 外から struct literal で構築していたコードは、 追加した setter
+  (`TtsOptions::default().with_keep_period(false).with_silence_symbols(true)`) か、
+  生成後の直接代入へ書き換えが必要 (`#[non_exhaustive]` は `..Default::default()` 付きの
+  literal も禁じる)。
+  `#[non_exhaustive]` を今入れるのは、 **今後 field が増えても二度と壊れないように
+  破壊を今回 1 回にまとめる**ため (0.x のうちに済ませる)。
 - **`ja-furigana-voicevox`**: 変換コアを `furigana::accent_symbols` へ移行 (出力互換)。
   副次的に、 文中の `？` が発話全体を疑問文にしていた挙動と、 中黒 「・」 で
   pause が入る挙動が aquestalk 側と同じ扱いに揃った。
