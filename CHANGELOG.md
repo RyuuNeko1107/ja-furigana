@@ -4,6 +4,18 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
+## [Unreleased]
+
+### Fixed
+
+- **`split_for_aquestalk` が AquesTalk の実際の上限を守れていなかった** (実機検証で発覚)。
+  AquesTalk10 評価版 SDK (Win 1.1.0) の DLL に直接食わせて測ったところ、 効いてくる制限は
+  文字数ではなく **`。` を挟まずに並ぶアクセント句の数 (27 句まで)** だった
+  (486 文字 / 27 句 は通り、 504 文字 / 28 句 は エラー 122 = 内部バッファオーバー)。
+  文字数だけで切っていたので、 `max_len` 以下でも 28 句以上並べば合成が失敗しうる状態だった。
+  新しい定数 `MAX_PHRASES` (= 27) を追加し、 分割時に句数でも切るように修正。
+  併せて `MAX_LEN` の doc を実測値へ更新 (文字数の上限自体は約 2,040 文字 = エラー 120)。
+
 ## [0.3.0] - 2026-08-11
 
 TTS engine adapter の 2 本立て (VOICEVOX kana 記法 + 本家 AquesTalk 音声記号列) と、

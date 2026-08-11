@@ -59,11 +59,24 @@ pub use furigana;
 use furigana::accent_symbols::{to_mora_phrases, MoraPhrase, PhraseBreak};
 use furigana::{AccentResult, Furigana};
 
-/// AquesTalk エンジンが 1 回の合成で受け取れる音声記号列のおおよその上限 (文字数)。
+/// エンジンが 1 回の合成で受け取れる音声記号列の目安 (文字数)。
 ///
-/// AquesTalk1/2 系の目安。 これを超える入力は [`split_for_aquestalk`] で
-/// アクセント句境界ごとに分割して逐次合成すること。
+/// AquesTalk10 評価版 (Win SDK 1.1.0) の実測では、 文字数そのものの上限は
+/// **約 2,040 文字** (超えると `AquesTalk_Synthe` が エラー 120 =
+/// 「音声記号列が長すぎる」)。 ただし実際に先に当たるのは [`MAX_PHRASES`] の方なので、
+/// この値は古い AquesTalk1/2 系も含めて安全側に倒した既定値。
+///
+/// これを超える入力は [`split_for_aquestalk`] で分割して逐次合成すること。
 pub const MAX_LEN: usize = 255;
+
+/// **`。` で区切られた 1 文** に入れられるアクセント句の最大数。
+///
+/// AquesTalk10 評価版の実測値。 28 句以上を `。` を挟まずに並べると
+/// エラー 122 (「音声記号列が長い (内部バッファオーバー)」) になる。
+/// 文字数は関係なく、 486 文字 / 27 句 は通るのに 504 文字 / 28 句 は落ちる。
+///
+/// = **文字数だけで分割しても足りない**。 [`split_for_aquestalk`] は句数でも切る。
+pub const MAX_PHRASES: usize = 27;
 
 /// 変換オプション。
 #[derive(Debug, Clone, Copy)]
@@ -310,6 +323,24 @@ impl Converter {
     }
 }
 
+/// `。` を挟まずに [`MAX_PHRASES`] 超のアクセント句が並ぶ箇所があるか。
+fn exceeds_phrase_limit(symbols: &str) -> bool {
+    let mut run = 0usize;
+    for c in symbols.chars() {
+        match c {
+            '。' | '?' => run = 0,
+            '、' | '/' => {
+                run += 1;
+                if run >= MAX_PHRASES {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// 音声記号列を `max_len` 文字以下の塊へ分割する (逐次合成用)。
 ///
 /// 分割は **アクセント句境界** (`。` / `、` / `/`) でのみ行い、 pause の強い
@@ -325,7 +356,9 @@ pub fn split_for_aquestalk(symbols: &str, max_len: usize) -> Vec<String> {
     if symbols.is_empty() {
         return Vec::new();
     }
-    if max_len > 0 && symbols.chars().count() <= max_len {
+    // 「短いから 1 塊で OK」 の早期 return は **句数も見てから**。
+    // 文字数が少なくても 1 文 28 句以上はエンジンが弾く (実測、 [`MAX_PHRASES`])。
+    if max_len > 0 && symbols.chars().count() <= max_len && !exceeds_phrase_limit(symbols) {
         return vec![symbols.to_string()];
     }
 
@@ -348,6 +381,9 @@ pub fn split_for_aquestalk(symbols: &str, max_len: usize) -> Vec<String> {
 
     let mut out: Vec<String> = Vec::new();
     let mut chunk = String::new();
+    // `。` を挟まずに並んだ句の数 (= エンジンの内部バッファを食う単位)。
+    // `。` で 0 に戻る。 `、` / `/` では戻らない。
+    let mut phrases_in_sentence = 0usize;
     for (unit, sep) in units {
         // pause 記号は句に付けて運ぶ (分割しても文末/読点の間が消えない)。
         // `/` は句境界としてのみ意味を持つので chunk 内でだけ復元する。
@@ -358,13 +394,22 @@ pub fn split_for_aquestalk(symbols: &str, max_len: usize) -> Vec<String> {
         // 直前の句が pause 記号で終わっているなら `/` は不要 (記号の二重付けを避ける)
         let needs_slash = !chunk.is_empty() && !chunk.ends_with(['。', '、', '?']);
         let add = unit.chars().count() + tail.chars().count() + usize::from(needs_slash);
-        if !chunk.is_empty() && chunk.chars().count() + add > max_len {
+        let too_long = !chunk.is_empty() && chunk.chars().count() + add > max_len;
+        let too_many_phrases = phrases_in_sentence >= MAX_PHRASES;
+        if too_long || too_many_phrases {
             out.push(std::mem::take(&mut chunk));
+            phrases_in_sentence = 0;
         } else if needs_slash {
             chunk.push('/');
         }
         chunk.push_str(&unit);
         chunk.push_str(&tail);
+        // `。` / `?` = 文の終わり → バッファはそこで解放される
+        phrases_in_sentence = if matches!(sep, Some('。') | Some('?')) {
+            0
+        } else {
+            phrases_in_sentence + 1
+        };
     }
     if !chunk.is_empty() {
         out.push(chunk);
@@ -630,6 +675,37 @@ mod tests {
         // 0 = 「これ以上分けられない最小単位」 = 1 句ずつ (丸ごと 1 塊で返さない)
         let chunks = split_for_aquestalk("アメ'ガ/フル'。ユキ'モ", 0);
         assert_eq!(chunks, vec!["アメ'ガ", "フル'。", "ユキ'モ"]);
+    }
+
+    #[test]
+    fn split_caps_phrases_per_sentence() {
+        // 実測: `。` を挟まずに 28 句以上並べるとエンジンが エラー 122 で落ちる。
+        // 文字数が max_len 以下でも 句数で切る必要がある。
+        let symbols = ["ア'メ"; 40].join("/");
+        let chunks = split_for_aquestalk(&symbols, 9999);
+        assert!(chunks.len() > 1, "句数で切られていない: {chunks:?}");
+        for c in &chunks {
+            let phrases = c.split(['/', '、']).count();
+            assert!(phrases <= MAX_PHRASES, "{phrases} 句: {c:?}");
+        }
+        // 句の中身は落ちていない
+        assert_eq!(
+            chunks.join("").matches("ア'メ").count(),
+            symbols.matches("ア'メ").count()
+        );
+    }
+
+    #[test]
+    fn split_counts_phrases_per_sentence_not_per_chunk() {
+        // `。` でバッファが解放されるので、 文をまたげば 27 句制限には掛からない
+        let sentence = ["ア'メ"; 10].join("/") + "。";
+        let symbols = sentence.repeat(5); // 50 句だが 1 文あたり 10 句
+        let chunks = split_for_aquestalk(&symbols, 9999);
+        assert_eq!(
+            chunks.len(),
+            1,
+            "文単位で足りているのに切られた: {chunks:?}"
+        );
     }
 
     #[test]
