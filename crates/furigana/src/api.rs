@@ -214,13 +214,8 @@ impl Furigana {
         // hiragana 自体の postprocess はここでは飛ばす (二重適用回避)。
         // 必要なら hiragana 用 postprocess を tts mode で再度書く想定。
         let mut tokens = self.tokenize(text);
-        if opts.silence_symbols {
-            // 絵文字 / 顔文字パーツ (= 全部が装飾記号の token) を落とす。
-            // 読みではなく surface で判定する (`・` は既に 「なかぐろ」 になっている)。
-            tokens.retain(|t| {
-                t.surface.is_empty() || !t.surface.chars().all(tts::is_decorative_symbol)
-            });
-        }
+        // 絵文字 / 顔文字パーツを落とす (opts.silence_symbols 次第)
+        tts::filter_tokens_for_tts(&mut tokens, opts);
         let hira = tokens_to_hiragana(&tokens);
         let normalized = tts::normalize_for_tts(&hira, opts);
         self.rules.postprocess.apply(&normalized, "tts")
@@ -874,6 +869,27 @@ mod tests {
         assert!(kaomoji.contains("すごい"), "{kaomoji:?}");
         // 句読点は pause 情報なので残る
         assert!(f.to_tts("ねこ。いぬ。", &opts).contains('。'));
+    }
+
+    #[test]
+    fn to_tts_keeps_symbols_that_have_readings() {
+        // 単位 / 演算子 / 通貨は 「読みを持つ語」 なので silence_symbols でも落とさない
+        let f = Furigana::minimal().unwrap();
+        let opts = TtsOptions {
+            silence_symbols: true,
+            ..TtsOptions::default()
+        };
+        for (input, dropped) in [("50%オフ", '%'), ("25℃です", '℃'), ("3×4", '×')] {
+            let out = f.to_tts(input, &opts);
+            assert!(
+                !out.is_empty() && out.chars().count() > 1,
+                "{input:?} -> {out:?}"
+            );
+            assert!(
+                !tts::is_decorative_symbol(dropped),
+                "{dropped:?} は読みを持つので装飾記号ではない"
+            );
+        }
     }
 
     #[test]

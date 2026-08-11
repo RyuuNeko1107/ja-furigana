@@ -36,7 +36,11 @@
   (CLI `--silence-symbols` / HTTP `silence_symbols`)。 `true` で 絵文字 と
   「かな / 漢字 / 英数 / 句読点 のいずれでもない装飾文字」 (ω / 中黒 / 括弧 等) を
   TTS 出力から落とす。 `(´・ω・\`)` が 「なかぐろ おめが」 と読まれる問題への対処。
-  default は `false` = 従来どおり。 句読点は pause 情報なので常に残す。
+  default は `false` = 従来どおり。 句読点 (pause 情報) と、 読みを持つ記号
+  (`%` / `×` / `℃` / `$` 等の単位・演算子・通貨) は残す。
+  token filter は `tts::filter_tokens_for_tts` として公開し、 `Furigana::to_tts` と
+  自前で `tokenize` → `normalize_for_tts` を組む caller (HTTP server 等) の
+  両方から呼ぶ (片方に配線し忘れると無言で効かなくなるため)。
 
 ### Changed
 

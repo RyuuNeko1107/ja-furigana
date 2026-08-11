@@ -44,16 +44,30 @@ impl Default for TtsOptions {
     }
 }
 
+/// 読み上げに意味のある記号 (落とさない)。
+///
+/// 単位 / 演算子 / 通貨のように **読みを持つ** 記号は、 装飾ではなく語なので残す
+/// (`50%` → 「ごじゅうパーセント」、 `25℃` → 「にじゅうごど」)。
+const MEANINGFUL_SYMBOLS: &[char] = &[
+    '%', '％', '×', '÷', '+', '＋', '=', '＝', '&', '＆', '@', '＠', '#', '＃', '~', '〜', '℃',
+    '℉', '°', '$', '＄', '¥', '￥', '€', '£', '№', '㎡', '㎥', '㎏', '㎝', '㎜', '㌫', '／', '/',
+    '±', '≠', '≒', '<', '>', '＜', '＞',
+];
+
 /// TTS で読み上げても意味を成さない装飾記号か (= [`TtsOptions::silence_symbols`] の対象)。
 ///
-/// 対象は 絵文字 と、 「かな / 漢字 / 英数 / 句読点 / 空白 のいずれでもない」 文字
-/// (= ギリシャ文字 ω、 中黒 `・`、 罫線、 各種記号)。 句読点は pause 情報なので残す。
+/// 対象は 絵文字 と、 「かな / 漢字 / 英数 / 句読点 / 空白 / [`MEANINGFUL_SYMBOLS`]
+/// のいずれでもない」 文字 (= ギリシャ文字 ω、 中黒 `・`、 括弧、 罫線、 各種装飾記号)。
+/// 句読点は pause 情報、 単位や演算子は語なので残す。
 #[must_use]
 pub fn is_decorative_symbol(c: char) -> bool {
     if crate::char_class::is_emoji_char(c) {
         return true;
     }
     if c.is_whitespace() || matches!(c, '。' | '、' | '！' | '？' | '!' | '?' | '.' | ',') {
+        return false;
+    }
+    if MEANINGFUL_SYMBOLS.contains(&c) {
         return false;
     }
     // かな / 漢字 / 英数 (全角含む) は読み上げ対象。
@@ -69,6 +83,19 @@ pub fn is_decorative_symbol(c: char) -> bool {
     }
     // 繰り返し記号など 読みの一部になりうるものは残す
     !matches!(c, 'ヽ' | 'ヾ' | 'ゝ' | 'ゞ' | '々' | '〆')
+}
+
+/// [`TtsOptions::silence_symbols`] に従って読み上げ対象外の token を落とす。
+///
+/// 判定は **surface** に対して行う (読みの段階では `・` は既に 「なかぐろ」 に
+/// なっていて区別できないため)。 [`Furigana::to_tts`](crate::Furigana::to_tts) と
+/// 自前で `tokenize` → [`normalize_for_tts`] を組む caller (HTTP server 等) の
+/// 両方から呼ぶこと。 呼び忘れると `silence_symbols` が無言で効かなくなる。
+pub fn filter_tokens_for_tts(tokens: &mut Vec<crate::ReadingToken>, opts: &TtsOptions) {
+    if !opts.silence_symbols {
+        return;
+    }
+    tokens.retain(|t| t.surface.is_empty() || !t.surface.chars().all(is_decorative_symbol));
 }
 
 /// TTS 向けテキスト正規化

@@ -317,7 +317,7 @@ fn process(
     }
 
     let tokens_start = Instant::now();
-    let tokens = f.tokenize(&text);
+    let mut tokens = f.tokenize(&text);
     let t_tokenize_ms = tokens_start.elapsed().as_secs_f64() * 1000.0;
 
     let convert_start = Instant::now();
@@ -341,6 +341,9 @@ fn process(
                 keep_period: params.keep_period,
                 silence_symbols: params.silence_symbols,
             };
+            // Furigana::to_tts と同じ token filter を通す (呼ばないと
+            // silence_symbols が HTTP 経路だけ無言で効かなくなる)
+            furigana::tts::filter_tokens_for_tts(&mut tokens, &opts);
             let hira = furigana::tokens_to_hiragana(&tokens);
             furigana::tts::normalize_for_tts(&hira, &opts)
         }
