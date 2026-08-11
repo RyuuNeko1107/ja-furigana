@@ -4,7 +4,7 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-08-11
 
 TTS engine adapter の 2 本立て (VOICEVOX kana 記法 + 本家 AquesTalk 音声記号列) と、
 その共有コアの lib 移設。 破壊的変更は `TtsOptions` 1 点のみ (下記 Changed 参照)。

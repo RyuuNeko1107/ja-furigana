@@ -35,12 +35,13 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
 「不確かなときは形態素解析の素朴な結果に fall back」「辞書 hit したものは確実に固定」 という
 **保守的な決定論**。 コミュニティ PR で精度が上がる設計。
 
-> **Status**: 0.2.0 stable (2026-07-06、 0.1.0 cut は 2026-05-12)。
-> 0.2.0 = intonation milestone: dict bracket notation 由来の accent 出力 (`--mode=accent`) +
+> **Status**: 0.3.0 stable (2026-08-11、 0.1.0 cut は 2026-05-12)。
+> 0.3.0 = TTS adapter 2 本立て (VOICEVOX kana 記法 + 本家 AquesTalk 音声記号列) と
+> 共有コアの lib 移設 (`furigana::accent_symbols`、 ADR-0009) + 顔文字/絵文字の
+> TTS silent 化 (`TtsOptions::silence_symbols`)。
+> (0.2.0 = intonation milestone: dict bracket notation 由来の accent 出力 (`--mode=accent`) +
 > opt-in の rule-based accent 推定 (`--estimate-accent`) + VOICEVOX adapter crate
-> (`ja-furigana-voicevox`)。 TTS engine 向け adapter は VOICEVOX kana 記法 のほか、
-> 本家 AquesTalk 音声記号列 (`ja-furigana-aquestalk`、 無声化 `_` / `、`・`。` の pause
-> 区別 / 長さ上限分割つき) も用意。
+> (`ja-furigana-voicevox`))。
 > **Smart engine** (= candidate scoring + Viterbi-like path 選択 + band lexicographic 比較) で
 > 全 reading を解決。 6 provider 構成:
 > ProtectToken (URL/Email/絵文字) / Alphabet passthrough / DictBridge (jukugo / unihan /
