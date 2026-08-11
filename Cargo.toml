@@ -4,6 +4,7 @@ members = [
     "crates/furigana",
     "crates/furigana-cli",
     "crates/furigana-voicevox",
+    "crates/furigana-aquestalk",
 ]
 
 [workspace.package]

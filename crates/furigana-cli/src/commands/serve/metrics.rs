@@ -21,6 +21,7 @@ pub(super) struct ServerMetrics {
     req_analyze: AtomicU64,
     req_accent: AtomicU64,
     req_voicevox_aques: AtomicU64,
+    req_aquestalk: AtomicU64,
     // latency histogram (= total ms、 bucket cumulative count)
     latency_buckets: [AtomicU64; 9],
     latency_sum_ms: AtomicU64,
@@ -47,6 +48,7 @@ impl ServerMetrics {
             "analyze" => &self.req_analyze,
             "accent" => &self.req_accent,
             "voicevox-aques" => &self.req_voicevox_aques,
+            "aquestalk" => &self.req_aquestalk,
             _ => return,
         };
         counter.fetch_add(1, Relaxed);
@@ -104,6 +106,7 @@ impl ServerMetrics {
             ("analyze", &self.req_analyze),
             ("accent", &self.req_accent),
             ("voicevox-aques", &self.req_voicevox_aques),
+            ("aquestalk", &self.req_aquestalk),
         ] {
             out.push_str(&format!(
                 "furigana_requests_total{{mode=\"{}\"}} {}\n",

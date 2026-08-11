@@ -267,11 +267,17 @@ fn process(
         }));
     }
 
-    if mode == "voicevox-aques" {
-        // VOICEVOX AquesTalk-風記法 (ADR-0001 adapter crate 経由)。
-        // result にはそのまま POST /accent_phrases?is_kana=true へ渡せる文字列が入る。
+    if mode == "voicevox-aques" || mode == "aquestalk" {
+        // TTS engine 固有の記号列 (ADR-0001 adapter crate 経由)。
+        // - voicevox-aques: そのまま POST /accent_phrases?is_kana=true へ渡せる kana 記法
+        // - aquestalk: 本家 AquesTalk (AquesTalk2 / AquesTalk10) の音声記号列
         let convert_start = Instant::now();
-        let result = ja_furigana_voicevox::to_aques_kana(&f.to_accent(&text));
+        let accent = f.to_accent(&text);
+        let result = if mode == "aquestalk" {
+            ja_furigana_aquestalk::to_aquestalk(&accent)
+        } else {
+            ja_furigana_voicevox::to_aques_kana(&accent)
+        };
         let t_convert_ms = convert_start.elapsed().as_secs_f64() * 1000.0;
         let t_total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -506,7 +512,7 @@ fn validate_params(params: &FuriganaParams) -> Result<(), ApiError> {
 fn normalize_mode(mode: &str) -> String {
     match mode {
         "tts" | "hiragana" | "ruby" | "kanji" | "romaji" | "romaji-kunrei" | "analyze"
-        | "accent" | "voicevox-aques" => mode.to_string(),
+        | "accent" | "voicevox-aques" | "aquestalk" => mode.to_string(),
         // alias: 棒読みちゃん系へ流すテキストは tts と同一、 voicevox は正式名へ寄せる
         "bouyomi" => "tts".to_string(),
         "voicevox" => "voicevox-aques".to_string(),
@@ -690,6 +696,7 @@ mod tests {
             "analyze",
             "accent",
             "voicevox-aques",
+            "aquestalk",
         ] {
             assert_eq!(normalize_mode(m), m, "known mode はそのまま");
         }

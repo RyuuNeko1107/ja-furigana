@@ -38,7 +38,9 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
 > **Status**: 0.2.0 stable (2026-07-06、 0.1.0 cut は 2026-05-12)。
 > 0.2.0 = intonation milestone: dict bracket notation 由来の accent 出力 (`--mode=accent`) +
 > opt-in の rule-based accent 推定 (`--estimate-accent`) + VOICEVOX adapter crate
-> (`ja-furigana-voicevox`)。
+> (`ja-furigana-voicevox`)。 TTS engine 向け adapter は VOICEVOX kana 記法 のほか、
+> 本家 AquesTalk 音声記号列 (`ja-furigana-aquestalk`、 無声化 `_` / `、`・`。` の pause
+> 区別 / 長さ上限分割つき) も用意。
 > **Smart engine** (= candidate scoring + Viterbi-like path 選択 + band lexicographic 比較) で
 > 全 reading を解決。 6 provider 構成:
 > ProtectToken (URL/Email/絵文字) / Alphabet passthrough / DictBridge (jukugo / unihan /

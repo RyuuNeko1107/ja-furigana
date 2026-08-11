@@ -65,7 +65,7 @@ pub struct Args {
     #[arg(long)]
     pub auto_pull: bool,
 
-    /// rule-based accent 推定を有効化する (ADR-0007)。 mode=accent / voicevox-aques で
+    /// rule-based accent 推定を有効化する (ADR-0007)。 mode=accent / voicevox-aques / aquestalk で
     /// dict bracket が無い token にも外来語 -3 rule / 人名 rule の推定 accent が付く
     /// (推定 phrase は `"estimated": true` で真値と区別)。 読み出力には影響しない。
     #[arg(long)]

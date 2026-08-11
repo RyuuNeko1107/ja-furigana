@@ -18,7 +18,7 @@ pub struct Args {
     text: String,
 
     /// 変換モード: `tts` (default) | `hiragana` | `ruby` | `kanji` | `romaji` | `romaji-kunrei` |
-    /// `analyze` | `accent` | `voicevox-aques` | `bouyomi`
+    /// `analyze` | `accent` | `voicevox-aques` | `aquestalk` | `bouyomi`
     #[arg(short, long, default_value = "tts")]
     mode: String,
 
@@ -45,6 +45,10 @@ pub struct Args {
     /// TTS: `。` を残さず削除する
     #[arg(long)]
     drop_period: bool,
+
+    /// aquestalk: 無声化記号 `_` の自動付与を無効にする
+    #[arg(long)]
+    no_devoice: bool,
 
     /// accent/analyze: dict bracket が無い token にも rule-based accent 推定を適用する
     /// (ADR-0007。 推定 phrase は `"estimated": true` で真値と区別される)
@@ -93,6 +97,16 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         "voicevox-aques" | "voicevox" => {
             ja_furigana_voicevox::to_aques_kana(&f.to_accent(&args.text))
         }
+        // 本家 AquesTalk 音声記号列 (ADR-0001 adapter crate 経由)。
+        // AquesTalk2 / AquesTalk10 の合成 API へそのまま渡せる。
+        // VOICEVOX kana 記法との差分 = 半角 `?` / `。` と `、` の pause 区別 / 無声化 `_`。
+        "aquestalk" => ja_furigana_aquestalk::to_aquestalk_with(
+            &f.to_accent(&args.text),
+            ja_furigana_aquestalk::Options {
+                devoice: !args.no_devoice,
+                trailing_period: !args.drop_period,
+            },
+        ),
         // Smart engine debug API (★F1): AnalyzeResult を JSON pretty 出力。
         // alpha.10 段階の experimental、 path 採択 / 候補列 / boundary region を inspect 用途。
         "analyze" => {
@@ -104,7 +118,7 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
             serde_json::to_string_pretty(&result).context("serialize AccentResult to JSON")?
         }
         other => bail!(
-            "未知の mode: {other} (使用可能: tts | bouyomi | hiragana | ruby | kanji | romaji | romaji-kunrei | analyze | accent | voicevox-aques)"
+            "未知の mode: {other} (使用可能: tts | bouyomi | hiragana | ruby | kanji | romaji | romaji-kunrei | analyze | accent | voicevox-aques | aquestalk)"
         ),
     };
 

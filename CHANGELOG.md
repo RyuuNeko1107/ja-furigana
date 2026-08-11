@@ -4,6 +4,27 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
+## [Unreleased]
+
+### Added
+
+- **`ja-furigana-aquestalk` crate 新設 (ADR-0001 の 2 つ目の adapter)**: `AccentResult` を
+  **本家 AquesTalk 音声記号列** へ変換する。 姉妹 crate `ja-furigana-voicevox` が出すのは
+  VOICEVOX の kana 記法 (AquesTalk-"風") で、 本 crate は AquesTalk2 / AquesTalk10 の
+  合成 API にそのまま渡せる形を出す。 差分は 疑問符 = 半角 `?` / pause = `、` (短) と
+  `。` (長) の区別 / 無声化記号 `_` の自動付与 / エンジン側の長さ上限対応
+  (`MAX_LEN` + `split_for_aquestalk` によるアクセント句境界での分割)。
+  無声化は安全側 (無声子音+狭母音が無声子音の直前、 発話末の 「デス/マス」 の ス のみ。
+  アクセント核 mora と連続無声化は付けない)、 `Options::devoice = false` で OFF。
+  記号は文単位で扱う (`？` はその文の末尾だけ `?`、 中黒 「・」 は pause を入れず句境界のみ)。
+  ライブラリ組み込み用に `Converter` facade (`convert` / `convert_chunks` /
+  `furigana()` で内側の解析器へ) と `ja-furigana` 本体の re-export
+  (`ja_furigana_aquestalk::furigana`) を持つ。
+- **CLI / serve に `aquestalk` mode を配線**: `furigana lookup --mode aquestalk`
+  (`--no-devoice` で無声化 OFF、 `--drop-period` で文末 `。` を付けない) と
+  HTTP `mode=aquestalk`。 metrics counter (`furigana_requests_total{mode="aquestalk"}`) も追加。
+  `--estimate-accent` は既存 mode と同様に効く。
+
 ## [0.2.0] - 2026-07-06
 
 **0.2.0 stable cut**。 0.2.0 の中身 (bracket notation parse + `AccentResult` /

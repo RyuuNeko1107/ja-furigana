@@ -1208,6 +1208,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ja-furigana-aquestalk"
+version = "0.2.0"
+dependencies = [
+ "ja-furigana",
+]
+
+[[package]]
 name = "ja-furigana-cli"
 version = "0.2.0"
 dependencies = [
@@ -1219,6 +1226,7 @@ dependencies = [
  "flate2",
  "hex",
  "ja-furigana",
+ "ja-furigana-aquestalk",
  "ja-furigana-voicevox",
  "reqwest",
  "rustyline",

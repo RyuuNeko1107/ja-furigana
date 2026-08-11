@@ -43,8 +43,16 @@ workspace = true
 # default = ipadic (lib と同じ)。 cargo build -p ja-furigana-cli --no-default-features
 # --features dict-unidic で UniDic 版バイナリを build できる。
 default = ["dict-ipadic"]
-dict-ipadic = ["furigana/dict-ipadic", "ja-furigana-voicevox/dict-ipadic"]
-dict-unidic = ["furigana/dict-unidic", "ja-furigana-voicevox/dict-unidic"]
+dict-ipadic = [
+    "furigana/dict-ipadic",
+    "ja-furigana-voicevox/dict-ipadic",
+    "ja-furigana-aquestalk/dict-ipadic",
+]
+dict-unidic = [
+    "furigana/dict-unidic",
+    "ja-furigana-voicevox/dict-unidic",
+    "ja-furigana-aquestalk/dict-unidic",
+]
 
 [dependencies]
 # crates.io 上の crate 名は `ja-furigana` (`furigana` は別 crate に取られているため)。
@@ -53,6 +61,8 @@ furigana = { package = "ja-furigana", path = "../furigana", version = "=0.2.0", 
 # VOICEVOX adapter (ADR-0001: engine 固有フォーマットは別 crate)。 CLI は
 # `--mode=voicevox-aques` の変換のためだけに依存する。
 ja-furigana-voicevox = { path = "../furigana-voicevox", version = "=0.2.0", default-features = false }
+# AquesTalk adapter (同 ADR-0001)。 `--mode=aquestalk` の変換のためだけに依存する。
+ja-furigana-aquestalk = { path = "../furigana-aquestalk", version = "=0.2.0", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "net"] }
 axum = "0.8"
