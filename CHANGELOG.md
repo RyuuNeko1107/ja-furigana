@@ -4,7 +4,7 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
-## [Unreleased]
+## [0.3.1] - 2026-08-11
 
 ### Fixed
 
