@@ -50,6 +50,11 @@ pub struct Args {
     #[arg(long)]
     no_devoice: bool,
 
+    /// aquestalk: 記号列をこの文字数以下のアクセント句単位へ分割し 1 行 1 塊で出力する
+    /// (エンジン側の長さ上限対策。 0 = 分割しない)
+    #[arg(long, default_value_t = 0)]
+    max_len: usize,
+
     /// accent/analyze: dict bracket が無い token にも rule-based accent 推定を適用する
     /// (ADR-0007。 推定 phrase は `"estimated": true` で真値と区別される)
     #[arg(long)]
@@ -100,13 +105,21 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         // 本家 AquesTalk 音声記号列 (ADR-0001 adapter crate 経由)。
         // AquesTalk2 / AquesTalk10 の合成 API へそのまま渡せる。
         // VOICEVOX kana 記法との差分 = 半角 `?` / `。` と `、` の pause 区別 / 無声化 `_`。
-        "aquestalk" => ja_furigana_aquestalk::to_aquestalk_with(
-            &f.to_accent(&args.text),
-            ja_furigana_aquestalk::Options {
-                devoice: !args.no_devoice,
-                trailing_period: !args.drop_period,
-            },
-        ),
+        "aquestalk" => {
+            let symbols = ja_furigana_aquestalk::to_aquestalk_with(
+                &f.to_accent(&args.text),
+                ja_furigana_aquestalk::Options {
+                    devoice: !args.no_devoice,
+                    trailing_period: !args.drop_period,
+                },
+            );
+            if args.max_len == 0 {
+                symbols
+            } else {
+                // 1 行 1 塊 = そのまま逐次合成に流せる
+                ja_furigana_aquestalk::split_for_aquestalk(&symbols, args.max_len).join("\n")
+            }
+        }
         // Smart engine debug API (★F1): AnalyzeResult を JSON pretty 出力。
         // alpha.10 段階の experimental、 path 採択 / 候補列 / boundary region を inspect 用途。
         "analyze" => {

@@ -21,9 +21,22 @@
   `furigana()` で内側の解析器へ) と `ja-furigana` 本体の re-export
   (`ja_furigana_aquestalk::furigana`) を持つ。
 - **CLI / serve に `aquestalk` mode を配線**: `furigana lookup --mode aquestalk`
-  (`--no-devoice` で無声化 OFF、 `--drop-period` で文末 `。` を付けない) と
-  HTTP `mode=aquestalk`。 metrics counter (`furigana_requests_total{mode="aquestalk"}`) も追加。
+  (`--no-devoice` で無声化 OFF、 `--drop-period` で文末 `。` を付けない、
+  `--max-len N` で N 文字以下のアクセント句単位へ分割し 1 行 1 塊で出力) と
+  HTTP `mode=aquestalk` (`devoice` / `keep_period` param、 `segmented=true` で
+  `segments` に分割済み記号列、 幅は `max_len` param [default 255])。
+  metrics counter (`furigana_requests_total{mode="aquestalk"}`) も追加。
   `--estimate-accent` は既存 mode と同様に効く。
+- **`furigana::accent_symbols` module (lib)**: TTS engine 向け記号列 adapter の共有コア。
+  `AccentResult` を 「モーラ列 + 核位置 + 区切りの強さ」 (`MoraPhrase` / `PhraseBreak`)
+  へ落とす所までを lib が持ち、 engine 固有の綴り方だけを adapter crate が持つ形にした
+  (voicevox / aquestalk 2 crate で重複していた約 200 行の変換コアを解消)。
+
+### Changed
+
+- **`ja-furigana-voicevox`**: 変換コアを `furigana::accent_symbols` へ移行 (出力互換)。
+  副次的に、 文中の `？` が発話全体を疑問文にしていた挙動と、 中黒 「・」 で
+  pause が入る挙動が aquestalk 側と同じ扱いに揃った。
 
 ## [0.2.0] - 2026-07-06
 

@@ -31,221 +31,59 @@
 //! // VOICEVOX の POST /accent_phrases?is_kana=true にそのまま渡せる
 //! ```
 
-use furigana::{AccentResult, AccentToken};
+use furigana::accent_symbols::{to_mora_phrases, MoraPhrase, PhraseBreak};
+use furigana::AccentResult;
 
-/// ひらがな → カタカナ (U+3041..U+3096 を +0x60 シフト)。
-fn hira_to_kata(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if ('ぁ'..='ゖ').contains(&c) {
-                char::from_u32(c as u32 + 0x60).unwrap_or(c)
-            } else {
-                c
-            }
-        })
-        .collect()
-}
-
-fn is_katakana_or_prolonged(c: char) -> bool {
-    matches!(c, 'ァ'..='ヶ' | 'ー')
-}
-
-fn is_small_kana(c: char) -> bool {
-    matches!(c, 'ャ' | 'ュ' | 'ョ' | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ')
-}
-
-/// カタカナ文字列を mora 単位に分割 (拗音 / 小書き母音は直前と合算)。
-fn mora_split(reading: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for c in reading.chars() {
-        if is_small_kana(c) {
-            if let Some(last) = out.last_mut() {
-                last.push(c);
-                continue;
-            }
+/// 1 accent phrase を kana 記法へ (平板 / 不明は句末 `'`)。
+fn render_phrase(phrase: &MoraPhrase) -> String {
+    let pos = phrase.nucleus_pos();
+    let mut out = String::new();
+    for (i, m) in phrase.morae.iter().enumerate() {
+        out.push_str(m);
+        if i + 1 == pos {
+            out.push('\'');
         }
-        out.push(c.to_string());
     }
     out
-}
-
-/// 組み立て中の 1 accent phrase。
-struct Phrase {
-    morae: Vec<String>,
-    /// `'` を置く mora 位置 (1-based)。 `None` = 平板/不明 (= 末尾 `'`)
-    nucleus: Option<usize>,
-}
-
-impl Phrase {
-    fn render(&self) -> String {
-        let pos = match self.nucleus {
-            // VOICEVOX kana 記法は 0 型を表現できないため 平板/不明は末尾 `'`
-            Some(p) if p >= 1 && p <= self.morae.len() => p,
-            _ => self.morae.len(),
-        };
-        let mut out = String::new();
-        for (i, m) in self.morae.iter().enumerate() {
-            out.push_str(m);
-            if i + 1 == pos {
-                out.push('\'');
-            }
-        }
-        out
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Sep {
-    /// `/` — pause なし phrase 境界
-    Slash,
-    /// `、` — pause あり境界 (読点 / 文末由来)
-    Pause,
-}
-
-#[derive(Default)]
-struct Builder {
-    rendered: Vec<(Sep, String)>,
-    open: Option<Phrase>,
-    pending_pause: bool,
-    question: bool,
-}
-
-impl Builder {
-    /// 組み立て中 phrase を確定 (空なら捨てる)。
-    fn flush(&mut self) {
-        if let Some(p) = self.open.take() {
-            if !p.morae.is_empty() {
-                let sep = if self.pending_pause {
-                    Sep::Pause
-                } else {
-                    Sep::Slash
-                };
-                self.rendered.push((sep, p.render()));
-                self.pending_pause = false;
-            }
-        }
-    }
-
-    fn finish(mut self) -> String {
-        self.flush();
-        let mut out = String::new();
-        for (i, (sep, phrase)) in self.rendered.iter().enumerate() {
-            if i > 0 {
-                out.push(match sep {
-                    Sep::Pause => '、',
-                    Sep::Slash => '/',
-                });
-            }
-            out.push_str(phrase);
-        }
-        if self.question && !out.is_empty() {
-            out.push('？');
-        }
-        out
-    }
-}
-
-fn is_punctuation_token(surface: &str) -> bool {
-    !surface.is_empty()
-        && surface.chars().all(|c| {
-            matches!(
-                c,
-                '。' | '、' | '．' | '，' | '！' | '!' | '？' | '?' | '…' | '‥' | '・'
-            ) || c.is_whitespace()
-        })
-}
-
-fn token_phrases(token: &AccentToken) -> Vec<Phrase> {
-    token
-        .accent_phrases
-        .iter()
-        .filter_map(|ap| {
-            let morae = mora_split(&hira_to_kata(&ap.reading));
-            if morae.is_empty() {
-                return None;
-            }
-            let nucleus = match ap.accent {
-                Some(a) if a >= 1 => Some(a as usize),
-                _ => None, // 平板 (0) / 不明 → 末尾 '
-            };
-            Some(Phrase { morae, nucleus })
-        })
-        .collect()
 }
 
 /// [`AccentResult`] を AquesTalk-風記法 string に変換する。
 ///
 /// 戻り値は VOICEVOX `POST /accent_phrases?is_kana=true` にそのまま渡せる形式。
 /// 各 phrase に `'` がちょうど 1 個・空 phrase なし・句頭 `'` なし、 という
-/// kana parser のエラー条件を構造的に満たす。 読める token が 1 つもなければ
+/// kana parser のエラー条件を構造的に満たす。 読める token が 1 つも無ければ
 /// 空文字列を返す (caller 側で skip すること)。
+///
+/// 構築ロジック (phrase 分け / 助詞連結 / 記号の扱い) は lib 側の
+/// [`furigana::accent_symbols`] と共有し、 本 crate は VOICEVOX 固有の
+/// **記号の綴り方** だけを持つ:
+///
+/// - pause は種別を問わず `、` (kana 記法は長短を区別しない)
+/// - 疑問文は全角 `？` を発話末に 1 個 (kana 記法は文中に置けない)
 #[must_use]
 pub fn to_aques_kana(result: &AccentResult) -> String {
-    let mut b = Builder::default();
+    let symbols = to_mora_phrases(result);
 
-    for token in &result.tokens {
-        if is_punctuation_token(&token.surface) {
-            if token.surface.chars().any(|c| matches!(c, '？' | '?')) {
-                b.question = true;
-            }
-            b.flush();
-            b.pending_pause = true;
-            continue;
-        }
-
-        // 助詞の発音変換: kana 記法は音声表記なので は→ワ / へ→エ / を→オ。
-        // 単独 token の場合のみ (語中の ハ/ヘ/ヲ は無関係)。
-        let reading = match token.surface.as_str() {
-            "は" => "ワ".to_string(),
-            "へ" => "エ".to_string(),
-            "を" => "オ".to_string(),
-            _ => hira_to_kata(&token.reading),
-        };
-        if reading.is_empty() || !reading.chars().all(is_katakana_or_prolonged) {
-            // 読めない token は落として phrase 境界だけ切る
-            b.flush();
-            continue;
-        }
-
-        if !token.accent_phrases.is_empty() {
-            // dict bracket / 推定由来の phrase 列をそのまま採用。
-            // 末尾 phrase は open にして後続の助詞連結を受ける。
-            b.flush();
-            let mut phrases = token_phrases(token);
-            if let Some(last) = phrases.pop() {
-                for p in phrases {
-                    b.open = Some(p);
-                    b.flush();
-                }
-                b.open = Some(last);
-            }
-            continue;
-        }
-
-        let is_hiragana_function_word = token
-            .surface
-            .chars()
-            .all(|c| matches!(c, 'ぁ'..='ゖ' | 'ー'))
-            && !token.surface.is_empty();
-
-        if is_hiragana_function_word {
-            if let Some(p) = b.open.as_mut() {
-                // 直前 phrase へ連結。 核確定済みなら位置維持 (ア'メガ)、
-                // 平板/不明は None のまま = ' が末尾へ動く (サカナガ')
-                p.morae.extend(mora_split(&reading));
-                continue;
+    let mut out = String::new();
+    let mut question = symbols.trailing == PhraseBreak::Question;
+    for (i, phrase) in symbols.phrases.iter().enumerate() {
+        if i > 0 {
+            out.push(match phrase.break_before {
+                PhraseBreak::None => '/',
+                // kana 記法の pause は 1 種類だけ。 文中の `？` もここでは
+                // pause として扱い、 尻上がりは末尾の `？` で表現する
+                _ => '、',
+            });
+            if phrase.break_before == PhraseBreak::Question {
+                question = true;
             }
         }
-
-        // accent 不明の content token → 自分の phrase (平板 fallback)
-        b.flush();
-        b.open = Some(Phrase {
-            morae: mora_split(&reading),
-            nucleus: None,
-        });
+        out.push_str(&render_phrase(phrase));
     }
-
-    b.finish()
+    if question && !out.is_empty() {
+        out.push('？');
+    }
+    out
 }
 
 #[cfg(test)]

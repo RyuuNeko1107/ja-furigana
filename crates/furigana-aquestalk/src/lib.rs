@@ -56,7 +56,8 @@
 /// 組み込み時はこちらを使うのが安全。
 pub use furigana;
 
-use furigana::{AccentResult, AccentToken, Furigana};
+use furigana::accent_symbols::{to_mora_phrases, MoraPhrase, PhraseBreak};
+use furigana::{AccentResult, Furigana};
 
 /// AquesTalk エンジンが 1 回の合成で受け取れる音声記号列のおおよその上限 (文字数)。
 ///
@@ -87,42 +88,6 @@ impl Default for Options {
             trailing_period: true,
         }
     }
-}
-
-/// ひらがな → カタカナ (U+3041..U+3096 を +0x60 シフト)。
-fn hira_to_kata(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if ('ぁ'..='ゖ').contains(&c) {
-                char::from_u32(c as u32 + 0x60).unwrap_or(c)
-            } else {
-                c
-            }
-        })
-        .collect()
-}
-
-fn is_katakana_or_prolonged(c: char) -> bool {
-    matches!(c, 'ァ'..='ヶ' | 'ー')
-}
-
-fn is_small_kana(c: char) -> bool {
-    matches!(c, 'ャ' | 'ュ' | 'ョ' | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ')
-}
-
-/// カタカナ文字列を mora 単位に分割 (拗音 / 小書き母音は直前と合算)。
-fn mora_split(reading: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for c in reading.chars() {
-        if is_small_kana(c) {
-            if let Some(last) = out.last_mut() {
-                last.push(c);
-                continue;
-            }
-        }
-        out.push(c.to_string());
-    }
-    out
 }
 
 /// mora の頭子音が無声子音 (カ / サ / タ / ハ / パ 行) か。
@@ -180,183 +145,59 @@ fn is_devoiceable(mora: &str) -> bool {
     )
 }
 
-/// 組み立て中の 1 accent phrase。
-struct Phrase {
-    morae: Vec<String>,
-    /// `'` を置く mora 位置 (1-based)。 `None` = 平板/不明 (= 末尾 `'`)
-    nucleus: Option<usize>,
-}
-
-impl Phrase {
-    /// 核位置 (1-based)。 平板/不明や範囲外は句末に落とす。
-    fn nucleus_pos(&self) -> usize {
-        match self.nucleus {
-            // AquesTalk も 0 型を直接は表現できないため 平板/不明は句末 `'`
-            Some(p) if p >= 1 && p <= self.morae.len() => p,
-            _ => self.morae.len(),
-        }
+/// `morae[i]` を無声化するか。 `utterance_end` = 発話末の句か。
+fn should_devoice(morae: &[String], i: usize, utterance_end: bool) -> bool {
+    let mora = morae[i].as_str();
+    if !is_devoiceable(mora) {
+        return false;
     }
-
-    /// `devoice` = 無声化記号 `_` の自動付与、 `utterance_end` = 発話末の句か。
-    fn render(&self, devoice: bool, utterance_end: bool) -> String {
-        let pos = self.nucleus_pos();
-        let mut out = String::new();
-        let mut prev_devoiced = false;
-        for (i, m) in self.morae.iter().enumerate() {
-            let is_nucleus = i + 1 == pos;
-            if devoice && !prev_devoiced && !is_nucleus && self.should_devoice(i, utterance_end) {
-                out.push('_');
-                prev_devoiced = true;
-            } else {
-                prev_devoiced = false;
-            }
-            out.push_str(m);
-            if is_nucleus {
-                out.push('\'');
-            }
-        }
-        out
-    }
-
-    fn should_devoice(&self, i: usize, utterance_end: bool) -> bool {
-        let mora = self.morae[i].as_str();
-        if !is_devoiceable(mora) {
-            return false;
-        }
-        match self.morae.get(i + 1) {
-            // 無声子音に挟まれた狭母音
-            Some(next) => has_voiceless_onset(next),
-            // 発話末の 「デス」「マス」 の ス
-            None => {
-                utterance_end
-                    && mora == "ス"
-                    && matches!(
-                        self.morae.get(i.wrapping_sub(1)).map(String::as_str),
-                        Some("デ" | "マ")
-                    )
-            }
+    match morae.get(i + 1) {
+        // 無声子音に挟まれた狭母音
+        Some(next) => has_voiceless_onset(next),
+        // 発話末の 「デス」「マス」 の ス
+        None => {
+            utterance_end && mora == "ス" && i > 0 && matches!(morae[i - 1].as_str(), "デ" | "マ")
         }
     }
 }
 
-/// アクセント句の区切り記号。 **直前の句の後ろ** に置かれる。
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Sep {
-    /// `/` — pause なし phrase 境界 (中黒 「・」 もこれ: 語中なので間を空けない)
-    Slash,
-    /// `、` — 短 pause (読点 / 空白由来)
-    Comma,
-    /// `。` — 長 pause (句点 / 感嘆符由来)
-    Period,
-    /// `?` — 疑問文の終わり (= 直前の文だけ尻上がり)
-    Question,
-}
-
-impl Sep {
-    fn symbol(self) -> char {
-        match self {
-            Sep::Slash => '/',
-            Sep::Comma => '、',
-            Sep::Period => '。',
-            Sep::Question => '?',
+/// 1 アクセント句を AquesTalk 記法へ。
+///
+/// `devoice` = 無声化記号 `_` の自動付与、 `utterance_end` = 発話末の句か。
+fn render_phrase(phrase: &MoraPhrase, devoice: bool, utterance_end: bool) -> String {
+    // AquesTalk も 0 型を直接は表現できないため 平板 / 不明は句末 `'`
+    let pos = phrase.nucleus_pos();
+    let mut out = String::new();
+    let mut prev_devoiced = false;
+    for (i, m) in phrase.morae.iter().enumerate() {
+        let is_nucleus = i + 1 == pos;
+        // 核 mora と連続無声化は避ける (安全側)
+        if devoice
+            && !prev_devoiced
+            && !is_nucleus
+            && should_devoice(&phrase.morae, i, utterance_end)
+        {
+            out.push('_');
+            prev_devoiced = true;
+        } else {
+            prev_devoiced = false;
+        }
+        out.push_str(m);
+        if is_nucleus {
+            out.push('\'');
         }
     }
+    out
 }
 
-#[derive(Default)]
-struct Builder {
-    rendered: Vec<(Sep, Phrase)>,
-    open: Option<Phrase>,
-    /// 直前に確定した句の後ろに置く区切り記号 (次の句の頭 or 発話末で render)。
-    pending: Option<Sep>,
-    opts: Options,
-}
-
-impl Builder {
-    /// 組み立て中 phrase を確定 (空なら捨てる)。
-    fn flush(&mut self) {
-        if let Some(p) = self.open.take() {
-            if !p.morae.is_empty() {
-                let sep = self.pending.take().unwrap_or(Sep::Slash);
-                self.rendered.push((sep, p));
-            }
-        }
+/// 句区切りを AquesTalk の記号へ。
+fn break_symbol(brk: PhraseBreak) -> char {
+    match brk {
+        PhraseBreak::None => '/',
+        PhraseBreak::Short => '、',
+        PhraseBreak::Long => '。',
+        PhraseBreak::Question => '?',
     }
-
-    /// 記号 token を受けて pending 区切りを更新する (強い方を優先)。
-    fn add_separator(&mut self, sep: Sep) {
-        self.flush();
-        self.pending = Some(self.pending.map_or(sep, |cur| cur.max(sep)));
-    }
-
-    fn finish(mut self) -> String {
-        self.flush();
-        let last = self.rendered.len().saturating_sub(1);
-        let mut out = String::new();
-        for (i, (sep, phrase)) in self.rendered.iter().enumerate() {
-            if i > 0 {
-                out.push(sep.symbol());
-            }
-            out.push_str(&phrase.render(self.opts.devoice, i == last));
-        }
-        if out.is_empty() {
-            return out;
-        }
-        match self.pending {
-            // 入力末尾の記号は そのまま発話末の記号として残す
-            // (`?` = 疑問文、 `。`/`、` = 文末 pause)
-            Some(sep) => out.push(sep.symbol()),
-            // 記号で終わっていない入力に `。` を補う (option)
-            None if self.opts.trailing_period => out.push('。'),
-            None => {}
-        }
-        out
-    }
-}
-
-/// 記号 token の種別。 `None` = 記号ではない。
-fn punctuation_sep(surface: &str) -> Option<Sep> {
-    if surface.is_empty() {
-        return None;
-    }
-    let mut sep = None;
-    for c in surface.chars() {
-        let s = match c {
-            '？' | '?' => Sep::Question,
-            '。' | '．' | '！' | '!' => Sep::Period,
-            '、' | '，' | ',' | '…' | '‥' => Sep::Comma,
-            // 中黒は 「ジョン・スミス」 のような語中区切り = pause を入れない
-            '・' => Sep::Slash,
-            c if c.is_whitespace() => Sep::Comma,
-            _ => return None,
-        };
-        // 強い方 (= 長い pause / 疑問) を優先
-        sep = Some(sep.map_or(s, |cur: Sep| cur.max(s)));
-    }
-    sep
-}
-
-fn token_phrases(token: &AccentToken) -> Vec<Phrase> {
-    token
-        .accent_phrases
-        .iter()
-        .filter_map(|ap| {
-            // 記号列に出せない文字は落とす (parser の未定義文字エラー回避)
-            let reading: String = hira_to_kata(&ap.reading)
-                .chars()
-                .filter(|c| is_katakana_or_prolonged(*c))
-                .collect();
-            let morae = mora_split(&reading);
-            if morae.is_empty() {
-                return None;
-            }
-            let nucleus = match ap.accent {
-                Some(a) if a >= 1 => Some(a as usize),
-                _ => None, // 平板 (0) / 不明 → 句末 '
-            };
-            Some(Phrase { morae, nucleus })
-        })
-        .collect()
 }
 
 /// [`AccentResult`] を AquesTalk 音声記号列に変換する ([`Options::default`])。
@@ -375,80 +216,29 @@ pub fn to_aquestalk(result: &AccentResult) -> String {
 /// [`to_aquestalk`] の option 指定版。
 #[must_use]
 pub fn to_aquestalk_with(result: &AccentResult, opts: Options) -> String {
-    let mut b = Builder {
-        opts,
-        ..Builder::default()
-    };
+    let symbols = to_mora_phrases(result);
+    let last = symbols.phrases.len().saturating_sub(1);
 
-    for token in &result.tokens {
-        if let Some(sep) = punctuation_sep(&token.surface) {
-            b.add_separator(sep);
-            continue;
+    let mut out = String::new();
+    for (i, phrase) in symbols.phrases.iter().enumerate() {
+        if i > 0 {
+            out.push(break_symbol(phrase.break_before));
         }
-
-        // 助詞の発音変換: 音声記号列は音声表記なので は→ワ / へ→エ / を→オ。
-        // 単独 token の場合のみ (語中の ハ/ヘ/ヲ は無関係)。 accent_phrases が
-        // 付いていても 1 モーラの助詞なので、 変換した読みを優先して直前句へ連結する。
-        let particle = match token.surface.as_str() {
-            "は" => Some("ワ"),
-            "へ" => Some("エ"),
-            "を" => Some("オ"),
-            _ => None,
-        };
-        let reading = match particle {
-            Some(r) => r.to_string(),
-            // 読める文字だけ残す (絵文字 / 記号混じりの token でも語の実体は落とさない)
-            None => hira_to_kata(&token.reading)
-                .chars()
-                .filter(|c| is_katakana_or_prolonged(*c))
-                .collect(),
-        };
-        if reading.is_empty() {
-            // 読めない token (絵文字 / 記号 / URL / 英字 passthrough 等) は
-            // 落として phrase 境界だけ切る
-            b.flush();
-            continue;
-        }
-
-        if particle.is_none() && !token.accent_phrases.is_empty() {
-            // dict bracket / 推定由来の phrase 列をそのまま採用。
-            // 末尾 phrase は open にして後続の助詞連結を受ける。
-            b.flush();
-            let mut phrases = token_phrases(token);
-            if let Some(last) = phrases.pop() {
-                for p in phrases {
-                    b.open = Some(p);
-                    b.flush();
-                }
-                b.open = Some(last);
-            }
-            continue;
-        }
-
-        let is_hiragana_function_word = !token.surface.is_empty()
-            && token
-                .surface
-                .chars()
-                .all(|c| matches!(c, 'ぁ'..='ゖ' | 'ー'));
-
-        if is_hiragana_function_word {
-            if let Some(p) = b.open.as_mut() {
-                // 直前 phrase へ連結。 核確定済みなら位置維持 (ア'メガ)、
-                // 平板/不明は None のまま = ' が句末へ動く (サカナガ')
-                p.morae.extend(mora_split(&reading));
-                continue;
-            }
-        }
-
-        // accent 不明の content token → 自分の phrase (平板 fallback)
-        b.flush();
-        b.open = Some(Phrase {
-            morae: mora_split(&reading),
-            nucleus: None,
-        });
+        out.push_str(&render_phrase(phrase, opts.devoice, i == last));
     }
-
-    b.finish()
+    if out.is_empty() {
+        return out;
+    }
+    if symbols.trailing == PhraseBreak::None {
+        // 記号で終わっていない入力に `。` を補う (option)
+        if opts.trailing_period {
+            out.push('。');
+        }
+    } else {
+        // 入力末尾の記号は そのまま発話末の記号として残す
+        out.push(break_symbol(symbols.trailing));
+    }
+    out
 }
 
 /// テキスト → AquesTalk 音声記号列 の変換器 (ライブラリ組み込み用 facade)。
@@ -864,8 +654,9 @@ mod tests {
         ] {
             let out = talk(&f, input);
             assert!(
-                out.chars().all(|c| is_katakana_or_prolonged(c)
-                    || matches!(c, '\'' | '_' | '/' | '、' | '。' | '?')),
+                out.chars()
+                    .all(|c| furigana::accent_symbols::is_symbol_kana(c)
+                        || matches!(c, '\'' | '_' | '/' | '、' | '。' | '?')),
                 "undefined char in {out:?}"
             );
             for phrase in out

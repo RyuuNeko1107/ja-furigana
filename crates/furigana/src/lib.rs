@@ -90,6 +90,7 @@
 
 #![allow(clippy::tabs_in_doc_comments)]
 
+pub mod accent_symbols;
 pub mod analyzer;
 pub(crate) mod char_class;
 pub mod dict;

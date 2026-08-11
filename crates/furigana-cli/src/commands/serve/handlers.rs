@@ -273,10 +273,23 @@ fn process(
         // - aquestalk: 本家 AquesTalk (AquesTalk2 / AquesTalk10) の音声記号列
         let convert_start = Instant::now();
         let accent = f.to_accent(&text);
-        let result = if mode == "aquestalk" {
-            ja_furigana_aquestalk::to_aquestalk(&accent)
+        // aquestalk は engine 側に記号列長の上限があるので、 `segmented=true` の時は
+        // アクセント句境界で分割した列も `segments` に載せる (pause 記号は保持される)。
+        let (result, segments) = if mode == "aquestalk" {
+            let symbols = ja_furigana_aquestalk::to_aquestalk_with(
+                &accent,
+                ja_furigana_aquestalk::Options {
+                    devoice: params.devoice,
+                    trailing_period: params.keep_period,
+                },
+            );
+            let segments = params.segmented.then(|| {
+                let max_len = params.max_len.unwrap_or(ja_furigana_aquestalk::MAX_LEN);
+                ja_furigana_aquestalk::split_for_aquestalk(&symbols, max_len)
+            });
+            (symbols, segments)
         } else {
-            ja_furigana_voicevox::to_aques_kana(&accent)
+            (ja_furigana_voicevox::to_aques_kana(&accent), None)
         };
         let t_convert_ms = convert_start.elapsed().as_secs_f64() * 1000.0;
         let t_total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
@@ -296,7 +309,7 @@ fn process(
         return Ok(Json(FuriganaResponse {
             result,
             mode,
-            segments: None,
+            segments,
             timings_ms,
             analyze: None,
             accent: None,
@@ -505,6 +518,17 @@ fn validate_params(params: &FuriganaParams) -> Result<(), ApiError> {
             ),
         ));
     }
+    // max_len (aquestalk の記号列分割幅) も同様に 0 / 過大値を reject する。
+    if let Some(max_len) = params.max_len {
+        if !(MIN_SEGMENT_LEN..=MAX_SEGMENT_LEN).contains(&max_len) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "max_len out of range: {max_len} (allowed {MIN_SEGMENT_LEN}..={MAX_SEGMENT_LEN})"
+                ),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -539,8 +563,22 @@ mod tests {
             keep_period: true,
             segmented: false,
             max_segment_len: default_max_seg(),
+            devoice: true,
+            max_len: None,
             debug: false,
         }
+    }
+
+    #[test]
+    fn validate_params_rejects_out_of_range_max_len() {
+        // aquestalk の分割幅: 0 / 過大値は 400
+        let mut p = base_params();
+        p.max_len = Some(0);
+        assert!(validate_params(&p).is_err());
+        p.max_len = Some(MAX_SEGMENT_LEN + 1);
+        assert!(validate_params(&p).is_err());
+        p.max_len = Some(255);
+        assert!(validate_params(&p).is_ok());
     }
 
     #[test]

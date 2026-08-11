@@ -66,6 +66,7 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ```
 crates/furigana/src/
+├── accent_symbols.rs      — TTS 記号列 adapter の共有コア (AccentResult → MoraPhrase + PhraseBreak)
 ├── api.rs                 — Furigana / FuriganaBuilder (公開 entry、 解析は scoring/pipeline 経由の薄い層)
 ├── analyzer.rs            — Lindera + IPADIC ラッパー
 ├── char_class.rs          — 文字種 (CharType) 分類 + Unicode range 表の single home (kana/matcher/special が参照)
@@ -81,6 +82,9 @@ crates/furigana/src/
 
 (旧 chunks/ / loanwords.rs / single_overrides.rs / reading/pipeline.rs は alpha.15 で削除済。
  loanwords は alpha.21 で AlphabetPassthroughProvider に再統合。)
+
+crates/furigana-voicevox/    — VOICEVOX kana 記法 adapter (ADR-0001)
+crates/furigana-aquestalk/   — 本家 AquesTalk 音声記号列 adapter (ADR-0001、 Converter facade 付)
 
 crates/furigana-cli/src/
 ├── main.rs                — `furigana` バイナリ (CLI + HTTP server)

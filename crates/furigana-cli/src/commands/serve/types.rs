@@ -68,6 +68,13 @@ pub(super) struct FuriganaParams {
     pub(super) segmented: bool,
     #[serde(default = "default_max_seg")]
     pub(super) max_segment_len: usize,
+    /// `mode=aquestalk`: 無声化記号 `_` の自動付与 (default: true)
+    #[serde(default = "default_true")]
+    pub(super) devoice: bool,
+    /// `mode=aquestalk` + `segmented=true`: 1 塊あたりの記号列の最大文字数。
+    /// 省略時は AquesTalk エンジンの目安上限。
+    #[serde(default)]
+    pub(super) max_len: Option<usize>,
     #[serde(default)]
     pub(super) debug: bool,
 }
