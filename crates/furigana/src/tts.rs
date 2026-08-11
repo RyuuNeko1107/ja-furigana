@@ -23,6 +23,13 @@ pub struct TtsOptions {
     pub long_pause: String,
     /// `。` を出力に残すか (false で削除)
     pub keep_period: bool,
+    /// 絵文字 / 顔文字パーツを読み上げ対象から外すか (default: false = 従来どおり読む)
+    ///
+    /// 配信コメントの `🎉` や `(´・ω・\`)` のような装飾は、 読み上げると
+    /// 「なかぐろ おめが」 のような雑音になる。 `true` にすると 絵文字と
+    /// 「読み上げても意味を成さない記号」 (ギリシャ文字 / 記号類、 中黒 等) を
+    /// TTS 出力から落とす。 句読点 (`。、！？`) は pause 情報なので残す。
+    pub silence_symbols: bool,
 }
 
 impl Default for TtsOptions {
@@ -32,8 +39,36 @@ impl Default for TtsOptions {
             short_pause: " ".to_string(),
             long_pause: "   ".to_string(),
             keep_period: true,
+            silence_symbols: false,
         }
     }
+}
+
+/// TTS で読み上げても意味を成さない装飾記号か (= [`TtsOptions::silence_symbols`] の対象)。
+///
+/// 対象は 絵文字 と、 「かな / 漢字 / 英数 / 句読点 / 空白 のいずれでもない」 文字
+/// (= ギリシャ文字 ω、 中黒 `・`、 罫線、 各種記号)。 句読点は pause 情報なので残す。
+#[must_use]
+pub fn is_decorative_symbol(c: char) -> bool {
+    if crate::char_class::is_emoji_char(c) {
+        return true;
+    }
+    if c.is_whitespace() || matches!(c, '。' | '、' | '！' | '？' | '!' | '?' | '.' | ',') {
+        return false;
+    }
+    // かな / 漢字 / 英数 (全角含む) は読み上げ対象。
+    // `is_alphanumeric` だと ω や Я など 「顔文字パーツとして使われる他言語文字」 まで
+    // 拾ってしまうので、 日本語 + ASCII/全角英数 に限定する。
+    if crate::char_class::is_kanji_char(c)
+        || crate::char_class::is_hiragana_char(c)
+        || crate::char_class::is_katakana_loose_char(c)
+        || c.is_ascii_alphanumeric()
+        || matches!(c, 'Ａ'..='Ｚ' | 'ａ'..='ｚ' | '０'..='９')
+    {
+        return false;
+    }
+    // 繰り返し記号など 読みの一部になりうるものは残す
+    !matches!(c, 'ヽ' | 'ヾ' | 'ゝ' | 'ゞ' | '々' | '〆')
 }
 
 /// TTS 向けテキスト正規化
@@ -271,6 +306,7 @@ mod tests {
             short_pause: "<s>".to_string(),
             long_pause: "<l>".to_string(),
             keep_period: true,
+            silence_symbols: false,
         };
         let result = normalize_for_tts("こんにちは。さよなら、また。", &opts);
         // <l> と <s> が挿入される (末尾の。後ろは MULTI_SPACE2 + trim で消える可能性がある)

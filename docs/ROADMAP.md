@@ -141,8 +141,15 @@ SemVer で互換を守る (0.2.x patch は additive only)。 Rust toolchain は 
 > UniDic aType は runtime 統合ではなく **offline bracket 生成 tool**
 > (dict repo `tools/gen_accent_brackets.py`、 3,122 件適用済) に確定。
 > 下記 「lib 改善 sweep」 のうち人名判定は NameBoundaryPass (ADR-0005) +
-> accent 推定の人名判定で消化済、 残り (ひらがな雑 match sweep / 顔文字 TTS silent /
-> space normalize 正式化) は 0.2.x 以降の随時 sweep。
+> accent 推定の人名判定で消化済。
+>
+> **追記 (2026-08-11): lib 改善 sweep は 4 項目すべて消化済**。
+> ひらがな雑 match sweep = dict 側で完了 (`next_char_type = "ひらがな"` の実使用は 0 件、
+> overrides.toml に 「使わない」 方針コメントのみ残存)、
+> space normalize = 旧 `preprocess_input` hack を Lindera gap-passthrough 導入時に撤去済
+> (半角 space 保持を test で固定)、
+> 顔文字 TTS silent = `TtsOptions::silence_symbols` (CLI `--silence-symbols` /
+> HTTP `silence_symbols`) として実装。
 
 ##### 主要 機能追加 (= intonation)
 

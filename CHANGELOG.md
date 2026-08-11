@@ -32,8 +32,16 @@
   へ落とす所までを lib が持ち、 engine 固有の綴り方だけを adapter crate が持つ形にした
   (voicevox / aquestalk 2 crate で重複していた約 200 行の変換コアを解消)。
 
+- **顔文字 / 絵文字の TTS silent 化** (ROADMAP Phase 8 残件): `TtsOptions::silence_symbols`
+  (CLI `--silence-symbols` / HTTP `silence_symbols`)。 `true` で 絵文字 と
+  「かな / 漢字 / 英数 / 句読点 のいずれでもない装飾文字」 (ω / 中黒 / 括弧 等) を
+  TTS 出力から落とす。 `(´・ω・\`)` が 「なかぐろ おめが」 と読まれる問題への対処。
+  default は `false` = 従来どおり。 句読点は pause 情報なので常に残す。
+
 ### Changed
 
+- **`TtsOptions` に field 追加** (`silence_symbols`): struct literal で全 field を
+  書いていた場合は `..TtsOptions::default()` を足す必要がある (0.x の minor breaking)。
 - **`ja-furigana-voicevox`**: 変換コアを `furigana::accent_symbols` へ移行 (出力互換)。
   副次的に、 文中の `？` が発話全体を疑問文にしていた挙動と、 中黒 「・」 で
   pause が入る挙動が aquestalk 側と同じ扱いに揃った。

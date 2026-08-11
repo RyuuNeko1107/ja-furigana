@@ -213,7 +213,15 @@ impl Furigana {
     pub fn to_tts(&self, text: &str, opts: &TtsOptions) -> String {
         // hiragana 自体の postprocess はここでは飛ばす (二重適用回避)。
         // 必要なら hiragana 用 postprocess を tts mode で再度書く想定。
-        let hira = tokens_to_hiragana(&self.tokenize(text));
+        let mut tokens = self.tokenize(text);
+        if opts.silence_symbols {
+            // 絵文字 / 顔文字パーツ (= 全部が装飾記号の token) を落とす。
+            // 読みではなく surface で判定する (`・` は既に 「なかぐろ」 になっている)。
+            tokens.retain(|t| {
+                t.surface.is_empty() || !t.surface.chars().all(tts::is_decorative_symbol)
+            });
+        }
+        let hira = tokens_to_hiragana(&tokens);
         let normalized = tts::normalize_for_tts(&hira, opts);
         self.rules.postprocess.apply(&normalized, "tts")
     }
@@ -844,9 +852,36 @@ mod tests {
             short_pause: "<s>".to_string(),
             long_pause: "<l>".to_string(),
             keep_period: true,
+            silence_symbols: false,
         };
         let result = f.to_tts("こんにちは。さよなら。", &opts);
         assert!(result.contains("こんにちは。<l>"), "result: {result}");
+    }
+
+    #[test]
+    fn to_tts_silences_emoji_and_kaomoji_parts() {
+        let f = Furigana::minimal().unwrap();
+        let opts = TtsOptions {
+            silence_symbols: true,
+            ..TtsOptions::default()
+        };
+        // 絵文字は読み上げない
+        assert!(!f.to_tts("こんにちは🎉", &opts).contains('🎉'));
+        // 顔文字パーツ (中黒 / ω / 括弧) が 「なかぐろ おめが」 化しない
+        let kaomoji = f.to_tts("すごい(´・ω・`)", &opts);
+        assert!(!kaomoji.contains("なかぐろ"), "{kaomoji:?}");
+        assert!(!kaomoji.contains("おめが"), "{kaomoji:?}");
+        assert!(kaomoji.contains("すごい"), "{kaomoji:?}");
+        // 句読点は pause 情報なので残る
+        assert!(f.to_tts("ねこ。いぬ。", &opts).contains('。'));
+    }
+
+    #[test]
+    fn to_tts_keeps_symbols_by_default() {
+        // default は従来どおり (= 記号も読む)
+        let f = Furigana::minimal().unwrap();
+        let opts = TtsOptions::default();
+        assert!(f.to_tts("こんにちは🎉", &opts).contains('🎉'));
     }
 
     #[test]

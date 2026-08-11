@@ -64,6 +64,9 @@ pub(super) struct FuriganaParams {
     pub(super) long_pause: String,
     #[serde(default = "default_true")]
     pub(super) keep_period: bool,
+    /// `mode=tts`: 絵文字 / 顔文字パーツを読み上げから外す (default: false)
+    #[serde(default)]
+    pub(super) silence_symbols: bool,
     #[serde(default)]
     pub(super) segmented: bool,
     #[serde(default = "default_max_seg")]

@@ -339,6 +339,7 @@ fn process(
                 short_pause: params.short_pause.clone(),
                 long_pause: params.long_pause.clone(),
                 keep_period: params.keep_period,
+                silence_symbols: params.silence_symbols,
             };
             let hira = furigana::tokens_to_hiragana(&tokens);
             furigana::tts::normalize_for_tts(&hira, &opts)
@@ -561,6 +562,7 @@ mod tests {
             short_pause: default_short_pause(),
             long_pause: default_long_pause(),
             keep_period: true,
+            silence_symbols: false,
             segmented: false,
             max_segment_len: default_max_seg(),
             devoice: true,

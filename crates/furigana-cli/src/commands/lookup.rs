@@ -46,6 +46,10 @@ pub struct Args {
     #[arg(long)]
     drop_period: bool,
 
+    /// TTS: 絵文字 / 顔文字パーツを読み上げから外す
+    #[arg(long)]
+    silence_symbols: bool,
+
     /// aquestalk: 無声化記号 `_` の自動付与を無効にする
     #[arg(long)]
     no_devoice: bool,
@@ -93,6 +97,7 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
                 short_pause: args.short_pause,
                 long_pause: args.long_pause,
                 keep_period: !args.drop_period,
+                silence_symbols: args.silence_symbols,
             };
             f.to_tts(&args.text, &opts)
         }
