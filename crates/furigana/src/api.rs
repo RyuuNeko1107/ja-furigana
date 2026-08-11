@@ -879,16 +879,17 @@ mod tests {
             silence_symbols: true,
             ..TtsOptions::default()
         };
-        for (input, dropped) in [("50%オフ", '%'), ("25℃です", '℃'), ("3×4", '×')] {
-            let out = f.to_tts(input, &opts);
-            assert!(
-                !out.is_empty() && out.chars().count() > 1,
-                "{input:?} -> {out:?}"
+        // silence_symbols の有無で出力が変わらない = 記号が落ちていない
+        for input in ["50%オフ", "25℃です", "3×4", "1000円+税"] {
+            assert_eq!(
+                f.to_tts(input, &opts),
+                f.to_tts(input, &TtsOptions::default()),
+                "{input:?} は silence_symbols で変わってはいけない"
             );
-            assert!(
-                !tts::is_decorative_symbol(dropped),
-                "{dropped:?} は読みを持つので装飾記号ではない"
-            );
+        }
+        // 逆に 顔文字パーツとしても使う記号は装飾側に残す (whitelist を広げすぎない)
+        for c in ['/', '／', '~', '〜', '<', '>', '&', '@', '#', '・'] {
+            assert!(tts::is_decorative_symbol(c), "{c:?} は装飾記号のまま");
         }
     }
 

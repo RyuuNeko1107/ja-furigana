@@ -317,7 +317,7 @@ fn process(
     }
 
     let tokens_start = Instant::now();
-    let mut tokens = f.tokenize(&text);
+    let tokens = f.tokenize(&text);
     let t_tokenize_ms = tokens_start.elapsed().as_secs_f64() * 1000.0;
 
     let convert_start = Instant::now();
@@ -341,11 +341,11 @@ fn process(
                 keep_period: params.keep_period,
                 silence_symbols: params.silence_symbols,
             };
-            // Furigana::to_tts と同じ token filter を通す (呼ばないと
-            // silence_symbols が HTTP 経路だけ無言で効かなくなる)
-            furigana::tts::filter_tokens_for_tts(&mut tokens, &opts);
-            let hira = furigana::tokens_to_hiragana(&tokens);
-            furigana::tts::normalize_for_tts(&hira, &opts)
+            // **Furigana::to_tts をそのまま呼ぶ**。 自前で tokenize → normalize_for_tts を
+            // 組み直すと、 token filter (silence_symbols) や tts 用 postprocess ルールの
+            // 適用漏れが HTTP 経路だけで起きる (実際に両方やらかした)。
+            // tokens は debug 出力 / segments 用にそのまま残す。
+            f.to_tts(&text, &opts)
         }
     };
     let t_convert_ms = convert_start.elapsed().as_secs_f64() * 1000.0;
@@ -373,7 +373,11 @@ fn process(
     let token_dump = format_tokens(&tokens);
     let n_segments = segments.as_ref().map(|s| s.len()).unwrap_or(0);
     state.metrics.record_request(&mode, t_total_ms);
-    let degraded = detect_degraded(&mode, &text, &result);
+    // silence_symbols で 「絵文字だけのコメント」 が空になるのは仕様どおりで障害ではない。
+    // ここを degraded 扱いすると failed_resolution counter と WARN log が実害と
+    // 区別できないレベルで増える (配信コメントは絵文字のみが日常的に来る)。
+    let silenced_to_empty = params.silence_symbols && result.is_empty();
+    let degraded = !silenced_to_empty && detect_degraded(&mode, &text, &result);
     if degraded {
         state.metrics.record_failed_resolution();
         tracing::warn!(
