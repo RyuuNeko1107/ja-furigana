@@ -9,7 +9,14 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.2.0` (2026-07-06 stable cut、 crates.io 3 crate publish = ja-furigana /
+- **LIVE**: `0.3.1` (2026-08-12、 crates.io 4 crate publish = ja-furigana / ja-furigana-voicevox /
+  **ja-furigana-aquestalk** (新規) / ja-furigana-cli、 tag v0.3.0 + v0.3.1)。
+  0.3.0 = TTS adapter 2 本立て (VOICEVOX kana 記法 + 本家 AquesTalk 音声記号列) + 共有コアの
+  lib 移設 (`furigana::accent_symbols`、 ADR-0009) + `TtsOptions::silence_symbols`
+  (顔文字/絵文字の TTS silent 化)。 破壊的変更は `TtsOptions` の `#[non_exhaustive]` 化のみ
+  (`with_*` setter を追加)。 0.3.1 = AquesTalk 実機検証で判明した分割バグ修正
+  (上限は文字数でなく 「`。` を挟まず並ぶ句が 27 まで」、 `MAX_PHRASES` 追加)。
+- (履歴) `0.2.0` (2026-07-06 stable cut、 crates.io 3 crate publish = ja-furigana /
   ja-furigana-voicevox / ja-furigana-cli)。 0.2.0 = intonation milestone 完了:
   accent core (bracket parse + `AccentResult` + `--mode=accent`) + opt-in accent 推定
   (ADR-0007) + OOV 促音便 join (ADR-0008) + VOICEVOX adapter crate (ADR-0001) +
