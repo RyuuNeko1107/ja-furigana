@@ -368,6 +368,66 @@ fn tilde_emits_kara_when_only_prev_is_digit() {
         .any(|c| c.surface == "〜" && c.reading == "から"));
 }
 
+// ─── `-` = マイナス vs ハイフン (数字 context 限定) ─────────────────────
+
+#[test]
+fn minus_emits_reading_in_numeric_context() {
+    // 「3-1」 のように数字に挟まれていれば算術記号 → マイナス。
+    let p = provider();
+    let input = "3-1";
+    let pos = "3".len();
+    let cands = p.candidates_at(&ctx(input), pos);
+    let c = find(&cands, "-").expect("minus candidate in numeric context");
+    assert_eq!(c.reading, "マイナス");
+}
+
+#[test]
+fn minus_emits_reading_when_only_next_is_digit() {
+    // 「-3」 (負数 / 文頭) も数字 context。
+    let p = provider();
+    let cands = p.candidates_at(&ctx("-3"), 0);
+    assert!(cands
+        .iter()
+        .any(|c| c.surface == "-" && c.reading == "マイナス"));
+}
+
+#[test]
+fn hyphen_between_letters_is_silent() {
+    // 「Wi-Fi」 の `-` は語内ハイフン。 マイナスと読むと誤読 (実運用の誤読報告より)。
+    let p = provider();
+    let input = "Wi-Fi";
+    let pos = "Wi".len();
+    let cands = p.candidates_at(&ctx(input), pos);
+    let c = find(&cands, "-").expect("hyphen candidate between letters");
+    assert_eq!(c.reading, "", "英字間の - は読み上げない (空 reading)");
+}
+
+#[test]
+fn hyphen_in_kana_context_is_silent() {
+    // 「あ-い」 「終わり-」 のような区切り用途も読まない。
+    let p = provider();
+    let cands = p.candidates_at(&ctx("あ-い"), "あ".len());
+    let c = find(&cands, "-").expect("hyphen candidate in kana context");
+    assert_eq!(c.reading, "");
+
+    let cands = p.candidates_at(&ctx("終わり-"), "終わり".len());
+    let c = find(&cands, "-").expect("hyphen candidate at end");
+    assert_eq!(c.reading, "");
+}
+
+#[test]
+fn fullwidth_minus_follows_same_context_rule() {
+    let p = provider();
+    let cands = p.candidates_at(&ctx("３－１"), "３".len());
+    assert!(cands
+        .iter()
+        .any(|c| c.surface == "－" && c.reading == "マイナス"));
+    let cands = p.candidates_at(&ctx("Ａ－Ｂ"), "Ａ".len());
+    assert!(cands
+        .iter()
+        .any(|c| c.surface == "－" && c.reading.is_empty()));
+}
+
 // ─── 素の数字 ────────────────────────────────────────────────────────────
 
 #[test]

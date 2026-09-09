@@ -353,6 +353,11 @@ function isFixCandidate(body) {
   return /[㐀-䶿一-鿿豈-﫿]|[A-Za-z]{2,}/.test(body)
 }
 
+/// 英字語 (2 文字以上、 全角含む) を含むか。 全体置換フォールバックの抑止判定に使う。
+function hasLatinWord(body) {
+  return /[A-Za-zＡ-Ｚａ-ｚ]{2,}/.test(body)
+}
+
 async function processQueue() {
   if (playing) return
   playing = true
@@ -373,6 +378,14 @@ async function processQueue() {
             if (mixed && mixed.replaced > 0) {
               log(`  ▶ 部分修正 (${mixed.replaced} 語): ${mixed.text}`)
               speakText = mixed.text + cl.punct
+            } else if (hasLatinWord(cl.body)) {
+              // 英字語は ja-furigana 側が passthrough (reading = 英字のまま) になりうる。
+              // その場合 phoneme 比較から英字部分が消えて必ず不一致になるが、 それは
+              // 誤読ではなく比較不能なだけ。 全体置換すると英字が脱落 / 記号読みが混入
+              // するので (例: 「ポケットWi-Fi」 → 「ポケットマイナス」)、 漢字 token の
+              // 部分修正が無ければ素通しでエンジンの英語読みに任せる。
+              log(`  ▶ 素 (英字含み、 全体置換せず): ${cl.body}`)
+              speakText = cl.body + cl.punct
             } else {
               log(`  ▶ 読み修正 (全体): ${reading}`)
               speakText = reading + cl.punct

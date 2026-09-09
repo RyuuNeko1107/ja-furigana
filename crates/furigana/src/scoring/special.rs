@@ -207,9 +207,17 @@ pub fn find_alphabet_ranges(input: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut start: Option<usize> = None;
     let mut end: usize = 0;
-    for (idx, c) in input.char_indices() {
+    let chars: Vec<(usize, char)> = input.char_indices().collect();
+    for (i, &(idx, c)) in chars.iter().enumerate() {
         let char_end = idx + c.len_utf8();
-        if is_alphabet_char(c) {
+        // 英字語内の連結記号 (Wi-Fi / Blu-ray / don't) は語の一部として range に含める。
+        // 前後が **英字 (数字・空白を除く)** の時だけ。 「3-1」 のような数値式や
+        // 「A - B」 のような空白挟みは対象外 (= 従来通り記号 provider に流れる)。
+        let joins_word = is_alphabet_connector(c)
+            && i > 0
+            && is_alphabet_letter(chars[i - 1].1)
+            && chars.get(i + 1).is_some_and(|&(_, n)| is_alphabet_letter(n));
+        if is_alphabet_char(c) || joins_word {
             if start.is_none() {
                 start = Some(idx);
             }
@@ -222,6 +230,27 @@ pub fn find_alphabet_ranges(input: &str) -> Vec<Range<usize>> {
         ranges.push(s..end);
     }
     ranges
+}
+
+/// 英字語の内部連結記号 (ハイフン類 / アポストロフィ類)。
+fn is_alphabet_connector(c: char) -> bool {
+    matches!(
+        c,
+        '-' | '\u{2010}' | '\u{2011}' | '\u{2212}' | '\u{FF0D}' | '\'' | '\u{2019}'
+    )
+}
+
+/// 英字 (ASCII / 全角 A-Z a-z)。 数字・空白は含まない。
+fn is_alphabet_letter(c: char) -> bool {
+    c.is_ascii_alphabetic() || matches!(c, '\u{FF21}'..='\u{FF3A}' | '\u{FF41}'..='\u{FF5A}')
+}
+
+/// 連結記号を除いた lookup key (= `wi-fi` → `wifi`)。 記号を含まなければ `None`。
+fn strip_alphabet_connectors(normalized: &str) -> Option<String> {
+    if !normalized.chars().any(is_alphabet_connector) {
+        return None;
+    }
+    Some(normalized.chars().filter(|&c| !is_alphabet_connector(c)).collect())
 }
 
 /// 英字 surface を 「全角→半角 + case-fold」 で正規化。
@@ -315,7 +344,11 @@ impl CandidateProvider for AlphabetPassthroughProvider {
             let length = u8::try_from(char_count).unwrap_or(u8::MAX);
 
             let normalized = normalize_alphabet(surface);
-            let (reading, band) = match self.lookup.get(&normalized) {
+            // 完全一致 → 連結記号除去 (Wi-Fi → wifi) の順で lookup。
+            let hit = self.lookup.get(&normalized).or_else(|| {
+                strip_alphabet_connectors(&normalized).and_then(|k| self.lookup.get(&k))
+            });
+            let (reading, band) = match hit {
                 Some(r) => (r.clone(), BAND_DICT_EXACT),
                 None => (surface.to_string(), BAND_KANJI), // passthrough miss は fallback band
             };
@@ -546,6 +579,71 @@ mod tests {
     fn find_alphabet_ranges_empty_for_no_alphabet() {
         let ranges = find_alphabet_ranges("漢字とひらがな");
         assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn find_alphabet_ranges_joins_hyphen_between_letters() {
+        // Wi-Fi / Blu-ray / e-mail は 1 語 (連結記号を含めて 1 range)
+        let ranges = find_alphabet_ranges("ポケットWi-Fiつけよう");
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&"ポケットWi-Fiつけよう"[ranges[0].clone()], "Wi-Fi");
+        let ranges = find_alphabet_ranges("Blu-ray");
+        assert_eq!(ranges, vec![0..7]);
+        let ranges = find_alphabet_ranges("don't");
+        assert_eq!(ranges, vec![0..5]);
+    }
+
+    #[test]
+    fn find_alphabet_ranges_does_not_join_hyphen_next_to_digits_or_spaces() {
+        // 「3-1」 は数値式 (数字提供者に任せる)、 「A - B」 は空白挟みで語ではない
+        let ranges = find_alphabet_ranges("3-1");
+        assert_eq!(ranges, vec![0..1, 2..3]);
+        let ranges = find_alphabet_ranges("A - B");
+        assert_eq!(ranges, vec![0..2, 3..5]);
+        // 末尾 / 先頭のハイフンは語に含めない
+        let ranges = find_alphabet_ranges("abc-");
+        assert_eq!(ranges, vec![0..3]);
+        let ranges = find_alphabet_ranges("-abc");
+        assert_eq!(ranges, vec![1..4]);
+        // 数字と英字の間 (USB-3) も連結しない = 従来挙動
+        let ranges = find_alphabet_ranges("USB-3");
+        assert_eq!(ranges, vec![0..3, 4..5]);
+    }
+
+    #[test]
+    fn alphabet_passthrough_looks_up_hyphenated_word_as_one_token() {
+        let input = "ポケットWi-Fiつけよう";
+        let mut lookup = HashMap::new();
+        lookup.insert("wi-fi".to_string(), "ワイファイ".to_string());
+        let provider = AlphabetPassthroughProvider::new(input, Arc::new(lookup));
+        let pos = "ポケット".len();
+        let candidates = provider.candidates_at(&ctx(input), pos);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].surface, "Wi-Fi");
+        assert_eq!(candidates[0].reading, "ワイファイ");
+        assert_eq!(candidates[0].score.band, BAND_DICT_EXACT);
+    }
+
+    #[test]
+    fn alphabet_passthrough_falls_back_to_connector_stripped_key() {
+        // dict に "wifi" しか無くても "Wi-Fi" が hit する
+        let input = "Wi-Fi";
+        let mut lookup = HashMap::new();
+        lookup.insert("wifi".to_string(), "ワイファイ".to_string());
+        let provider = AlphabetPassthroughProvider::new(input, Arc::new(lookup));
+        let candidates = provider.candidates_at(&ctx(input), 0);
+        assert_eq!(candidates[0].reading, "ワイファイ");
+        assert_eq!(candidates[0].score.band, BAND_DICT_EXACT);
+    }
+
+    #[test]
+    fn alphabet_passthrough_unknown_hyphenated_word_passes_through_whole() {
+        let input = "Blu-ray";
+        let provider = AlphabetPassthroughProvider::passthrough_only(input);
+        let candidates = provider.candidates_at(&ctx(input), 0);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].surface, "Blu-ray");
+        assert_eq!(candidates[0].reading, "Blu-ray");
     }
 
     #[test]

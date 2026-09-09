@@ -422,7 +422,12 @@ impl NumberCandidateProvider {
             // ではなく長音・強調用途なので 「から」 は誤読。 空 reading で surface のみ
             // 消費し、 読み上げない (= 「がんばれ〜」 → 「がんばれ」)。
             let is_range_marker = matches!(ch, '〜' | '~' | '～');
-            let final_read = if is_range_marker && !range_marker_in_numeric_context(input, pos, ch)
+            // `-` も同様に **マイナスとハイフンの dual use**。 「-3」 「3-1」 のような数字
+            // context のみ 「マイナス」、 それ以外 (英字語の Wi-Fi / 区切りの 「あ-い」 /
+            // 文末の 「終わり-」) はハイフンなので読まない。
+            let is_minus = matches!(ch, '-' | '\u{FF0D}' | '\u{2212}');
+            let final_read = if (is_range_marker || is_minus)
+                && !range_marker_in_numeric_context(input, pos, ch)
             {
                 String::new()
             } else {
