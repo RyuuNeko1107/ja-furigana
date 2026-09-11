@@ -172,6 +172,11 @@ impl NumberCandidateProvider {
     }
 }
 
+/// 読み上げない終端記号 (= 記号候補に巻き取ってよい文字)。
+fn is_trailing_punctuation(c: char) -> bool {
+    matches!(c, '。' | '、' | '！' | '？' | '…' | '!' | '?' | ',' | '.')
+}
+
 /// 数値 + scale + 助数詞 (= 「1 万歩」 「3 千個」 等) の trailing counter から suffix
 /// を引く (= last_digit に応じた連濁 / 促音化済の suffix string)。
 ///
@@ -439,7 +444,27 @@ impl NumberCandidateProvider {
             } else {
                 read
             };
-            out.push(self.make(input, pos, ch.len_utf8(), final_read));
+            out.push(self.make(input, pos, ch.len_utf8(), final_read.clone()));
+
+            // 記号の直後に句読点が続く場合、 **記号 + 句読点** を覆う候補も出す。
+            //
+            // Lindera は 「%。」 のような列を 1 つの未知語 token (band 50、 reading = surface)
+            // にまとめることがある。 記号単体の候補 (band 950) + 句読点の edge という path は
+            // edge 数が 2 になるため、 longest-match 優先で **band 50 の passthrough に負け**、
+            // 「50%。」 が 「ごじゅう%。」 と読まれていた (★2026-09-11 文脈不変検査で検出)。
+            // 句読点は読み上げないので reading は記号の読みのまま。
+            let mut consumed = ch.len_utf8();
+            for next in rest[consumed..].chars() {
+                if !is_trailing_punctuation(next) {
+                    break;
+                }
+                consumed += next.len_utf8();
+            }
+            if consumed > ch.len_utf8() {
+                // 句読点は surface のまま読みに残す (TTS の pause 情報を落とさない)。
+                let punct = &rest[ch.len_utf8()..consumed];
+                out.push(self.make(input, pos, consumed, format!("{final_read}{punct}")));
+            }
         }
     }
 

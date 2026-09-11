@@ -4,6 +4,20 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
+## [Unreleased]
+
+### Fixed
+
+- **記号の直後に句読点が来ると記号が読まれなかった** (「50%。」 → 「ごじゅう%。」)。
+  Lindera が 「%。」 を 1 つの未知語 token (band 50) にまとめるため、
+  記号候補 (band 950) + 句読点 edge という 2 edge の path が **longest-match 優先で負けて**いた。
+  記号 + 後続句読点を覆う候補も出すようにして解決 (句読点は surface のまま読みに残す)。
+  実コーパス 704 万行で 987 行が改善 (% / ‰ / ° 系)。
+  併せて 「〜」 「-」 の **読まない扱いが句読点前だけ効いていなかった**のも揃った (32,157 行)。
+- **`push_kana_suffix_edges` を漢字混在 token のかな末尾にも拡張**。 dict entry が
+  token の途中で終わる時の継続 edge が増える (「守り|の」 の の)。 かな tail の先頭は
+  除外する (含めると 「35点目指そう」 が 「35点目 + 指 + そう」 に割れる)。
+
 ## [0.4.2] - 2026-09-12
 
 ### Fixed

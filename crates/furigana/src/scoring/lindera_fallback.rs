@@ -72,10 +72,27 @@ fn is_real_cjk_ideograph(c: char) -> bool {
     )
 }
 
-/// 「読みが surface と同一」 とみなせる かな文字か
-/// (ひらがな / カタカナ / 長音符 / 中黒 / 小書き)。
+/// 「読みが surface と同一」 とみなせる文字か。
+///
+/// - かな (ひらがな / カタカナ / 長音符 / 中黒 / 小書き)
+/// - 句読点・終端記号 (。、！？…): 読み上げないが surface としてはそのまま残る
+///
+/// 数字 / 英字 / 漢字は **含めない** (助数詞 / loanwords / 辞書引きが要るため)。
+/// 句読点・終端記号 (= 読み上げないが surface として残る文字)。
+fn is_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '。' | '、' | '！' | '？' | '…' | '!' | '?' | ',' | '.' | '・'
+    )
+}
+
 fn is_standalone_kana(c: char) -> bool {
-    crate::kana::is_hiragana_char(c) || crate::kana::is_katakana_char(c) || matches!(c, 'ー' | '・')
+    crate::kana::is_hiragana_char(c)
+        || crate::kana::is_katakana_char(c)
+        || matches!(
+            c,
+            'ー' | '・' | '。' | '、' | '！' | '？' | '…' | '!' | '?' | ',' | '.'
+        )
 }
 
 /// Lindera tokenize 結果を edge 配列で保持する fallback provider。
@@ -204,8 +221,18 @@ impl LinderaFallbackProvider {
             // 食って 「さんじゅうごてんめさそう」 になる (★2026-09-11 A/B で検出)。
             // dict entry の継続に要るのは 「entry が途中で終わった次の位置」 なので、
             // tail の 2 文字目以降で足りる (「守り|の」 の の、 「含羞む|で」 の で)。
-            for (offset, _) in surface[tail_start..].char_indices().skip(1) {
+            for (offset, ch) in surface[tail_start..].char_indices() {
+                // tail の先頭は原則 skip (送り仮名を切ると 「35点目指そう」 が
+                // 「35点目 + 指 + そう」 に割れるため)。 ただし **句読点・終端記号**は
+                // 助数詞の材料にならないので先頭でも出す
+                // (「50%。」 で 。 の edge が無く 「%」 が読まれなかった)。
+                if offset == 0 && !is_punctuation(ch) {
+                    continue;
+                }
                 let sub_start = start + tail_start + offset;
+                if sub_start == start {
+                    continue;
+                }
                 edges.push((sub_start, end, input[sub_start..end].to_string(), false));
             }
         }
