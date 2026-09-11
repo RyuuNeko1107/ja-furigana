@@ -184,11 +184,28 @@ impl LinderaFallbackProvider {
             let Some(surface) = input.get(start..end) else {
                 continue;
             };
-            if surface.chars().count() < 2 || !surface.chars().all(is_standalone_kana) {
+            if surface.chars().count() < 2 {
                 continue;
             }
-            for (offset, _) in surface.char_indices().skip(1) {
-                let sub_start = start + offset;
+            // token 末尾の **かな連続部分** を求める (「守りの」 → 「りの」、 「すげぇ」 → 全体)。
+            let Some(tail_start) = surface
+                .char_indices()
+                .rev()
+                .take_while(|(_, c)| is_standalone_kana(*c))
+                .last()
+                .map(|(i, _)| i)
+            else {
+                continue;
+            };
+            // **かな tail の 2 文字目以降** から末尾までを足す。
+            //
+            // 先頭 (= tail_start 自身) を含めないのが要点。 含めると 「35点目指そう」 で
+            // 「35点目 (counter) + 指 + そう」 という path が成立し、 目 を助数詞として
+            // 食って 「さんじゅうごてんめさそう」 になる (★2026-09-11 A/B で検出)。
+            // dict entry の継続に要るのは 「entry が途中で終わった次の位置」 なので、
+            // tail の 2 文字目以降で足りる (「守り|の」 の の、 「含羞む|で」 の で)。
+            for (offset, _) in surface[tail_start..].char_indices().skip(1) {
+                let sub_start = start + tail_start + offset;
                 edges.push((sub_start, end, input[sub_start..end].to_string(), false));
             }
         }
