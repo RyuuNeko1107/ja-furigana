@@ -128,7 +128,11 @@ pub fn tokens_to_ruby(tokens: &[ReadingToken]) -> String {
                     continue;
                 }
                 let hira = kana::kata_to_hira(reading);
-                if hira == t.surface {
+                // 読みが空 (= 読み上げない記号。 「・」 「〜」 等) は ruby を付けない。
+                // 以前は `{・|}` のような **読み側が空の ruby group** を出していて、
+                // 消費側では空の rt が描画される壊れた markup になっていた
+                // (★2026-09-11 実コーパス 704 万行の ruby 出力検査で 202,780 行検出)。
+                if hira.is_empty() || hira == t.surface {
                     push_ruby_escaped(&mut out, &t.surface);
                 } else {
                     out.push('{');
@@ -147,6 +151,22 @@ pub fn tokens_to_ruby(tokens: &[ReadingToken]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 読みが空の token は ruby group を作らない (= `{・|}` を出さない)。
+    #[test]
+    fn empty_reading_emits_no_ruby_group() {
+        let tokens = vec![
+            ReadingToken {
+                surface: "・".to_string(),
+                reading: Some(String::new()),
+            },
+            ReadingToken {
+                surface: "灰桜".to_string(),
+                reading: Some("ハイザクラ".to_string()),
+            },
+        ];
+        assert_eq!(tokens_to_ruby(&tokens), "・{灰桜|はいざくら}");
+    }
 
     #[test]
     fn hiragana_basic() {

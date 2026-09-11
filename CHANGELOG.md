@@ -8,6 +8,12 @@
 
 ### Fixed
 
+- **ruby mode が 「読み側が空の ruby group」 を出していた** (`{・|}` / `{〜|}`)。
+  読み上げない記号 (・ / 〜 / ~) は reading が空文字列になるが、 surface と一致しないため
+  ruby group を作っていた。 消費側では空の rt が描画される壊れた markup になる。
+  実コーパス 704 万行の ruby 出力検査で **202,780 行 (2.9%)** が該当。
+  読みが空なら ruby を付けず surface のまま出すよう修正。
+
 - **Lindera が落とす 1 文字が入るだけで入力全体の読みが空になっていた**
   (実コーパス 704 万行の走査で検出: 「応援曲個人設定できるんÐな」 → 空文字列)。
   `LinderaFallbackProvider` は Lindera が token から落とした区間を passthrough edge で
