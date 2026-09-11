@@ -333,7 +333,13 @@ impl NumberCandidateProvider {
                     // counter rules から suffix を append (= 「1 万歩」 → イチマン+ポ)。
                     reading.push_str(&suffix);
                 } else {
-                    reading.push_str(u);
+                    // 読みを解決できない trailing unit は **候補ごと捨てる**。
+                    // 以前は surface をそのまま reading に混ぜていたため、
+                    // 「100万目指せる」 が 「ヒャクマン目サセル」 のように
+                    // **漢字が読みに残った** (★2026-09-11 実コーパス 704 万行で検出、
+                    // 「N万目標 / N万目前 / N万目指す」 が全滅していた)。
+                    // 候補を出さなければ 「100万」 + 「目指せる」 の path が選ばれる。
+                    return;
                 }
             }
             out.push(self.make(input, pos, m_end, reading));

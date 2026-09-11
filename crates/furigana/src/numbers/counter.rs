@@ -102,6 +102,16 @@ pub fn euphonic_counter_read(
             let base_read = euphonic_counter_read(num_kata, base_counter, raw_num, counters, days);
             return format!("{base_read}メ");
         }
+        // base が空 = 「目」 単体。 これは scale 経由 (= 「100万目」 の 「100万」 を
+        // scale で読んだ後に counter = 「目」 だけが残る) で起きる。 recursive rule の
+        // suffix (= メ) を直接使う。 これが無いと step 5 の fallback に落ちて
+        // **「目」 を surface のまま読みに混ぜてしまう** (「100万目指せる」 →
+        // 「ヒャクマン目サセル」、 ★2026-09-11 実コーパス 704 万行で検出)。
+        if let Some(rule) = counters.counter.get("目") {
+            if let Some(suffix) = &rule.suffix {
+                return format!("{num_kata}{suffix}");
+            }
+        }
     }
 
     // ─── 5. fallback ───────────────────────────────────────────────────────
