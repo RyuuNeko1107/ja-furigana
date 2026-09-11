@@ -20,11 +20,18 @@ jobs:
   # PR の差分 mutation と違い、全コードに変異を注入して「テストが守れていない箇所」を
   # 棚卸しする。surviving mutant は即バグではない (= 改善 backlog) ため job 自体は
   # 落とさず (continue-on-error)、レポートを artifact 化してスコア低下を追う。
+  # 2026-09-11: 単一 job だと 330 分の timeout に毎晩到達して cancel され、
+  # レポートが 1 度も残らなくなっていた (= トレンド計測が死んでいた)。
+  # cargo-mutants の --shard で 4 分割し、 各 shard を並列 job にする。
   full-mutation:
-    name: Full mutation (trend)
+    name: Full mutation (trend) shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 330
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v6
 
@@ -45,13 +52,14 @@ jobs:
         run: |
           cargo mutants --no-shuffle -j 2 --timeout 120 \
             --package ja-furigana \
+            --shard ${{ matrix.shard }}/4 \
             || true   # surviving mutant は backlog 扱い。レポートを残して継続。
 
       - name: Upload full mutation report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutants-full
+          name: mutants-full-shard${{ matrix.shard }}
           path: mutants.out/
           if-no-files-found: ignore
 
