@@ -379,6 +379,32 @@ pub fn split_for_aquestalk(symbols: &str, max_len: usize) -> Vec<String> {
         units.push((cur, None));
     }
 
+    // 1 句だけで max_len を超える場合 (= 句境界が無い長大入力。 「あ」 ×3000 等) は、
+    // 句単位では絶対に収まらない。 その句を **文字数でハード分割**しておく
+    // (★2026-09-11 構造検査で検出: 分割後も 3,002 文字の chunk が残り、
+    // 実機なら ERROR 120 になる)。
+    let units: Vec<(String, Option<char>)> = if max_len > 0 {
+        units
+            .into_iter()
+            .flat_map(|(unit, sep)| {
+                if unit.chars().count() <= max_len {
+                    return vec![(unit, sep)];
+                }
+                let chars: Vec<char> = unit.chars().collect();
+                let mut parts: Vec<(String, Option<char>)> = chars
+                    .chunks(max_len)
+                    .map(|c| (c.iter().collect::<String>(), None))
+                    .collect();
+                if let Some(last) = parts.last_mut() {
+                    last.1 = sep;
+                }
+                parts
+            })
+            .collect()
+    } else {
+        units
+    };
+
     let mut out: Vec<String> = Vec::new();
     let mut chunk = String::new();
     // `。` を挟まずに並んだ句の数 (= エンジンの内部バッファを食う単位)。
@@ -419,6 +445,26 @@ pub fn split_for_aquestalk(symbols: &str, max_len: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// 句境界が無い長大入力でも、 各 chunk が max_len 以内に収まること。
+    ///
+    /// 「あ」 ×3000 のような入力は 1 句のままなので、 句単位の分割では切れない。
+    /// ハード分割の fallback が無いと 3,002 文字の chunk が残り、 実機で ERROR 120 になる。
+    #[test]
+    fn split_hard_splits_single_long_phrase() {
+        let symbols = "ア".repeat(3000);
+        let parts = split_for_aquestalk(&symbols, MAX_LEN);
+        assert!(parts.len() > 1, "分割されていない: {}", parts.len());
+        for p in &parts {
+            assert!(
+                p.chars().count() <= MAX_LEN,
+                "chunk が max_len 超過: {} 文字",
+                p.chars().count()
+            );
+        }
+        // 内容が落ちていないこと (区切り記号は入らない)
+        assert_eq!(parts.concat().chars().count(), 3000);
+    }
     use super::*;
     use furigana::Furigana;
 
