@@ -232,7 +232,23 @@ pub fn find_alphabet_ranges(input: &str) -> Vec<Range<usize>> {
     if let Some(s) = start {
         ranges.push(s..end);
     }
+    // range の先頭 / 末尾の空白を落とす。
+    //
+    // `is_alphabet_char` は 「Hello World」 を 1 range に保つため空白を含むが、
+    // そのままだと 「優勝 5回」 の 「 5」 が range になり、 **数字を passthrough が覆って
+    // 助数詞が効かなくなる** (「 5かい」。 ★2026-09-11 文脈不変検査で検出)。
     ranges
+        .into_iter()
+        .filter_map(|r| {
+            let trimmed = input[r.clone()].trim_matches(|c: char| c.is_whitespace());
+            if trimmed.is_empty() {
+                return None;
+            }
+            let offset = input[r.clone()].find(trimmed).unwrap_or(0);
+            let start = r.start + offset;
+            Some(start..start + trimmed.len())
+        })
+        .collect()
 }
 
 /// 英字語の内部連結記号 (ハイフン類 / アポストロフィ類)。
@@ -648,8 +664,11 @@ mod tests {
         // 「3-1」 は数値式 (数字提供者に任せる)、 「A - B」 は空白挟みで語ではない
         let ranges = find_alphabet_ranges("3-1");
         assert_eq!(ranges, vec![0..1, 2..3]);
+        // ★2026-09-11: range の前後の空白は落とす (= 「A」 と 「B」)。
+        // 空白を含めたままだと 「優勝 5回」 の 「 5」 が range になり、
+        // 数字を passthrough が覆って助数詞が効かなくなる。
         let ranges = find_alphabet_ranges("A - B");
-        assert_eq!(ranges, vec![0..2, 3..5]);
+        assert_eq!(ranges, vec![0..1, 4..5]);
         // 末尾 / 先頭のハイフンは語に含めない
         let ranges = find_alphabet_ranges("abc-");
         assert_eq!(ranges, vec![0..3]);
