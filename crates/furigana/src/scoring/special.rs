@@ -310,6 +310,17 @@ pub struct AlphabetPassthroughProvider {
 impl AlphabetPassthroughProvider {
     /// 入力 + lookup map で provider 構築。
     #[must_use]
+    /// 単位情報なしで構築する (test / 単体利用)。 本番 pipeline は
+    /// [`Self::with_units`] を使うこと (= 「3km」 span の重複を避けるため)。
+    #[cfg(test)]
+    pub fn new(input: &str, lookup: Arc<HashMap<String, String>>) -> Self {
+        Self {
+            ranges: find_alphabet_ranges(input),
+            lookup,
+            unit_symbols: Arc::new(HashSet::new()),
+        }
+    }
+
     /// SI 単位記号の集合を渡して構築する。
     ///
     /// 「3km」 のような **数字 + 単位** の span は、 数値側 (band 950) が読むべきで、
