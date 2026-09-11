@@ -821,12 +821,9 @@ mod tests {
         assert!(cond.matches_context(
             &MatchContext::empty().with_full_input("リーチしたけど清一色が見えてる")
         ));
-        assert!(
-            cond.matches_context(&MatchContext::empty().with_full_input("ツモって清一色確定"))
-        );
-        assert!(!cond.matches_context(
-            &MatchContext::empty().with_full_input("この職場は清一色の男性だ")
-        ));
+        assert!(cond.matches_context(&MatchContext::empty().with_full_input("ツモって清一色確定")));
+        assert!(!cond
+            .matches_context(&MatchContext::empty().with_full_input("この職場は清一色の男性だ")));
     }
 
     #[test]

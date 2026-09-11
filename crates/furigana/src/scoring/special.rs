@@ -216,7 +216,9 @@ pub fn find_alphabet_ranges(input: &str) -> Vec<Range<usize>> {
         let joins_word = is_alphabet_connector(c)
             && i > 0
             && is_alphabet_letter(chars[i - 1].1)
-            && chars.get(i + 1).is_some_and(|&(_, n)| is_alphabet_letter(n));
+            && chars
+                .get(i + 1)
+                .is_some_and(|&(_, n)| is_alphabet_letter(n));
         if is_alphabet_char(c) || joins_word {
             if start.is_none() {
                 start = Some(idx);
@@ -250,7 +252,12 @@ fn strip_alphabet_connectors(normalized: &str) -> Option<String> {
     if !normalized.chars().any(is_alphabet_connector) {
         return None;
     }
-    Some(normalized.chars().filter(|&c| !is_alphabet_connector(c)).collect())
+    Some(
+        normalized
+            .chars()
+            .filter(|&c| !is_alphabet_connector(c))
+            .collect(),
+    )
 }
 
 /// 英字 surface を 「全角→半角 + case-fold」 で正規化。
