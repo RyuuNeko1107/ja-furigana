@@ -114,6 +114,15 @@ fn push_ruby_escaped(out: &mut String, s: &str) {
 /// - 読みなし → surface をそのまま
 ///
 /// 入力由来テキスト (素通し surface) に含まれる ruby 区切り記号 `{` `}` `|` および
+/// 表層が英字 (ASCII letters + 語内連結記号) だけで出来ているか。
+fn surface_is_latin(surface: &str) -> bool {
+    !surface.is_empty()
+        && surface
+            .chars()
+            .all(|c| c.is_ascii_alphabetic() || matches!(c, '-' | '.' | ' ' | '\u{2019}' | '\''))
+        && surface.chars().any(|c| c.is_ascii_alphabetic())
+}
+
 /// escape 文字 `\` は backslash escape される ([`push_ruby_escaped`])。 これらを
 /// 含まない通常入力では出力は従来と完全に同一。
 #[must_use]
@@ -127,7 +136,15 @@ pub fn tokens_to_ruby(tokens: &[ReadingToken]) -> String {
                     push_ruby_escaped(&mut out, &t.surface);
                     continue;
                 }
-                let hira = kana::kata_to_hira(reading);
+                // 表層が **英字** (= loanwords 由来) の時はカタカナのままルビを振る。
+                // 漢字のルビは ひらがな が慣習だが、 「PayPay」 に 「ぺいぺい」 と振るのは
+                // 不自然で、 hiragana mode の出力 (ペイペイ) とも食い違っていた
+                // (★2026-09-11 mode 間整合性検査で 277,355 行中の一部として検出)。
+                let hira = if surface_is_latin(&t.surface) {
+                    reading.clone()
+                } else {
+                    kana::kata_to_hira(reading)
+                };
                 // 読みが空 (= 読み上げない記号。 「・」 「〜」 等) は ruby を付けない。
                 // 以前は `{・|}` のような **読み側が空の ruby group** を出していて、
                 // 消費側では空の rt が描画される壊れた markup になっていた
@@ -153,6 +170,26 @@ mod tests {
     use super::*;
 
     /// 読みが空の token は ruby group を作らない (= `{・|}` を出さない)。
+    /// 英字表層のルビは **カタカナのまま** (「PayPay」 → ぺいぺい ではなく ペイペイ)。
+    #[test]
+    fn latin_surface_keeps_katakana_ruby() {
+        let tokens = vec![ReadingToken {
+            surface: "PayPay".to_string(),
+            reading: Some("ペイペイ".to_string()),
+        }];
+        assert_eq!(tokens_to_ruby(&tokens), "{PayPay|ペイペイ}");
+    }
+
+    /// 漢字表層のルビは従来どおり ひらがな。
+    #[test]
+    fn kanji_surface_keeps_hiragana_ruby() {
+        let tokens = vec![ReadingToken {
+            surface: "灰桜".to_string(),
+            reading: Some("ハイザクラ".to_string()),
+        }];
+        assert_eq!(tokens_to_ruby(&tokens), "{灰桜|はいざくら}");
+    }
+
     #[test]
     fn empty_reading_emits_no_ruby_group() {
         let tokens = vec![
