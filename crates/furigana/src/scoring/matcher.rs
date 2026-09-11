@@ -8,6 +8,12 @@
 //! - 複数 `MatchBlock` は TOML 順で **第一 hit** 採用 (caller 側で iterate)
 //! - condition が 1 つも指定されていない (= 全 None / 空 array) 場合は無条件 match
 //!
+//! ## 文スコープ condition
+//!
+//! `input_contains_any` だけは隣接 token でなく **入力文全体** を見る (位置非依存の
+//! 部分一致)。 「麻雀の話をしている文中の 清一色」 のように、 隣接語では届かない
+//! 話題文脈で読みを切り替えるための条件 (ADR-0010)。 誤爆しやすいので一般語には使わない。
+//!
 //! ## char_type 判定
 //!
 //! `prev_char_type` / `next_char_type` は 「直前 token の最後の文字」 / 「直後 token の最初の文字」
@@ -31,6 +37,8 @@ pub struct MatchContext<'a> {
     pub next_token: Option<&'a str>,
     /// 直後の更に直後 (idx+2) の token surface (= 1 飛ばし参照用、 None で文末扱い)
     pub next2_token: Option<&'a str>,
+    /// 解析中の **入力文全体** (= `input_contains_any` の判定対象、 None で no match)
+    pub full_input: Option<&'a str>,
 }
 
 impl<'a> MatchContext<'a> {
@@ -47,6 +55,7 @@ impl<'a> MatchContext<'a> {
             prev_token: Some(prev),
             next_token: None,
             next2_token: None,
+            full_input: None,
         }
     }
 
@@ -57,6 +66,7 @@ impl<'a> MatchContext<'a> {
             prev_token: None,
             next_token: Some(next),
             next2_token: None,
+            full_input: None,
         }
     }
 
@@ -67,6 +77,7 @@ impl<'a> MatchContext<'a> {
             prev_token: Some(prev),
             next_token: Some(next),
             next2_token: None,
+            full_input: None,
         }
     }
 
@@ -77,7 +88,15 @@ impl<'a> MatchContext<'a> {
             prev_token: prev,
             next_token: next,
             next2_token: next2,
+            full_input: None,
         }
+    }
+
+    /// 入力文全体を付与した context を返す (= `input_contains_any` 判定を有効化)。
+    #[must_use]
+    pub fn with_full_input(mut self, input: &'a str) -> Self {
+        self.full_input = Some(input);
+        self
     }
 }
 
@@ -233,6 +252,19 @@ impl MatchCondition {
         if self.next_digit {
             let ok = ctx.next_token.is_some_and(starts_with_digit);
             if !ok {
+                return None;
+            }
+            hits += HIT_WEIGHT_BROAD;
+        }
+
+        // ─── input_contains_any (= 入力文全体の部分一致、 文スコープ) ───────
+        if !self.input_contains_any.is_empty() {
+            let full = ctx.full_input?; // 文全体が渡っていない → no match
+            if !self
+                .input_contains_any
+                .iter()
+                .any(|s| full.contains(s.as_str()))
+            {
                 return None;
             }
             hits += HIT_WEIGHT_BROAD;
@@ -775,6 +807,63 @@ mod tests {
         assert!(!cond.matches_context(&MatchContext::with_next("一日"))); // 漢数字は false
         assert!(!cond.matches_context(&MatchContext::with_next("ABC")));
         assert!(!cond.matches_context(&MatchContext::empty()));
+    }
+
+    // ─── input_contains_any (文スコープ) ────────────────────────────────────
+
+    #[test]
+    fn input_contains_any_matches_anywhere_in_sentence() {
+        let cond = MatchCondition {
+            input_contains_any: vec!["リーチ".into(), "ツモ".into()],
+            ..Default::default()
+        };
+        // 隣接していなくても同一文中にあれば hit
+        assert!(cond.matches_context(
+            &MatchContext::empty().with_full_input("リーチしたけど清一色が見えてる")
+        ));
+        assert!(
+            cond.matches_context(&MatchContext::empty().with_full_input("ツモって清一色確定"))
+        );
+        assert!(!cond.matches_context(
+            &MatchContext::empty().with_full_input("この職場は清一色の男性だ")
+        ));
+    }
+
+    #[test]
+    fn input_contains_any_without_full_input_is_no_match() {
+        let cond = MatchCondition {
+            input_contains_any: vec!["リーチ".into()],
+            ..Default::default()
+        };
+        // full_input 未指定 (= 旧 caller) は必ず miss、 default reading に落ちる
+        assert!(!cond.matches_context(&MatchContext::empty()));
+        assert!(!cond.matches_context(&MatchContext::with_prev("リーチ")));
+    }
+
+    #[test]
+    fn input_contains_any_combines_with_adjacent_conditions_as_and() {
+        let cond = MatchCondition {
+            next_eq: Some("で".into()),
+            input_contains_any: vec!["麻雀".into()],
+            ..Default::default()
+        };
+        let ctx = MatchContext::with_next("で").with_full_input("麻雀で清一色で上がった");
+        assert!(cond.matches_context(&ctx));
+        // 文スコープ側が miss なら AND で全体 miss
+        let ctx2 = MatchContext::with_next("で").with_full_input("清一色で揃えた制服");
+        assert!(!cond.matches_context(&ctx2));
+    }
+
+    #[test]
+    fn input_contains_any_is_broad_weight() {
+        let cond = MatchCondition {
+            input_contains_any: vec!["麻雀".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            cond.context_hits(&MatchContext::empty().with_full_input("麻雀の話")),
+            Some(HIT_WEIGHT_BROAD)
+        );
     }
 
     // ─── context_hits (= match_hits 重み付き累積、 lex 第 3 軸) ─────────────

@@ -4,6 +4,21 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
+## [Unreleased]
+
+### Added
+
+- **match condition に文スコープの `input_contains_any` を追加** (ADR-0010)。 従来の
+  condition は直前 / 直後 / その次の token しか見えず、 「話題」 による読み分けができなかった
+  (実運用の誤読報告: 麻雀配信の 「リーチしたけど清一色が見えてる」 の 清一色。 一般語としては
+  セイイッショク が正しく、 麻雀では チンイーソー。 判断材料の 「リーチ」 は 5 token 離れている)。
+  新 condition は **解析中の入力文全体** に指定文字列のいずれかが部分一致で含まれるかを見る。
+  literal のみ / 決定論的で、 品詞も確率も使わない点は従来通り。 `MatchContext` に
+  `full_input` が無い場合 (= 手組みした旧 caller) は no match = default reading に落ちる。
+  重みは broad (=1) なので、 同 surface に隣接 condition が書いてあればそちらが勝つ。
+  位置非依存ゆえ誤爆しやすく、 **一般語と衝突する surface (平和 / 中 / 親 等) には使わない**
+  運用ルールを ADR に明記した。
+
 ## [0.3.2] - 2026-09-09
 
 ### Fixed

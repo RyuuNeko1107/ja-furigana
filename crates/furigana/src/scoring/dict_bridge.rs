@@ -43,6 +43,7 @@ impl<'a> DictBridgeProvider<'a> {
             if next.is_empty() { None } else { Some(next) },
             if next2.is_empty() { None } else { Some(next2) },
         )
+        .with_full_input(input)
     }
 
     /// entries (`rich`) を emit。 戻り値 = **1 字 surface (= 先頭 char) を emit したか**

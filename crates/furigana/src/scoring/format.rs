@@ -141,6 +141,7 @@ pub struct MatchBlock {
 /// | literal prefix | — | `next_starts` / `next_starts_any` | `next2_starts_any` |
 /// | 文字種 | `prev_char_type` | `next_char_type` | — |
 /// | 述語 | `prev_month` | `next_digit` | — |
+/// | 文スコープ | `input_contains_any` (= 入力文全体の部分一致、 位置非依存) |||
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct MatchCondition {
     // ─── literal 完全一致 ───
@@ -188,6 +189,18 @@ pub struct MatchCondition {
     /// 直後 token の surface が数字 (半角 / 全角) で始まるか
     #[serde(default)]
     pub next_digit: bool,
+
+    // ─── 文スコープ (sentence-wide) ───
+    /// **入力文全体** のどこかに、 指定文字列のいずれかが部分一致で含まれるか
+    /// (= 隣接 token では届かない話題語による分岐用。 ADR-0010)。
+    ///
+    /// 隣接 condition (`prev_*` / `next_*`) と違い位置を問わないため、 誤爆しやすい。
+    /// 一般語と衝突する surface (= 「平和」 のような日常語) には使わないこと。
+    ///
+    /// 判定対象は解析中の入力文全体 (= caller が [`crate::scoring::matcher::MatchContext`]
+    /// の `full_input` に渡した文字列)。 `full_input` が無い場合は no match。
+    #[serde(default)]
+    pub input_contains_any: Vec<String>,
 }
 
 /// 代替読み候補 (ADR-0004)。同形異音語の曖昧解決用。
