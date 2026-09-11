@@ -4,6 +4,22 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
+## [Unreleased]
+
+### Fixed
+
+- **dict entry が Lindera token の途中で終わると、 その entry が黙って無視されていた**
+  (実コーパス A/B diff で発覚)。 候補 edge は Lindera の token 境界からしか生えないため、
+  entry の終端から始まる edge が 1 本も無いと **entry を含む path を DP 上構築できない**。
+  実例: 「お婆ちゃんすげぇ」 は Lindera が `お / 婆 / ち / ゃんすげぇ` と切るので、
+  entry 「お婆ちゃん」 (band 1000) の直後 (= 「す」) に繋げる edge が無く
+  「おばばちゃんすげぇ」 になっていた (「お婆ちゃんやばい」 はたまたま Lindera が
+  「お婆ちゃん」 で切るため正読で、 **入力次第で辞書が効かない**状態だった)。
+  修正は、 **かなだけで構成された token について 2 文字目以降から token 末尾までの
+  suffix edge を足す** (かなは読み = surface なので機械的に切れる。 漢字を含む token は対象外)。
+  band は据え置き (`Score::lindera`) なので既存 path の `weakest_band` は変わらず、
+  実コーパス 28,284 行の A/B では **2 行が改善、 退行 0**。
+
 ## [0.4.0] - 2026-09-11
 
 ### Added

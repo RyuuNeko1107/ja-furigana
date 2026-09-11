@@ -72,6 +72,12 @@ fn is_real_cjk_ideograph(c: char) -> bool {
     )
 }
 
+/// 「読みが surface と同一」 とみなせる かな文字か
+/// (ひらがな / カタカナ / 長音符 / 中黒 / 小書き)。
+fn is_standalone_kana(c: char) -> bool {
+    crate::kana::is_hiragana_char(c) || crate::kana::is_katakana_char(c) || matches!(c, 'ー' | '・')
+}
+
 /// Lindera tokenize 結果を edge 配列で保持する fallback provider。
 ///
 /// construction 時に 1 度だけ tokenize、 以降 `candidates_at` は O(edge_count)
@@ -133,6 +139,7 @@ impl LinderaFallbackProvider {
         {
             return Self::default();
         }
+        Self::push_kana_suffix_edges(input, &mut edges);
         Self { edges }
     }
 
@@ -141,6 +148,50 @@ impl LinderaFallbackProvider {
     #[must_use]
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    /// かな token の **途中から始まる suffix edge** を補う。
+    ///
+    /// ## なぜ要るか
+    ///
+    /// edge は Lindera の token 境界からしか生えないため、 dict entry が token の
+    /// 途中で終わると **その先に繋げる edge が 1 本も無く、 entry を含む path が
+    /// DP 上そもそも構築できない**。 実例:
+    ///
+    /// ```text
+    /// 「お婆ちゃんすげぇ」 → Lindera: お / 婆 / ち / ゃんすげぇ
+    /// entry 「お婆ちゃん」 (band 1000) は 0..12 を覆うが、 12 (= 「す」) から
+    /// 始まる edge が無いので採択できず 「おばばちゃんすげぇ」 になる。
+    /// ```
+    ///
+    /// 「お婆ちゃんやばい」 が正しく読めるのは、 たまたま Lindera が
+    /// 「お婆ちゃん」 で切ってくれるから。 つまり **辞書を足しても効かない位置**が
+    /// 入力次第で発生する。
+    ///
+    /// ## 何を足すか
+    ///
+    /// かな (ひらがな / カタカナ / 長音符 / 中黒) だけで構成された token について、
+    /// 2 文字目以降の各 char 境界から token 末尾までの edge を足す。 かなは
+    /// 読みが surface と同一なので reading は substring をそのまま使える。
+    /// 漢字を含む token には足さない (読みを機械的に切れないため)。
+    ///
+    /// band は元 token と同じ [`Score::lindera`] なので、 既存 path の
+    /// `weakest_band` は下がらない。 edge 数は増えるが `edge_count` は
+    /// 「少ない方が良い」 軸なので、 必要な時 (= 高 band entry の継続) にだけ選ばれる。
+    fn push_kana_suffix_edges(input: &str, edges: &mut Vec<(usize, usize, String, bool)>) {
+        let base: Vec<(usize, usize)> = edges.iter().map(|(s, e, _, _)| (*s, *e)).collect();
+        for (start, end) in base {
+            let Some(surface) = input.get(start..end) else {
+                continue;
+            };
+            if surface.chars().count() < 2 || !surface.chars().all(is_standalone_kana) {
+                continue;
+            }
+            for (offset, _) in surface.char_indices().skip(1) {
+                let sub_start = start + offset;
+                edges.push((sub_start, end, input[sub_start..end].to_string(), false));
+            }
+        }
     }
 
     /// Lindera が落とした `input[start..end]` 区間を passthrough edge で補う。
@@ -210,6 +261,59 @@ mod tests {
 
     fn analyzer() -> Analyzer {
         Analyzer::new().expect("Analyzer init")
+    }
+
+    /// かな token の途中から始まる edge が生えること。
+    ///
+    /// これが無いと 「dict entry が Lindera token の途中で終わる」 入力で、
+    /// entry を含む path が DP 上構築できず entry が黙って無視される
+    /// (例: 「お婆ちゃんすげぇ」 で 「お婆ちゃん」 entry が使われない)。
+    #[test]
+    fn kana_token_emits_suffix_edges() {
+        let a = analyzer();
+        let input = "お婆ちゃんすげぇ";
+        let p = LinderaFallbackProvider::new(&a, input);
+        // 「お婆ちゃん」 (= 0..12 bytes) の直後、 「す」 の位置から始まる edge があること
+        let pos = "お婆ちゃん".len();
+        let cands = p.candidates_at(&ctx(input), pos);
+        assert!(
+            !cands.is_empty(),
+            "かな token 途中の位置 {pos} から始まる edge が無い (entry の継続先が消える)"
+        );
+        assert!(
+            cands.iter().any(|c| c.surface == "すげぇ"),
+            "残り全体 「すげぇ」 を覆う edge が要る: {:?}",
+            cands.iter().map(|c| c.surface.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    /// suffix edge の reading は surface と同一 (かなはそのまま読む)。
+    #[test]
+    fn kana_suffix_edge_reading_is_identity() {
+        let a = analyzer();
+        let input = "お婆ちゃんすげぇ";
+        let p = LinderaFallbackProvider::new(&a, input);
+        let pos = "お婆ちゃん".len();
+        let c = p
+            .candidates_at(&ctx(input), pos)
+            .into_iter()
+            .find(|c| c.surface == "すげぇ")
+            .expect("suffix edge");
+        assert_eq!(c.reading, "すげぇ");
+    }
+
+    /// 漢字を含む token には suffix edge を足さない (読みを機械的に切れないため)。
+    #[test]
+    fn kanji_token_gets_no_suffix_edges() {
+        let a = analyzer();
+        let input = "図書館";
+        let p = LinderaFallbackProvider::new(&a, input);
+        // 「書」 の位置 (= token 途中) から Lindera 由来 edge は生えない
+        let pos = "図".len();
+        assert!(p
+            .candidates_at(&ctx(input), pos)
+            .iter()
+            .all(|c| c.surface != "書館"));
     }
 
     #[test]
