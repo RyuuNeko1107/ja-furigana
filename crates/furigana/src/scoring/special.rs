@@ -24,6 +24,7 @@ use crate::scoring::candidate::{
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -302,16 +303,42 @@ pub struct AlphabetPassthroughProvider {
     ranges: Vec<Range<usize>>,
     /// 正規化済 surface → reading の lookup map (Arc 共有、 caller が pre-populate)
     lookup: Arc<HashMap<String, String>>,
+    /// SI 単位記号 (小文字化済)。 空なら従来どおり全 span を emit する。
+    unit_symbols: Arc<HashSet<String>>,
 }
 
 impl AlphabetPassthroughProvider {
     /// 入力 + lookup map で provider 構築。
     #[must_use]
-    pub fn new(input: &str, lookup: Arc<HashMap<String, String>>) -> Self {
+    /// SI 単位記号の集合を渡して構築する。
+    ///
+    /// 「3km」 のような **数字 + 単位** の span は、 数値側 (band 950) が読むべきで、
+    /// ここで passthrough 候補 (band 100) を出すと path が同点になり、 文中では
+    /// passthrough が勝って単位が読まれない (★2026-09-11 文脈不変検査で検出:
+    /// 「130km」 は読めるのに 「あ130km」 が読めなかった)。
+    pub fn with_units(
+        input: &str,
+        lookup: Arc<HashMap<String, String>>,
+        unit_symbols: Arc<HashSet<String>>,
+    ) -> Self {
         Self {
             ranges: find_alphabet_ranges(input),
             lookup,
+            unit_symbols,
         }
+    }
+
+    /// span が 「先頭の数字 + 既知の単位記号」 の形か (= 数値側に任せるべきか)。
+    fn is_number_with_unit(&self, surface: &str) -> bool {
+        if self.unit_symbols.is_empty() {
+            return false;
+        }
+        let digits: String = surface.chars().take_while(|c| is_digit_char(*c)).collect();
+        if digits.is_empty() {
+            return false;
+        }
+        let rest = &surface[digits.len()..];
+        !rest.is_empty() && self.unit_symbols.contains(&rest.to_ascii_lowercase())
     }
 
     /// lookup 不要 (= 全 passthrough) で構築。 test / 簡易用途。
@@ -344,6 +371,11 @@ impl CandidateProvider for AlphabetPassthroughProvider {
             // 「2〜3回」 のような range 内で NumberCandidateProvider の "ニ" 候補と
             // path tie になり、 provider 列挙順で Alphabet が勝つ問題が出る。
             if surface.chars().all(is_digit_char) {
+                continue;
+            }
+
+            // 「3km」 のような 数字 + 単位 は NumberCandidateProvider の責務。
+            if self.is_number_with_unit(surface) {
                 continue;
             }
 

@@ -108,7 +108,12 @@ impl<'a> Pipeline<'a> {
         run: impl FnOnce(&ScoringContext, &[&dyn CandidateProvider]) -> R,
     ) -> R {
         let protect = ProtectTokenProvider::new(input);
-        let alphabet = AlphabetPassthroughProvider::new(input, Arc::clone(self.loanwords));
+        let unit_symbols = std::sync::Arc::new(self.number_provider.unit_symbols());
+        let alphabet = AlphabetPassthroughProvider::with_units(
+            input,
+            Arc::clone(self.loanwords),
+            unit_symbols,
+        );
         let dict_bridge = DictBridgeProvider::new(self.dict);
         let odoriji = OdorijiProvider::new();
         let lindera = LinderaFallbackProvider::new(self.analyzer, input);

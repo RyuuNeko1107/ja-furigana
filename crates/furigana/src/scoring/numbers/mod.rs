@@ -136,6 +136,17 @@ impl NumberCandidateProvider {
     }
 
     /// `(surface, reading)` から band [`BAND_SPECIAL`] candidate を 1 つ生成。
+    /// SI 単位記号の集合 (小文字化済)。 英数 passthrough 側が
+    /// 「数字 + 単位」 span を skip するために使う。
+    #[must_use]
+    pub fn unit_symbols(&self) -> std::collections::HashSet<String> {
+        self.units
+            .entries
+            .keys()
+            .map(|k| k.to_ascii_lowercase())
+            .collect()
+    }
+
     fn make(&self, input: &str, pos: usize, m_end: usize, reading: String) -> Candidate {
         let surface = &input[pos..pos + m_end];
         let char_count = surface.chars().count();
