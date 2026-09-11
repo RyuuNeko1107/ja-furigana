@@ -210,12 +210,15 @@ impl LinderaFallbackProvider {
             return true;
         }
         let gap = &input[start..end];
-        if gap.chars().all(|c| c.is_whitespace() || c.is_control()) {
-            edges.push((start, end, gap.to_string(), false));
-            true
-        } else {
-            false
-        }
+        // Lindera が落とした区間は **中身を問わず** passthrough edge で埋める。
+        //
+        // 以前は空白 / 制御文字のみ埋め、 それ以外は `false` を返して safety net 自体を
+        // 無効化していた。 その結果 **Lindera が落とす 1 文字 (例: Ð U+00D0) が入るだけで
+        // 入力全体の読みが空になっていた** (「応援曲個人設定できるんÐな」 → 空文字列。
+        // ★2026-09-11 実コーパス 704 万行の走査で検出)。
+        // 読めない文字は surface のまま残す方が、 文全体を失うより常に良い。
+        edges.push((start, end, gap.to_string(), false));
+        true
     }
 }
 
@@ -268,6 +271,43 @@ mod tests {
     /// これが無いと 「dict entry が Lindera token の途中で終わる」 入力で、
     /// entry を含む path が DP 上構築できず entry が黙って無視される
     /// (例: 「お婆ちゃんすげぇ」 で 「お婆ちゃん」 entry が使われない)。
+    /// Lindera が落とす文字 (例: Ð U+00D0) が混ざっても、 入力全体の読みが消えないこと。
+    ///
+    /// 以前は gap が空白/制御文字でないと safety net 自体を無効化していたため、
+    /// 「応援曲個人設定できるんÐな」 のような入力が **空文字列**になっていた。
+    #[test]
+    fn unreadable_char_does_not_disable_safety_net() {
+        let a = analyzer();
+        let input = "応援曲できるんÐな";
+        let p = LinderaFallbackProvider::new(&a, input);
+        assert!(
+            !p.edges.is_empty(),
+            "Lindera が落とす文字が入っただけで safety net が全廃されている"
+        );
+        // 入力全体が edge で覆われていること (= dp が到達できる)
+        let covered: usize = {
+            let mut max_end = 0usize;
+            let mut pos = 0usize;
+            loop {
+                let next = p
+                    .edges
+                    .iter()
+                    .filter(|(s, _, _, _)| *s == pos)
+                    .map(|(_, e, _, _)| *e)
+                    .max();
+                match next {
+                    Some(e) if e > pos => {
+                        pos = e;
+                        max_end = e;
+                    }
+                    _ => break,
+                }
+            }
+            max_end
+        };
+        assert_eq!(covered, input.len(), "入力末尾まで edge が繋がっていない");
+    }
+
     #[test]
     fn kana_token_emits_suffix_edges() {
         let a = analyzer();

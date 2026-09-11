@@ -4,6 +4,18 @@
 [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) 形式に概ね従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) を採用。
 
+## [Unreleased]
+
+### Fixed
+
+- **Lindera が落とす 1 文字が入るだけで入力全体の読みが空になっていた**
+  (実コーパス 704 万行の走査で検出: 「応援曲個人設定できるんÐな」 → 空文字列)。
+  `LinderaFallbackProvider` は Lindera が token から落とした区間を passthrough edge で
+  補うが、 **空白 / 制御文字の区間しか埋めず**、 それ以外の文字 (Ð U+00D0 等) では
+  `false` を返して **safety net 自体を無効化**していた。 覆われない位置が残ると
+  DP が終端に到達できず path が空になる。 修正は **中身を問わず passthrough edge で埋める**
+  (読めない文字は surface のまま残す方が、 文全体を失うより常に良い)。
+
 ## [0.4.1] - 2026-09-12
 
 ### Fixed
