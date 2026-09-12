@@ -371,14 +371,20 @@ fn tilde_emits_kara_when_only_prev_is_digit() {
 // ─── `-` = マイナス vs ハイフン (数字 context 限定) ─────────────────────
 
 #[test]
-fn minus_emits_reading_in_numeric_context() {
-    // 「3-1」 のように数字に挟まれていれば算術記号 → マイナス。
+fn minus_between_digits_is_silent() {
+    // 2026-09-11 変更: 数字に挟まれた `-` は減算ではなく区切り。
+    // 実データ 704 万行のハイフンは 3-1 / 22-0 (スコア)、 マリオ 2-1 (面数)、
+    // 2024-2025 (年範囲) ばかりで、 マイナス と読むべき例は無かった。
     let p = provider();
     let input = "3-1";
     let pos = "3".len();
     let cands = p.candidates_at(&ctx(input), pos);
-    let c = find(&cands, "-").expect("minus candidate in numeric context");
-    assert_eq!(c.reading, "マイナス");
+    let c = find(&cands, "-").expect("hyphen candidate between digits");
+    assert_eq!(c.reading, "", "数字間の - は読み上げない");
+    assert!(
+        !cands.iter().any(|c| c.reading.starts_with("マイナス")),
+        "符号付き数値候補も出さない: {cands:?}"
+    );
 }
 
 #[test]
@@ -417,15 +423,25 @@ fn hyphen_in_kana_context_is_silent() {
 
 #[test]
 fn fullwidth_minus_follows_same_context_rule() {
+    // 全角 `－` / 数学記号 `−` も半角と同じ扱い。 負数 (前が数字でない) は マイナス、
+    // 数字に挟まれた区切りは無音。
     let p = provider();
-    let cands = p.candidates_at(&ctx("３－１"), "３".len());
-    assert!(cands
-        .iter()
-        .any(|c| c.surface == "－" && c.reading == "マイナス"));
-    let cands = p.candidates_at(&ctx("Ａ－Ｂ"), "Ａ".len());
-    assert!(cands
-        .iter()
-        .any(|c| c.surface == "－" && c.reading.is_empty()));
+    for ch in ['\u{FF0D}', '\u{2212}'] {
+        let neg = format!("{ch}3");
+        let cands = p.candidates_at(&ctx(&neg), 0);
+        assert!(
+            cands
+                .iter()
+                .any(|c| c.surface == ch.to_string() && c.reading == "マイナス"),
+            "負数の {ch} は マイナス"
+        );
+
+        let score = format!("3{ch}1");
+        let pos = "3".len();
+        let cands = p.candidates_at(&ctx(&score), pos);
+        let c = find(&cands, &ch.to_string()).expect("hyphen candidate");
+        assert_eq!(c.reading, "", "数字間の {ch} は無音");
+    }
 }
 
 // ─── 素の数字 ────────────────────────────────────────────────────────────
@@ -533,4 +549,26 @@ fn bare_day_counter_without_specials_falls_back_to_default() {
     let cands = p.candidates_at(&ctx("5日"), 0);
     let c = find(&cands, "5日").expect("5日 候補");
     assert_eq!(c.reading, "ゴニチ");
+}
+
+#[test]
+fn hyphen_after_latin_before_digit_is_silent() {
+    // 「RX-78-2」 「ak-74」 のような型番。 前が英字なら符号ではない。
+    let p = provider();
+    let input = "RX-78";
+    let pos = "RX".len();
+    let cands = p.candidates_at(&ctx(input), pos);
+    let c = find(&cands, "-").expect("hyphen candidate after latin");
+    assert_eq!(c.reading, "", "英字直後の - は読み上げない");
+}
+
+#[test]
+fn minus_after_kanji_is_still_sign() {
+    // 「弾道-3」 のような能力値表記は負数なので マイナス のまま。
+    let p = provider();
+    let input = "弾道-3";
+    let pos = "弾道".len();
+    let cands = p.candidates_at(&ctx(input), pos);
+    let c = find(&cands, "-").expect("minus candidate after kanji");
+    assert_eq!(c.reading, "マイナス");
 }

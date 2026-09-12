@@ -239,6 +239,24 @@ fn range_marker_in_numeric_context(input: &str, pos: usize, ch: char) -> bool {
     prev_is_digit || next_is_digit
 }
 
+/// `-` が **負の符号** か (= 「マイナス」 と読むべきか)。
+///
+/// 符号なら直後が数値で、 かつ直前は数値ではない (「-3」 「弾道 -3」)。
+/// 直前が数字ならスコア / 面数 / 年範囲の区切りであり (「3-1」 「2024-2025」
+/// 「1-2-Switch」)、 減算の意味は持たない。
+fn minus_is_sign(input: &str, pos: usize, ch: char) -> bool {
+    let prev = input[..pos].chars().next_back();
+    let prev_is_digit = prev.is_some_and(is_digit_like_char);
+    // 英字の直後も符号ではなく型番ハイフン (RX-78-2 / ak-74)。
+    let prev_is_latin = prev.is_some_and(|c| c.is_ascii_alphabetic());
+    let next_pos = pos + ch.len_utf8();
+    let next_is_digit = input[next_pos..]
+        .chars()
+        .next()
+        .is_some_and(is_digit_like_char);
+    next_is_digit && !prev_is_digit && !prev_is_latin
+}
+
 /// 数字らしい char か (= ASCII 0-9 / 全角 0-9 / 漢数字 一〜十百千万億兆)。
 fn is_digit_like_char(c: char) -> bool {
     matches!(c,
@@ -462,8 +480,13 @@ impl NumberCandidateProvider {
             // context のみ 「マイナス」、 それ以外 (英字語の Wi-Fi / 区切りの 「あ-い」 /
             // 文末の 「終わり-」) はハイフンなので読まない。
             let is_minus = matches!(ch, '-' | '\u{FF0D}' | '\u{2212}');
-            let final_read = if (is_range_marker || is_minus)
-                && !range_marker_in_numeric_context(input, pos, ch)
+            // 2026-09-11: 数字に挟まれたハイフンは減算ではなく区切り。
+            // 実データ 704 万行では 3-1 / 5-5 / 22-0 (スコア) や マリオ 2-1 (面数)、
+            // 2024-2025 (年範囲) ばかりで、 マイナス と読むべき例は無い。
+            // 負数は -3 のように前が数字でない形で書かれるので、
+            // 前が数字のときだけ読まない (区切りとして surface のみ消費する)。
+            let final_read = if (is_minus && !minus_is_sign(input, pos, ch))
+                || (is_range_marker && !range_marker_in_numeric_context(input, pos, ch))
             {
                 String::new()
             } else {
@@ -525,7 +548,17 @@ impl CandidateProvider for NumberCandidateProvider {
         // 集合で判定。
         let numeric_lead = is_digit_like_char(first_char)
             || matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}');
-        if !numeric_lead {
+        // 2026-09-11: 符号始まりでも **前が数字なら符号ではない**。
+        // 3-1 / 22-0 / 2024-2025 / 7-80% のような区切りを 「マイナスイチ」 と
+        // 読んでいた (実データ 704 万行のハイフンはスコア・面数・年範囲ばかりで、
+        // 減算の例は無い)。 負数は 「-3」 「弾道 -3」 のように前が数字でない形。
+        // 記号 edge (読み無し) だけ出し、 数字は次の位置で読ませる。
+        let sign_after_digit = matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
+            && input[..pos]
+                .chars()
+                .next_back()
+                .is_some_and(is_digit_like_char);
+        if !numeric_lead || sign_after_digit {
             self.emit_symbol(input, pos, rest, &mut out);
             return out;
         }
