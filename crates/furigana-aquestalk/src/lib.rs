@@ -465,6 +465,35 @@ mod tests {
         // 内容が落ちていないこと (区切り記号は入らない)
         assert_eq!(parts.concat().chars().count(), 3000);
     }
+
+    /// 実データ最悪ケース: 「廃止」 の連呼のように **句読点なしで 100 句** 続く入力。
+    ///
+    /// 2026-09-11 に 88 万行の実ログを構造検査したところ、 1 文 27 句の上限を
+    /// 超える出力が 102 行あった (最大 100 句)。 splitter がこの形を確実に
+    /// 割れることを固定する (割れないと実機で ERROR 122)。
+    #[test]
+    fn split_handles_hundred_phrases_without_punctuation() {
+        let symbols = (0..100)
+            .map(|_| "ハイシ'")
+            .collect::<Vec<_>>()
+            .join("/");
+        let parts = split_for_aquestalk(&symbols, MAX_LEN);
+        for p in &parts {
+            assert!(
+                p.chars().count() <= MAX_LEN,
+                "chunk が max_len 超過: {} 文字",
+                p.chars().count()
+            );
+            let phrases = p.split('/').filter(|x| !x.is_empty()).count();
+            assert!(phrases <= MAX_PHRASES, "{phrases} 句が 1 chunk に残った: {p:?}");
+        }
+        // 句が落ちていないこと
+        let total: usize = parts
+            .iter()
+            .map(|p| p.matches("ハイシ'").count())
+            .sum();
+        assert_eq!(total, 100, "句が欠落した");
+    }
     use super::*;
     use furigana::Furigana;
 
