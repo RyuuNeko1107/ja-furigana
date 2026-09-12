@@ -553,12 +553,12 @@ impl CandidateProvider for NumberCandidateProvider {
         // 読んでいた (実データ 704 万行のハイフンはスコア・面数・年範囲ばかりで、
         // 減算の例は無い)。 負数は 「-3」 「弾道 -3」 のように前が数字でない形。
         // 記号 edge (読み無し) だけ出し、 数字は次の位置で読ませる。
-        let sign_after_digit = matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
+        let sign_is_separator = matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
             && input[..pos]
                 .chars()
                 .next_back()
-                .is_some_and(is_digit_like_char);
-        if !numeric_lead || sign_after_digit {
+                .is_some_and(|c| is_digit_like_char(c) || c.is_ascii_alphabetic());
+        if !numeric_lead || sign_is_separator {
             self.emit_symbol(input, pos, rest, &mut out);
             return out;
         }
