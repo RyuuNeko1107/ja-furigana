@@ -493,3 +493,44 @@ fn digit_regex_is_static_and_works_with_empty_rules() {
     let c = find(&cands, "42").expect("bare digit candidate even with empty rules");
     assert_eq!(c.reading, "ヨンジュウニ");
 }
+
+// ─── 単位 lookup miss / 日 specials (★2026-09-11) ───────────────────────────
+
+#[test]
+fn si_unit_lookup_miss_emits_no_candidate() {
+    // fixture の 「g」 は ci = false なので 「4G」 は lookup miss。
+    // 以前は空文字を連結して 「ヨン」 だけ返し、 **単位文字を黙って落として**
+    // いた。 候補を出さず alphabet passthrough に委ねるのが正しい。
+    let p = provider();
+    let cands = p.candidates_at(&ctx("4G"), 0);
+    assert!(
+        find(&cands, "4G").is_none(),
+        "解決できない単位 span は候補化しない: {cands:?}"
+    );
+}
+
+#[test]
+fn si_unit_lowercase_still_reads() {
+    let p = provider();
+    let cands = p.candidates_at(&ctx("4g"), 0);
+    let c = find(&cands, "4g").expect("小文字 g は読める");
+    assert_eq!(c.reading, "ヨングラム");
+}
+
+#[test]
+fn bare_day_counter_honors_specials() {
+    // 単独 「2 日」 は暦の日付ではないので days.toml を使わないが、
+    // counter 側 specials は尊重する (期間表現でも フツカ)。
+    let p = provider();
+    let cands = p.candidates_at(&ctx("2日"), 0);
+    let c = find(&cands, "2日").expect("2日 候補");
+    assert_eq!(c.reading, "フツカ");
+}
+
+#[test]
+fn bare_day_counter_without_specials_falls_back_to_default() {
+    let p = provider();
+    let cands = p.candidates_at(&ctx("5日"), 0);
+    let c = find(&cands, "5日").expect("5日 候補");
+    assert_eq!(c.reading, "ゴニチ");
+}

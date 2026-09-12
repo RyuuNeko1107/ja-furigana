@@ -166,6 +166,12 @@ impl NumberCandidateProvider {
 
         if counter == "日" {
             if let Some(rule) = self.counters.counter.get("日") {
+                // ★2026-09-11: 単独 「N 日」 は暦の日付ではないので days.toml を
+                // 使わないが、 counter 側に書かれた specials は尊重する。
+                // 「2 日」 は期間表現でも フツカ であり、 ニニチ とは読まない。
+                if let Some(special) = rule.specials.get(&normalized) {
+                    return special.clone();
+                }
                 if let Some(default) = &rule.default {
                     return format!("{nk}{default}");
                 }
@@ -369,6 +375,14 @@ impl NumberCandidateProvider {
             let m_end = caps.get(0).unwrap().end();
             let num = caps.get(1).unwrap().as_str();
             let unit = caps.get(2).unwrap().as_str();
+            // ★2026-09-11: regex は case-insensitive で span を取るが、 units 側が
+            // `ci = false` (= 小文字限定の 「g」 「m」 「t」) だと lookup が miss する。
+            // 以前はそのまま空文字を連結していたので 「4G」 が 「ヨン」 になり、
+            // **単位文字が黙って消えていた**。 解決できない span は候補ごと捨て、
+            // alphabet passthrough に任せる (try_scale の trailing unit と同じ扱い)。
+            if self.units.lookup(unit).is_none() {
+                return;
+            }
             let reading = si_unit_reading(num, unit, &self.units);
             out.push(self.make(input, pos, m_end, reading));
         }

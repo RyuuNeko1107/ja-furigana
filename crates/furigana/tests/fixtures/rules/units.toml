@@ -12,7 +12,7 @@ role = "units"
 "m"  = { kana = "メートル" }
 "kg" = { kana = "キログラム" }
 "mg" = { kana = "ミリグラム" }
-"g"  = { kana = "グラム" }
+"g"  = { kana = "グラム", ci = false }
 "t"  = { kana = "トン" }
 "mL" = { kana = "ミリリットル", ci = true }
 "L"  = { kana = "リットル", ci = true }
