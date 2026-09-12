@@ -143,7 +143,58 @@ pub fn filter_tokens_for_tts(tokens: &mut Vec<crate::ReadingToken>, opts: &TtsOp
     if !opts.silence_symbols {
         return;
     }
-    tokens.retain(|t| t.surface.is_empty() || !t.surface.chars().all(is_decorative_symbol));
+    // 1. 装飾記号だけで出来た token を落とす。
+    let dropped: Vec<bool> = tokens
+        .iter()
+        .map(|t| !t.surface.is_empty() && t.surface.chars().all(is_decorative_symbol))
+        .collect();
+
+    // 2. 装飾 token に挟まれた 1 文字の英字は顔文字パーツ (`\(^o^)/` の o、
+    //    `d(^-^)` の d)。 単独では語になり得ないので一緒に落とす。
+    //    (★2026-09-11: 実データの顔文字で 「テンクウジョウ o」 が残っていた)
+    let kaomoji_letter: Vec<bool> = (0..tokens.len())
+        .map(|i| {
+            if dropped[i] {
+                return false;
+            }
+            let t = &tokens[i];
+            // 目や口に使われるのは 1〜2 文字の英字 (o / d / oo / ^^ の o)。
+            let n = t.surface.chars().count();
+            let short_letters =
+                (1..=2).contains(&n) && t.surface.chars().all(|c| c.is_ascii_alphabetic());
+            if !short_letters {
+                return false;
+            }
+            // 文頭 / 文末も 「装飾に挟まれている」 と見なす (`d(^-^)` の d)。
+            // ただし **少なくとも片側は実在の装飾 token** であることを要求する。
+            // そうしないと 「a」 「w」 だけの発言が丸ごと空になってしまう。
+            let prev_real = i > 0 && dropped[i - 1];
+            let next_real = i + 1 < tokens.len() && dropped[i + 1];
+            let prev_ok = i == 0 || dropped[i - 1];
+            let next_ok = i + 1 == tokens.len() || dropped[i + 1];
+            prev_ok && next_ok && (prev_real || next_real)
+        })
+        .collect();
+
+    let mut idx = 0;
+    tokens.retain(|_| {
+        let keep = !dropped[idx] && !kaomoji_letter[idx];
+        idx += 1;
+        keep
+    });
+
+    // 3. 残った token のうち **未変換 passthrough** (reading == surface) は、
+    //    装飾記号と読み上げ対象が 1 token に混ざっていることがある
+    //    (`)━━!!` など)。 装飾部分だけ reading から取り除く。
+    //    句読点は pause 情報なので is_decorative_symbol が false を返し残る。
+    for t in tokens.iter_mut() {
+        let Some(reading) = t.reading.as_ref() else {
+            continue;
+        };
+        if *reading == t.surface && reading.chars().any(is_decorative_symbol) {
+            t.reading = Some(reading.chars().filter(|c| !is_decorative_symbol(*c)).collect());
+        }
+    }
 }
 
 /// TTS 向けテキスト正規化
@@ -441,5 +492,59 @@ mod tests {
         // どちらでも緑になり検証になっていなかった。空であることを直接固定する。
         let segs = segment_for_tts("。！？", 60);
         assert_eq!(segs, Vec::<String>::new());
+    }
+}
+
+// ─── silence_symbols の顔文字対応 (★2026-09-11) ─────────────────────────────
+
+// silence_symbols の顔文字対応 (2026-09-11)
+
+#[cfg(test)]
+mod kaomoji_tests {
+    use super::*;
+    use crate::ReadingToken;
+
+    fn tok(surface: &str) -> ReadingToken {
+        ReadingToken {
+            surface: surface.to_string(),
+            reading: Some(surface.to_string()),
+        }
+    }
+
+    fn silenced(surfaces: &[&str]) -> Vec<String> {
+        let mut tokens: Vec<ReadingToken> = surfaces.iter().map(|s| tok(s)).collect();
+        filter_tokens_for_tts(&mut tokens, &TtsOptions::default().with_silence_symbols(true));
+        tokens
+            .into_iter()
+            .map(|t| t.reading.unwrap_or_default())
+            .collect()
+    }
+
+    #[test]
+    fn kaomoji_letter_between_decorations_is_dropped() {
+        // 顔文字の目に使われる 1〜2 文字英字は、 装飾 token に挟まれていれば落とす。
+        assert_eq!(
+            silenced(&["てんくうじょう", "\\(^", "o", "^)/"]),
+            vec!["てんくうじょう"]
+        );
+    }
+
+    #[test]
+    fn lone_letter_message_is_kept() {
+        // 「a」 「w」 だけの発言は装飾に挟まれていないので落とさない。
+        assert_eq!(silenced(&["a"]), vec!["a"]);
+        assert_eq!(silenced(&["w"]), vec!["w"]);
+    }
+
+    #[test]
+    fn long_latin_word_is_kept() {
+        // 括弧に囲まれていても語なら残す。
+        assert_eq!(silenced(&["(", "FFVII", ")", "より"]), vec!["FFVII", "より"]);
+    }
+
+    #[test]
+    fn mixed_token_keeps_only_readable_part() {
+        // 装飾と句読点が 1 token に混ざる場合、 装飾だけ外す (句読点は pause 情報)。
+        assert_eq!(silenced(&["キタ", ")\u{2501}\u{2501}!!"]), vec!["キタ", "!!"]);
     }
 }
