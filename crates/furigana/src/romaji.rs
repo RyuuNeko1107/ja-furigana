@@ -254,6 +254,12 @@ fn lookup_single(c: char, style: RomajiStyle) -> Option<&'static str> {
         ('ゃ', _) => "ya",
         ('ゅ', _) => "yu",
         ('ょ', _) => "yo",
+        // ★2026-09-13: 小書き 「ゎ」 「ゕ」 「ゖ」 が未対応で、 ローマ字出力に
+        // かなのまま残っていた (「これゎ」 → 「koreゎ」)。 実ログ 88 万行で 49 件。
+        // ネット表記の 「ゎ」 は 「わ」 の装飾なので wa に倒す。
+        ('ゎ', _) => "wa",
+        ('ゕ', _) => "ka",
+        ('ゖ', _) => "ke",
         _ => return None,
     })
 }
@@ -617,5 +623,16 @@ mod tests {
         for (kana, romaji) in cases {
             assert_eq!(hiragana_to_romaji(kana, H), *romaji, "small {kana}");
         }
+    }
+
+    /// ★2026-09-13: 小書き 「ゎ」 (ネット表記の 「わ」) が未対応で
+    /// ローマ字出力にかなのまま残っていた実バグの回帰テスト。
+    #[test]
+    fn small_wa_is_romanized() {
+        assert_eq!(hiragana_to_romaji("これゎ", RomajiStyle::Hepburn), "korewa");
+        assert_eq!(hiragana_to_romaji("うゎあ", RomajiStyle::Hepburn), "uwaa");
+        // 小書き 「ゕ」 「ゖ」 も同様
+        assert_eq!(hiragana_to_romaji("ゕ", RomajiStyle::Hepburn), "ka");
+        assert_eq!(hiragana_to_romaji("ゖ", RomajiStyle::Hepburn), "ke");
     }
 }

@@ -51,6 +51,13 @@ pub fn kata_to_hira(s: &str) -> String {
                 char::from_u32(cp - KATA_HIRA_OFFSET).unwrap_or(c)
             } else if c == 'ヴ' {
                 'ゔ'
+            } else if c == 'ヵ' {
+                // ★2026-09-13: カタカナ範囲定数は ン (0x30F3) までなので
+                // ヴ / ヵ / ヶ は個別に対応する。 未対応だと romaji 出力に
+                // カタカナのまま残っていた (実ログ 88 万行で 9 件)。
+                'ゕ'
+            } else if c == 'ヶ' {
+                'ゖ'
             } else {
                 c
             }
@@ -509,6 +516,14 @@ mod tests {
     use std::collections::HashMap;
 
     // ─── kata_to_hira / hira_to_kata ──────────────────────────────
+
+    #[test]
+    fn kata_to_hira_small_ka_ke() {
+        // ★2026-09-13: カタカナ範囲定数は ン までなので ヵ / ヶ が素通りしていた。
+        assert_eq!(kata_to_hira("ヵ"), "ゕ");
+        assert_eq!(kata_to_hira("ヶ"), "ゖ");
+        assert_eq!(kata_to_hira("ヴ"), "ゔ");
+    }
 
     #[test]
     fn kata_to_hira_basic() {
