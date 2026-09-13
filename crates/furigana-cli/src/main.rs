@@ -60,7 +60,7 @@ fn main() -> Result<()> {
     tracing::debug!("config_file: {}", paths.config_file.display());
 
     match cli.command {
-        Some(Commands::Lookup(args)) => commands::lookup::run(args, &paths, &cfg),
+        Some(Commands::Lookup(args)) => commands::lookup::run(&args, &paths, &cfg),
         Some(Commands::Repl(args)) => commands::repl::run(args, &paths, &cfg),
         Some(Commands::Serve(args)) => commands::serve::run(args, &paths, &cfg),
         Some(Commands::Dict(args)) => commands::dict::run(args, &paths, &cfg),

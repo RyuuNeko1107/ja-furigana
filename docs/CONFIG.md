@@ -81,7 +81,7 @@ burst_size = 100
 ```
 
 > default (`1` / `5`) は素の公開エンドポイント保護向け。短文を高頻度で投げる
-> 配信コメント用途や負荷試験では `per_second` を上げる (負荷試験は
+> 短文の高頻度用途や負荷試験では `per_second` を上げる (負荷試験は
 > [`tools/k6_loadtest.js`](../tools/k6_loadtest.js) を参照)。
 
 ## 環境変数

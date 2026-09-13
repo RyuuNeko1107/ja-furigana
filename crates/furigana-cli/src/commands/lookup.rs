@@ -14,8 +14,15 @@ use std::path::PathBuf;
 /// `furigana lookup` のオプション
 #[derive(ClapArgs, Debug)]
 pub struct Args {
-    /// 変換対象テキスト
-    text: String,
+    /// 変換対象テキスト (`--batch` 指定時は省略する)
+    text: Option<String>,
+
+    /// stdin を 1 行 1 入力として読み、 1 行 1 結果を stdout に出す。
+    /// 辞書の load が 1 回で済むので、 多数の入力をまとめて変換する時に使う
+    /// (回帰テスト等)。 出力が複数行になる mode (`analyze` / `accent` /
+    /// `--max-len` 付きの `aquestalk`) は行対応が壊れるので受け付けない。
+    #[arg(long)]
+    batch: bool,
 
     /// 変換モード: `tts` (default) | `hiragana` | `ruby` | `kanji` | `romaji` | `romaji-kunrei` |
     /// `analyze` | `accent` | `voicevox-aques` | `aquestalk` | `bouyomi`
@@ -66,7 +73,16 @@ pub struct Args {
 }
 
 /// 実行
-pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
+pub fn run(args: &Args, paths: &Paths, _cfg: &Config) -> Result<()> {
+    if args.batch && args.text.is_some() {
+        bail!("--batch と text 引数は同時に指定できません (入力は stdin から読みます)");
+    }
+    if args.batch && matches!(args.mode.as_str(), "analyze" | "accent") {
+        bail!("--batch は mode `{}` では使えません (出力が複数行になるため)", args.mode);
+    }
+    if args.batch && args.mode == "aquestalk" && args.max_len != 0 {
+        bail!("--batch は `aquestalk` + `--max-len` では使えません (出力が複数行になるため)");
+    }
     let f = if args.rules_dir.is_some() || !args.core_dict_dir.is_empty() {
         // dev/test override: raw furigana-dict/ 構造 (rules/ + core/<sub>/) から直接 load。
         // build_furigana の `<data_dir>/data/` flat スキャンを bypass して dev workflow を支える。
@@ -84,34 +100,56 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
             .build()?
     };
 
+    if args.batch {
+        use std::io::{BufRead, BufWriter, Write};
+        let stdin = std::io::stdin();
+        let mut out = BufWriter::new(std::io::stdout().lock());
+        for line in stdin.lock().lines() {
+            let line = line.context("read stdin")?;
+            writeln!(out, "{}", convert(&f, &line, args)?).context("write stdout")?;
+        }
+        out.flush().context("flush stdout")?;
+        return Ok(());
+    }
+
+    let text = args
+        .text
+        .clone()
+        .context("変換対象テキストを指定してください (または --batch で stdin から読みます)")?;
+    println!("{}", convert(&f, &text, args)?);
+    Ok(())
+}
+
+/// 1 入力を mode に応じて変換する。 `lookup` と `--batch` で共有する。
+fn convert(f: &Furigana, text: &str, args: &Args) -> Result<String> {
     let result = match args.mode.as_str() {
-        "kanji" => args.text.clone(),
-        "ruby" => f.to_ruby(&args.text),
-        "hiragana" | "hira" => f.to_hiragana(&args.text),
-        "romaji" => f.to_romaji(&args.text, RomajiStyle::Hepburn),
-        "romaji-kunrei" | "kunrei" => f.to_romaji(&args.text, RomajiStyle::Kunrei),
+        "kanji" => text.to_string(),
+        "ruby" => f.to_ruby(text),
+        "hiragana" | "hira" => f.to_hiragana(text),
+        "romaji" => f.to_romaji(text, RomajiStyle::Hepburn),
+        "romaji-kunrei" | "kunrei" => f.to_romaji(text, RomajiStyle::Kunrei),
         // 棒読みちゃん (互換サーバー含む) へ流すテキストは tts mode と同一
         // (= 読み化 + pause 整形。 棒読みちゃん側の漢字誤読を bypass する)
         "tts" | "bouyomi" => {
             let opts = TtsOptions::default()
-                .with_short_pause(args.short_pause)
-                .with_long_pause(args.long_pause)
+                .with_short_pause(args.short_pause.clone())
+                .with_long_pause(args.long_pause.clone())
                 .with_keep_period(!args.drop_period)
                 .with_silence_symbols(args.silence_symbols);
-            f.to_tts(&args.text, &opts)
+            f.to_tts(text, &opts)
         }
         // VOICEVOX AquesTalk-風記法 (ADR-0001 adapter crate 経由)。
         // POST /accent_phrases?is_kana=true にそのまま渡せる。
         // dict bracket / --estimate-accent が無い token は平板 fallback。
         "voicevox-aques" | "voicevox" => {
-            ja_furigana_voicevox::to_aques_kana(&f.to_accent(&args.text))
+            ja_furigana_voicevox::to_aques_kana(&f.to_accent(text))
         }
         // 本家 AquesTalk 音声記号列 (ADR-0001 adapter crate 経由)。
         // AquesTalk2 / AquesTalk10 の合成 API へそのまま渡せる。
         // VOICEVOX kana 記法との差分 = 半角 `?` / `。` と `、` の pause 区別 / 無声化 `_`。
         "aquestalk" => {
             let symbols = ja_furigana_aquestalk::to_aquestalk_with(
-                &f.to_accent(&args.text),
+                &f.to_accent(text),
                 ja_furigana_aquestalk::Options {
                     devoice: !args.no_devoice,
                     trailing_period: !args.drop_period,
@@ -127,11 +165,11 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         // Smart engine debug API (★F1): AnalyzeResult を JSON pretty 出力。
         // alpha.10 段階の experimental、 path 採択 / 候補列 / boundary region を inspect 用途。
         "analyze" => {
-            let result = f.analyze(&args.text);
+            let result = f.analyze(text);
             serde_json::to_string_pretty(&result).context("serialize AnalyzeResult to JSON")?
         }
         "accent" => {
-            let result = f.to_accent(&args.text);
+            let result = f.to_accent(text);
             serde_json::to_string_pretty(&result).context("serialize AccentResult to JSON")?
         }
         other => bail!(
@@ -139,6 +177,5 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         ),
     };
 
-    println!("{result}");
-    Ok(())
+    Ok(result)
 }
