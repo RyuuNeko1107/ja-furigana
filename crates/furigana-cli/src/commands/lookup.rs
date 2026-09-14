@@ -78,7 +78,10 @@ pub fn run(args: &Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         bail!("--batch と text 引数は同時に指定できません (入力は stdin から読みます)");
     }
     if args.batch && matches!(args.mode.as_str(), "analyze" | "accent") {
-        bail!("--batch は mode `{}` では使えません (出力が複数行になるため)", args.mode);
+        bail!(
+            "--batch は mode `{}` では使えません (出力が複数行になるため)",
+            args.mode
+        );
     }
     if args.batch && args.mode == "aquestalk" && args.max_len != 0 {
         bail!("--batch は `aquestalk` + `--max-len` では使えません (出力が複数行になるため)");

@@ -216,7 +216,12 @@ pub fn filter_tokens_for_tts(tokens: &mut Vec<crate::ReadingToken>, opts: &TtsOp
             continue;
         };
         if *reading == t.surface && reading.chars().any(is_decorative_symbol) {
-            t.reading = Some(reading.chars().filter(|c| !is_decorative_symbol(*c)).collect());
+            t.reading = Some(
+                reading
+                    .chars()
+                    .filter(|c| !is_decorative_symbol(*c))
+                    .collect(),
+            );
         }
     }
 }
@@ -537,7 +542,10 @@ mod kaomoji_tests {
 
     fn silenced(surfaces: &[&str]) -> Vec<String> {
         let mut tokens: Vec<ReadingToken> = surfaces.iter().map(|s| tok(s)).collect();
-        filter_tokens_for_tts(&mut tokens, &TtsOptions::default().with_silence_symbols(true));
+        filter_tokens_for_tts(
+            &mut tokens,
+            &TtsOptions::default().with_silence_symbols(true),
+        );
         tokens
             .into_iter()
             .map(|t| t.reading.unwrap_or_default())
@@ -563,7 +571,10 @@ mod kaomoji_tests {
     #[test]
     fn long_latin_word_is_kept() {
         // 括弧に囲まれていても語なら残す。
-        assert_eq!(silenced(&["(", "FFVII", ")", "より"]), vec!["FFVII", "より"]);
+        assert_eq!(
+            silenced(&["(", "FFVII", ")", "より"]),
+            vec!["FFVII", "より"]
+        );
     }
 
     #[test]
@@ -588,6 +599,9 @@ mod kaomoji_tests {
     #[test]
     fn mixed_token_keeps_only_readable_part() {
         // 装飾と句読点が 1 token に混ざる場合、 装飾だけ外す (句読点は pause 情報)。
-        assert_eq!(silenced(&["キタ", ")\u{2501}\u{2501}!!"]), vec!["キタ", "!!"]);
+        assert_eq!(
+            silenced(&["キタ", ")\u{2501}\u{2501}!!"]),
+            vec!["キタ", "!!"]
+        );
     }
 }

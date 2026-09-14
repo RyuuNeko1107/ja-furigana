@@ -107,8 +107,14 @@ mod tests {
         assert_eq!(si_unit_reading("6", "km", &units), "ロッキロメートル");
         assert_eq!(si_unit_reading("8", "km", &units), "ハッキロメートル");
         assert_eq!(si_unit_reading("10", "km", &units), "ジュッキロメートル");
-        assert_eq!(si_unit_reading("600", "km", &units), "ロッピャッキロメートル");
-        assert_eq!(si_unit_reading("300", "km", &units), "サンビャッキロメートル");
+        assert_eq!(
+            si_unit_reading("600", "km", &units),
+            "ロッピャッキロメートル"
+        );
+        assert_eq!(
+            si_unit_reading("300", "km", &units),
+            "サンビャッキロメートル"
+        );
         // 1 は イチキロ が一般的なので促音化しない。 促音にならない数字もそのまま。
         assert_eq!(si_unit_reading("1", "km", &units), "イチキロメートル");
         assert_eq!(si_unit_reading("3", "km", &units), "サンキロメートル");

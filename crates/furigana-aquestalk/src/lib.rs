@@ -473,10 +473,7 @@ mod tests {
     /// 割れることを固定する (割れないと実機で ERROR 122)。
     #[test]
     fn split_handles_hundred_phrases_without_punctuation() {
-        let symbols = (0..100)
-            .map(|_| "ハイシ'")
-            .collect::<Vec<_>>()
-            .join("/");
+        let symbols = (0..100).map(|_| "ハイシ'").collect::<Vec<_>>().join("/");
         let parts = split_for_aquestalk(&symbols, MAX_LEN);
         for p in &parts {
             assert!(
@@ -485,13 +482,13 @@ mod tests {
                 p.chars().count()
             );
             let phrases = p.split('/').filter(|x| !x.is_empty()).count();
-            assert!(phrases <= MAX_PHRASES, "{phrases} 句が 1 chunk に残った: {p:?}");
+            assert!(
+                phrases <= MAX_PHRASES,
+                "{phrases} 句が 1 chunk に残った: {p:?}"
+            );
         }
         // 句が落ちていないこと
-        let total: usize = parts
-            .iter()
-            .map(|p| p.matches("ハイシ'").count())
-            .sum();
+        let total: usize = parts.iter().map(|p| p.matches("ハイシ'").count()).sum();
         assert_eq!(total, 100, "句が欠落した");
     }
     use super::*;
