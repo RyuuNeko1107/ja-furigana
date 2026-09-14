@@ -7,6 +7,29 @@
 use super::helpers::{last_digit, norm_num, sokuonize_last, to_int};
 use crate::rules::{CountersData, DaysData};
 
+/// 百の位で終わる数 (100 / 300 / 600 …) の促音化。
+///
+/// [`sokuonize_last`] は イチ / ロク / ハチ / ジュウ だけを扱うので、 促音化する助数詞でも
+/// 100回 = ヒャクカイ / 100本 = ヒャクポン になっていた。 カ行・パ行で始まる助数詞の前でだけ
+/// ヒャク / ピャク / ビャク を促音にする (100回 = ヒャッカイ / 100本 = ヒャッポン)。
+/// サ行・タ行 (100歳 / 100点) は ヒャク読みが一般的なので変えない。
+/// (★2026-09-15 助数詞スイープで検出)
+fn sokuonize_hundred(body: &str, suffix: &str) -> String {
+    if !suffix.starts_with(['カ', 'キ', 'ク', 'ケ', 'コ', 'パ', 'ピ', 'プ', 'ペ', 'ポ']) {
+        return body.to_string();
+    }
+    for (src, dst) in [
+        ("ヒャク", "ヒャッ"),
+        ("ピャク", "ピャッ"),
+        ("ビャク", "ビャッ"),
+    ] {
+        if let Some(stripped) = body.strip_suffix(src) {
+            return format!("{stripped}{dst}");
+        }
+    }
+    body.to_string()
+}
+
 /// 「数値 + 助数詞」の読みを構築する (data-driven)
 ///
 /// 優先順位:
@@ -81,7 +104,7 @@ pub fn euphonic_counter_read(
             for r in &rule.rules {
                 if r.last_digit.contains(&sd) {
                     let body = if r.sokuonize {
-                        sokuonize_last(&adjusted_kana)
+                        sokuonize_hundred(&sokuonize_last(&adjusted_kana), &r.suffix)
                     } else {
                         adjusted_kana.clone()
                     };
@@ -140,6 +163,38 @@ mod tests {
         assert_eq!(euphonic_counter_read("イチ", "本", "1", &c, &d), "イッポン");
         assert_eq!(euphonic_counter_read("サン", "本", "3", &c, &d), "サンボン");
         assert_eq!(euphonic_counter_read("ニ", "本", "2", &c, &d), "ニホン");
+    }
+
+    #[test]
+    fn hundred_sokuon_before_k_and_p_row_counters() {
+        // 百の位で終わる数も、 カ行・パ行で始まる助数詞の前では促音化する。
+        let c = load_counters();
+        let d = load_days();
+        assert_eq!(
+            euphonic_counter_read("ヒャク", "本", "100", &c, &d),
+            "ヒャッポン"
+        );
+        assert_eq!(
+            euphonic_counter_read("ヒャク", "回", "100", &c, &d),
+            "ヒャッカイ"
+        );
+        assert_eq!(
+            euphonic_counter_read("ロッピャク", "本", "600", &c, &d),
+            "ロッピャッポン"
+        );
+        assert_eq!(
+            euphonic_counter_read("サンビャク", "回", "300", &c, &d),
+            "サンビャッカイ"
+        );
+        // サ行 (歳) は ヒャクサイ のまま。 促音化しない末尾 (ニ) にも効かない。
+        assert_eq!(
+            euphonic_counter_read("ヒャク", "歳", "100", &c, &d),
+            "ヒャクサイ"
+        );
+        assert_eq!(
+            euphonic_counter_read("ジュウ", "本", "10", &c, &d),
+            "ジュッポン"
+        );
     }
 
     #[test]
