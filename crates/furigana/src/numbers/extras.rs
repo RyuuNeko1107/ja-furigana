@@ -27,7 +27,35 @@ pub fn symbol_char_reading(ch: char, symbols: &SymbolsData) -> Option<String> {
 pub fn si_unit_reading(num_str: &str, unit: &str, units: &UnitsData) -> String {
     let nk = number_to_katakana(num_str);
     let read = units.lookup(unit).map(str::to_string).unwrap_or_default();
+    // カ行で始まる単位 (キロ / カロリー 等) の前では 6 / 8 / 10 / 100 が促音化する
+    // (ロッキロ / ハッキロ / ジュッキロ / ヒャッキロ)。 1 は イチキロ が一般的なので変えない。
+    // (★2026-09-15 精度評価で検出: 「100kg」 → ヒャクキログラム)
+    let nk = if read.starts_with(['カ', 'キ', 'ク', 'ケ', 'コ']) {
+        sokuonize_before_k_unit(&nk)
+    } else {
+        nk
+    };
     format!("{nk}{read}")
+}
+
+/// カ行で始まる単位の前の促音化。
+///
+/// [`sokuonize_last`] と違い **イチ は対象外** (1キロ = イチキロ)、 百の位の
+/// ヒャク / ピャク / ビャク を含む (100キロ = ヒャッキロ、 600キロ = ロッピャッキロ)。
+fn sokuonize_before_k_unit(num_kata: &str) -> String {
+    for (src, dst) in &[
+        ("ロク", "ロッ"),
+        ("ハチ", "ハッ"),
+        ("ジュウ", "ジュッ"),
+        ("ヒャク", "ヒャッ"),
+        ("ピャク", "ピャッ"),
+        ("ビャク", "ビャッ"),
+    ] {
+        if let Some(stripped) = num_kata.strip_suffix(src) {
+            return format!("{stripped}{dst}");
+        }
+    }
+    num_kata.to_string()
 }
 
 /// 数値 + 大数スケール (万/億/兆…) → カタカナ読み
@@ -67,8 +95,26 @@ mod tests {
     fn si_unit_basic() {
         let raw = include_str!("../../tests/fixtures/rules/units.toml");
         let units: UnitsData = parse_toml(raw, "units.toml").unwrap();
-        assert_eq!(si_unit_reading("100", "km", &units), "ヒャクキロメートル");
+        assert_eq!(si_unit_reading("100", "km", &units), "ヒャッキロメートル");
         assert_eq!(si_unit_reading("3", "L", &units), "サンリットル");
+    }
+
+    #[test]
+    fn si_unit_sokuon_before_k_row_unit() {
+        // カ行で始まる単位 (キロ) の前だけ 6 / 8 / 10 / 100 / 百の位 が促音化する。
+        let raw = include_str!("../../tests/fixtures/rules/units.toml");
+        let units: UnitsData = parse_toml(raw, "units.toml").unwrap();
+        assert_eq!(si_unit_reading("6", "km", &units), "ロッキロメートル");
+        assert_eq!(si_unit_reading("8", "km", &units), "ハッキロメートル");
+        assert_eq!(si_unit_reading("10", "km", &units), "ジュッキロメートル");
+        assert_eq!(si_unit_reading("600", "km", &units), "ロッピャッキロメートル");
+        assert_eq!(si_unit_reading("300", "km", &units), "サンビャッキロメートル");
+        // 1 は イチキロ が一般的なので促音化しない。 促音にならない数字もそのまま。
+        assert_eq!(si_unit_reading("1", "km", &units), "イチキロメートル");
+        assert_eq!(si_unit_reading("3", "km", &units), "サンキロメートル");
+        // カ行以外の単位には効かない。
+        assert_eq!(si_unit_reading("6", "L", &units), "ロクリットル");
+        assert_eq!(si_unit_reading("10", "L", &units), "ジュウリットル");
     }
 
     #[test]

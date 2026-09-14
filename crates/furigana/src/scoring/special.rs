@@ -220,7 +220,22 @@ pub fn find_alphabet_ranges(input: &str) -> Vec<Range<usize>> {
             && chars
                 .get(i + 1)
                 .is_some_and(|&(_, n)| is_alphabet_letter(n));
-        if is_alphabet_char(c) || joins_word {
+        // 空白は 英字どうしの間 (Hello World) を繋ぐときだけ range に含める。
+        // 数字に接する空白まで含めると 「2 M3.7」 が 1 つの passthrough に覆われ、
+        // 数値側の読みが負けて 「2 M3。 なな」 になる (★2026-09-15 精度評価で検出)。
+        let is_space = c == ' ' || c == '\t';
+        let space_joins = is_space
+            && i > 0
+            && is_alphabet_letter(chars[i - 1].1)
+            && chars
+                .get(i + 1)
+                .is_some_and(|&(_, n)| is_alphabet_letter(n));
+        let in_range = if is_space {
+            space_joins
+        } else {
+            is_alphabet_char(c)
+        };
+        if in_range || joins_word {
             if start.is_none() {
                 start = Some(idx);
             }
@@ -639,6 +654,22 @@ mod tests {
         assert_eq!(ranges[0], 0..3); // "ABC"
                                      // "の" は 3 bytes (UTF-8)、 「DEF」 は 6..9
         assert_eq!(ranges[1], 6..9);
+    }
+
+    #[test]
+    fn find_alphabet_ranges_splits_space_next_to_digit() {
+        // 数字に接する空白は range を繋がない。 「2 M3.7」 を 1 つの passthrough で
+        // 覆うと数値の読みが負ける (★2026-09-15)。
+        let ranges = find_alphabet_ranges("2 M3.7");
+        // "2" / "M3" / "7" (「.」 は英数でないので range を切る)
+        assert_eq!(ranges, vec![0..1, 2..4, 5..6]);
+    }
+
+    #[test]
+    fn find_alphabet_ranges_keeps_space_between_letters() {
+        // 英字どうしの間の空白は従来どおり 1 range にまとめる。
+        let ranges = find_alphabet_ranges("Hello World");
+        assert_eq!(ranges, vec![0..11]);
     }
 
     #[test]

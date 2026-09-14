@@ -1400,11 +1400,8 @@ mod tests {
         let r = f.analyze("100km");
         assert_eq!(r.tokens.len(), 1, "expected single SI token: {r:?}");
         assert_eq!(r.tokens[0].surface, "100km");
-        assert!(
-            r.tokens[0].reading.contains("ヒャク") && r.tokens[0].reading.contains("キロメートル"),
-            "reading: {}",
-            r.tokens[0].reading,
-        );
+        // 100 + カ行の単位 は促音化する (★2026-09-15: ヒャク → ヒャッ)。
+        assert_eq!(r.tokens[0].reading, "ヒャッキロメートル");
     }
 
     #[test]

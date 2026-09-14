@@ -296,7 +296,8 @@ fn si_unit_basic() {
     let cands = p.candidates_at(&ctx("100km先"), 0);
     let c = find(&cands, "100km").expect("SI unit candidate");
     // 数値部+単位部を通して固定 (順序 「キロメートルヒャク」 等の誤結合を排除)。
-    assert_eq!(c.reading, "ヒャクキロメートル");
+    // 100 + カ行の単位 は促音化する (★2026-09-15: ヒャク → ヒャッ)。
+    assert_eq!(c.reading, "ヒャッキロメートル");
 }
 
 // ─── 記号 ────────────────────────────────────────────────────────────────

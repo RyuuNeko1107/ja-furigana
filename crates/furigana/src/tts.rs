@@ -176,9 +176,33 @@ pub fn filter_tokens_for_tts(tokens: &mut Vec<crate::ReadingToken>, opts: &TtsOp
         })
         .collect();
 
+    // 2.5. チャットの笑いの 「w」 (w / ww / ｗｗｗ)。 日本語の直後に付く w の連なりは
+    //      「ダブリュー」 と読むべき語ではないので落とす。 英字語の続き (LOLww) や、
+    //      直前が無い / 空白の w は落とさない (発言が丸ごと空になるのを避ける)。
+    //      (★2026-09-15 精度評価: 素の VOICEVOX は笑いの w を 98% で 「ダブリュー」 と読む)
+    let laugh: Vec<bool> = (0..tokens.len())
+        .map(|i| {
+            let t = &tokens[i];
+            if t.surface.is_empty()
+                || !t
+                    .surface
+                    .chars()
+                    .all(|c| matches!(c, 'w' | 'W' | 'ｗ' | 'Ｗ'))
+            {
+                return false;
+            }
+            i > 0
+                && tokens[i - 1].surface.chars().last().is_some_and(|c| {
+                    !c.is_whitespace()
+                        && !c.is_ascii_alphanumeric()
+                        && !matches!(c, 'Ａ'..='Ｚ' | 'ａ'..='ｚ' | '０'..='９')
+                })
+        })
+        .collect();
+
     let mut idx = 0;
     tokens.retain(|_| {
-        let keep = !dropped[idx] && !kaomoji_letter[idx];
+        let keep = !dropped[idx] && !kaomoji_letter[idx] && !laugh[idx];
         idx += 1;
         keep
     });
@@ -540,6 +564,25 @@ mod kaomoji_tests {
     fn long_latin_word_is_kept() {
         // 括弧に囲まれていても語なら残す。
         assert_eq!(silenced(&["(", "FFVII", ")", "より"]), vec!["FFVII", "より"]);
+    }
+
+    #[test]
+    fn laughter_w_after_japanese_is_dropped() {
+        // 日本語の直後に付く笑いの w の連なりは読み上げない。
+        assert_eq!(silenced(&["くさ", "www"]), vec!["くさ"]);
+        assert_eq!(silenced(&["それはないだろ", "w"]), vec!["それはないだろ"]);
+        assert_eq!(
+            silenced(&["すごい", "ｗｗｗｗ", "おもしろい"]),
+            vec!["すごい", "おもしろい"]
+        );
+    }
+
+    #[test]
+    fn w_that_is_not_laughter_is_kept() {
+        // 英字語の続き、 w 以外を含む語、 直前が空白の w は落とさない。
+        assert_eq!(silenced(&["LOL", "ww"]), vec!["LOL", "ww"]);
+        assert_eq!(silenced(&["ゲームは", "Wii"]), vec!["ゲームは", "Wii"]);
+        assert_eq!(silenced(&["くさ", " ", "www"]), vec!["くさ", " ", "www"]);
     }
 
     #[test]
