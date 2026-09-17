@@ -37,9 +37,20 @@ impl<'a> DictBridgeProvider<'a> {
     }
 
     fn build_match_context(input: &str, pos: usize, end_pos: usize) -> MatchContext<'_> {
-        let prev = prev_logical_token(input, pos);
-        let next = next_logical_token(input, end_pos);
-        let next2 = next2_logical_token(input, end_pos);
+        let span = same_char_run(input, pos, end_pos);
+        let prev = if span.no_prev {
+            ""
+        } else {
+            prev_logical_token(input, span.start)
+        };
+        let (next, next2) = if span.no_next {
+            ("", "")
+        } else {
+            (
+                next_logical_token(input, span.end),
+                next2_logical_token(input, span.end),
+            )
+        };
         MatchContext::with_all(
             if prev.is_empty() { None } else { Some(prev) },
             if next.is_empty() { None } else { Some(next) },
@@ -162,6 +173,85 @@ impl<'a> DictBridgeProvider<'a> {
     }
 }
 
+/// 同じ字の連続を何文字先まで見るか (これより長い連続は端が見えないものとして扱う)。
+const SAME_CHAR_RUN_SCAN_MAX: usize = 32;
+
+/// 1 字 surface の文脈判定範囲。 [`same_char_run`] の戻り値。
+struct ContextSpan {
+    /// 前文脈を取る位置 (この位置の手前の token が prev)
+    start: usize,
+    /// 後文脈を取る位置 (この位置からの token が next / next2)
+    end: usize,
+    /// 前文脈なしとする
+    no_prev: bool,
+    /// 後文脈なしとする
+    no_next: bool,
+}
+
+/// 1 字 surface (`input[pos..end_pos]`) が **同じ字の連続** の一部なら、 文脈判定に使う
+/// 範囲を連続全体へ広げる (1 字でなければ・連続でなければ元の範囲のまま)。
+///
+/// ## なぜ要るか
+///
+/// `[[kanji]]` block の 「前後が漢字なら音読み」 型 match (例: 海 = default うみ /
+/// `prev_char_type = 漢字` で カイ) は、 強調の繰り返し 「海海海海」 で
+/// **2 文字目以降だけ** 前が漢字 (= 同じ 海) になり、 「うみかいかいかい」 と
+/// 先頭だけ読みが変わっていた。 同じ字の連続は熟語の隣接ではないので、 連続全体を
+/// 1 単位として **外側** の文字で文脈を判定する (= 各字が単独の 海 と同じ読みに揃う)。
+///
+/// 同じ字に面している側を単に 「文脈なし」 にする案は、 連続が単語境界をまたぐ
+/// 「三大大手」 「湯婆婆」 「小田田」 で前の漢字文脈を失って退行した (★2026-09-18 A/B)。
+/// 一方、 連続の後ろの **ひらがな** (= 送り仮名) は連続の最後の字にしか係らないので、
+/// 途中の字には効かせない (「遺言書書いて」 の 1 つ目の 書 が か になるのを防ぐ)。
+/// 「堂堂」 のような正規の重ね語は band 1000 の dict entry が勝つので影響しない。
+///
+/// 連続が [`SAME_CHAR_RUN_SCAN_MAX`] 文字を超えて続く側は、 端を探さず文脈なしとする
+/// (巨大な連続入力で位置ごとに全走査すると O(N²) になるため)。
+fn same_char_run(input: &str, pos: usize, end_pos: usize) -> ContextSpan {
+    let mut span = ContextSpan {
+        start: pos,
+        end: end_pos,
+        no_prev: false,
+        no_next: false,
+    };
+    let mut chars = input[pos..end_pos].chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else {
+        return span;
+    };
+    let mut back = input[..pos].chars().rev().take_while(|&p| p == c);
+    for n in 0.. {
+        if back.next().is_none() {
+            break;
+        }
+        if n >= SAME_CHAR_RUN_SCAN_MAX {
+            span.no_prev = true;
+            break;
+        }
+        span.start -= c.len_utf8();
+    }
+    let mut fwd = input[end_pos..].chars().take_while(|&q| q == c);
+    for n in 0.. {
+        if fwd.next().is_none() {
+            break;
+        }
+        if n >= SAME_CHAR_RUN_SCAN_MAX {
+            span.no_next = true;
+            break;
+        }
+        span.end += c.len_utf8();
+    }
+    // 連続の途中の字: 後ろに続く送り仮名は最後の字のものなので使わない。
+    if span.end != end_pos
+        && input[span.end..]
+            .chars()
+            .next()
+            .is_some_and(crate::kana::is_hiragana_char)
+    {
+        span.no_next = true;
+    }
+    span
+}
+
 impl<'a> CandidateProvider for DictBridgeProvider<'a> {
     fn candidates_at<'b>(
         &'b self,
@@ -243,5 +333,73 @@ mod tests {
         let provider = DictBridgeProvider::new(&dict);
         // 入力に「犬」が無いので候補ゼロ
         assert!(provider.candidates_vec(&ctx("猫"), 0).is_empty());
+    }
+
+    const UMI: &str = "[meta]
+schema_version = \"2\"
+
+[[kanji]]
+char = \"海\"
+default = \"うみ\"
+
+[[kanji.match]]
+prev_char_type = \"漢字\"
+reading = \"カイ\"
+";
+
+    fn readings_at(dict: &Dict, input: &str, pos: usize) -> Vec<String> {
+        DictBridgeProvider::new(dict)
+            .candidates_vec(&ctx(input), pos)
+            .into_iter()
+            .map(|c| c.reading)
+            .collect()
+    }
+
+    /// 同じ字の繰り返しは熟語の隣接ではない: 「海海海」 の 2 字目以降も
+    /// 単独の 海 と同じ文脈 (= 前が漢字でない) で読む。
+    /// (故障モデル: 連続判定を外すと 2 字目以降だけ prev = 海 (漢字) で カイ になる)
+    #[test]
+    fn repeated_same_kanji_reads_like_standalone() {
+        let dict = Dict::from_toml_str(UMI, "t.toml").unwrap();
+        for pos in [0, 3, 6] {
+            assert_eq!(readings_at(&dict, "海海海", pos), vec!["うみ"], "pos {pos}");
+        }
+        // 連続の外側の漢字文脈は効く (日本海 → カイ、 連続全体が 本 の後ろ)
+        assert_eq!(readings_at(&dict, "本海海", 3), vec!["カイ"]);
+        assert_eq!(readings_at(&dict, "本海海", 6), vec!["カイ"]);
+    }
+
+    #[test]
+    fn same_char_run_spans_whole_run() {
+        // 「山海海海川」 の 2 つ目の 海 (byte 6..9): 連続は 3..12
+        let span = same_char_run("山海海海川", 6, 9);
+        assert_eq!((span.start, span.end), (3, 12));
+        assert!(!span.no_prev && !span.no_next);
+        // 連続でない 1 字 / 複数字 surface は範囲そのまま
+        let span = same_char_run("山海川", 3, 6);
+        assert_eq!((span.start, span.end), (3, 6));
+        let span = same_char_run("海海", 0, 6);
+        assert_eq!((span.start, span.end), (0, 6));
+    }
+
+    /// 連続の後ろの送り仮名は最後の字にだけ係る (「遺言書書いて」 の 1 つ目の 書)。
+    #[test]
+    fn same_char_run_drops_okurigana_for_inner_char() {
+        let inner = same_char_run("書書いて", 0, 3);
+        assert!(inner.no_next, "途中の字は送り仮名を見ない");
+        let last = same_char_run("書書いて", 3, 6);
+        assert!(!last.no_next, "最後の字は送り仮名を見る");
+        assert_eq!(last.end, 6);
+    }
+
+    /// 巨大な連続は端を探し切らず文脈なし (O(N²) 回避)。
+    #[test]
+    fn same_char_run_caps_scan_length() {
+        let input = "海".repeat(SAME_CHAR_RUN_SCAN_MAX * 3);
+        let mid = SAME_CHAR_RUN_SCAN_MAX * 3 / 2 * 3;
+        let span = same_char_run(&input, mid, mid + 3);
+        assert!(span.no_prev && span.no_next);
+        let dict = Dict::from_toml_str(UMI, "t.toml").unwrap();
+        assert_eq!(readings_at(&dict, &input, mid), vec!["うみ"]);
     }
 }
