@@ -50,7 +50,10 @@
 //!   bracket strip は Token 変換時に `parse_bracket_notation` が一括処理。
 
 use crate::analyzer::Analyzer;
-use crate::scoring::candidate::{CandidateProvider, RawCandidate, Score, ScoringContext};
+use crate::scoring::candidate::{
+    CandidateProvider, RawCandidate, Score, ScoringContext, BAND_KANJI,
+};
+use crate::scoring::matcher::HIT_WEIGHT_BROAD;
 
 /// band-up 対象の判定: 「CJK 統合漢字範囲のみ」 で 々/〆/ヶ は除外する。
 ///
@@ -95,16 +98,38 @@ fn is_standalone_kana(c: char) -> bool {
         )
 }
 
+/// edge の付帯情報。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct EdgeKind {
+    /// IPADIC 品詞 = 名詞/固有名詞/人名 (accent 推定用、 ADR-0007)
+    is_name: bool,
+    /// 漢字 1 字だけの動詞 token (= Lindera が語幹だけ切り出した形)
+    verb_stem: bool,
+}
+
+/// 1 字動詞語幹として扱わない字。
+///
+/// 得 は名詞 (とく: 「ぺこ得やん」 「得すぎる」) を Lindera が一段動詞 (え) と
+/// 取り違えることが多く、 A/B で改善と退行が拮抗した (★2026-09-18)。
+/// 動詞用法 (得ず / 得ました) は dict の `[[kanji]]` block の送り仮名 literal で扱う。
+const VERB_STEM_EXCLUDED: &[&str] = &["得"];
+
+/// 漢字 1 字だけの surface か。
+fn is_single_kanji(surface: &str) -> bool {
+    let mut chars = surface.chars();
+    matches!((chars.next(), chars.next()), (Some(c), None) if is_real_cjk_ideograph(c))
+}
+
 /// Lindera tokenize 結果を edge 配列で保持する fallback provider。
 ///
 /// construction 時に 1 度だけ tokenize、 以降 `candidates_at` は start 昇順の edge 配列を
 /// 二分探索して位置 lookup (O(log edge_count))。
 #[derive(Debug, Clone, Default)]
 pub struct LinderaFallbackProvider {
-    /// (byte_start, byte_end, reading, is_name) の 4-tuple。
+    /// (byte_start, byte_end, reading, kind) の 4-tuple。
     /// reading は カタカナ (Lindera 由来) または surface fallback。
-    /// is_name は IPADIC 品詞 = 名詞/固有名詞/人名 のとき true (accent 推定用、 ADR-0007)。
-    edges: Vec<(usize, usize, String, bool)>,
+    /// kind は品詞由来の付帯情報 ([`EdgeKind`])。
+    edges: Vec<(usize, usize, String, EdgeKind)>,
 }
 
 impl LinderaFallbackProvider {
@@ -120,7 +145,13 @@ impl LinderaFallbackProvider {
         let tokens = analyzer.tokenize_light(input);
         let mut edges = Vec::with_capacity(tokens.len());
         let mut byte_pos = 0usize;
-        for tok in tokens {
+        let attaches_next: Vec<bool> = tokens
+            .iter()
+            .skip(1)
+            .map(|t| t.attaches_to_verb)
+            .chain(std::iter::once(false))
+            .collect();
+        for (tok, next_attaches) in tokens.into_iter().zip(attaches_next) {
             let surface_len = tok.surface.len();
             // Lindera は空白 / 改行 / 制御文字を token から落とすことがある
             // (例: input に `\n` / `( ・∇・)` の半角 space)。 落ちると byte_pos が
@@ -142,9 +173,21 @@ impl LinderaFallbackProvider {
             let end = byte_pos + surface_len;
             // reading: Lindera details[7] (= カタカナ)、 無ければ surface fallback
             // (= 記号 / 未知語、 reading = surface で 「読まない」 扱い)
-            let is_name = tok.is_person_name;
+            let kind = EdgeKind {
+                is_name: tok.is_person_name,
+                // 送り仮名なしで 1 字になる動詞語幹は一段動詞 (寝る / 出る / 見る) に限られる。
+                // 熟語内の 1 字を動詞と誤判定する例 (逆|走 / 暗|視 / お|得) を避けるため、
+                // 直後が動詞に後接する語で、 直前が漢字・接頭の お/ご でない時だけ。
+                verb_stem: tok.is_ichidan_verb
+                    && next_attaches
+                    && is_single_kanji(&tok.surface)
+                    && !VERB_STEM_EXCLUDED.contains(&tok.surface.as_str())
+                    && !input[..byte_pos].chars().next_back().is_some_and(|c| {
+                        is_real_cjk_ideograph(c) || matches!(c, 'お' | 'ご' | '御')
+                    }),
+            };
             let reading = tok.reading.unwrap_or_else(|| tok.surface.clone());
-            edges.push((byte_pos, end, reading, is_name));
+            edges.push((byte_pos, end, reading, kind));
             byte_pos = end;
         }
         // 末尾に Lindera が落とした空白 / 改行が残る場合も passthrough で補う
@@ -197,7 +240,7 @@ impl LinderaFallbackProvider {
     /// band は元 token と同じ [`Score::lindera`] なので、 既存 path の
     /// `weakest_band` は下がらない。 edge 数は増えるが `edge_count` は
     /// 「少ない方が良い」 軸なので、 必要な時 (= 高 band entry の継続) にだけ選ばれる。
-    fn push_kana_suffix_edges(input: &str, edges: &mut Vec<(usize, usize, String, bool)>) {
+    fn push_kana_suffix_edges(input: &str, edges: &mut Vec<(usize, usize, String, EdgeKind)>) {
         let base: Vec<(usize, usize)> = edges.iter().map(|(s, e, _, _)| (*s, *e)).collect();
         for (start, end) in base {
             let Some(surface) = input.get(start..end) else {
@@ -235,7 +278,12 @@ impl LinderaFallbackProvider {
                 if sub_start == start {
                     continue;
                 }
-                edges.push((sub_start, end, input[sub_start..end].to_string(), false));
+                edges.push((
+                    sub_start,
+                    end,
+                    input[sub_start..end].to_string(),
+                    EdgeKind::default(),
+                ));
             }
         }
     }
@@ -250,7 +298,7 @@ impl LinderaFallbackProvider {
         input: &str,
         start: usize,
         end: usize,
-        edges: &mut Vec<(usize, usize, String, bool)>,
+        edges: &mut Vec<(usize, usize, String, EdgeKind)>,
     ) -> bool {
         if start >= end {
             return true;
@@ -263,7 +311,7 @@ impl LinderaFallbackProvider {
         // 入力全体の読みが空になっていた** (「応援曲個人設定できるんÐな」 → 空文字列。
         // ★2026-09-11 実コーパス 704 万行の走査で検出)。
         // 読めない文字は surface のまま残す方が、 文全体を失うより常に良い。
-        edges.push((start, end, gap.to_string(), false));
+        edges.push((start, end, gap.to_string(), EdgeKind::default()));
         true
     }
 }
@@ -282,7 +330,7 @@ impl CandidateProvider for LinderaFallbackProvider {
         let hi = lo + self.edges[lo..].partition_point(|(start, _, _, _)| *start == pos);
         let found = self.edges[lo..hi]
             .iter()
-            .map(|(start, end, reading, is_name)| {
+            .map(|(start, end, reading, kind)| {
                 let surface = &input[*start..*end];
                 let char_count = surface.chars().count();
                 let length = u8::try_from(char_count).unwrap_or(u8::MAX);
@@ -293,12 +341,20 @@ impl CandidateProvider for LinderaFallbackProvider {
                 // 単漢字 (例: 私) は 50 のまま (= overrides.toml の `[[kanji]]` context
                 // match で制御)、 漢字+okurigana 混在 (例: 来た) も 50 のまま
                 // (= `[[kanji]]` block の `next_char_type` match で declarative 解決)。
-                let score = if char_count >= 2 && surface.chars().all(is_real_cjk_ideograph) {
+                let score = if kind.verb_stem {
+                    // 1 字だけ切り出された動詞 (寝|ん / 出|ん / 見|合わ) は Lindera の
+                    // 活用込みの読み (ネ / デ / ミ) を単漢字 block と同じ band で出す。
+                    // match_hits 1 = [[kanji]] block の broad hit と同点 (列挙順で dict が勝つ)、
+                    // literal hit (= 送り仮名 literal 等、 2) なら dict が勝つ。
+                    // default しか当たらない単漢字 (寝 = シン) には Lindera が勝つ。
+                    Score::new(BAND_KANJI, length, HIT_WEIGHT_BROAD)
+                } else if char_count >= 2 && surface.chars().all(is_real_cjk_ideograph) {
                     Score::lindera_compound(length)
                 } else {
                     Score::lindera(length)
                 };
-                RawCandidate::new(reading.as_str(), *start..*end, score).with_name_flag(*is_name)
+                RawCandidate::new(reading.as_str(), *start..*end, score)
+                    .with_name_flag(kind.is_name)
             });
         out.extend(found);
     }
@@ -507,5 +563,47 @@ mod tests {
             !first.reading.is_empty(),
             "reading should fallback to surface"
         );
+    }
+
+    fn first_band(
+        p: &LinderaFallbackProvider,
+        input: &str,
+        surface: &str,
+    ) -> Option<(u16, String)> {
+        p.candidates_vec(&ctx(input), 0)
+            .into_iter()
+            .find(|c| c.surface == surface)
+            .map(|c| (c.score.band, c.reading))
+    }
+
+    /// 1 字だけ切り出された一段動詞 (寝|ん) は、 活用込みの読みを単漢字 band で出す。
+    /// (故障モデル: 条件を外すと band 50 のままで、 単漢字 default (寝 = シン) に負ける)
+    #[test]
+    fn single_kanji_ichidan_verb_stem_gets_kanji_band() {
+        let a = analyzer();
+        let p = LinderaFallbackProvider::new(&a, "寝んな");
+        assert_eq!(
+            first_band(&p, "寝んな", "寝"),
+            Some((BAND_KANJI, "ネ".to_string()))
+        );
+    }
+
+    /// 熟語内の 1 字 (逆|走) / 名詞に付く断定 (免停です) / 除外字 (得) は格上げしない。
+    #[test]
+    fn verb_stem_promotion_is_narrow() {
+        let a = analyzer();
+        for input in ["走ってる", "得すぎる", "お得だね"] {
+            let p = LinderaFallbackProvider::new(&a, input);
+            for c in p.candidates_vec(&ctx(input), 0) {
+                assert_ne!(c.score.band, BAND_KANJI, "{input}: {c:?}");
+            }
+        }
+        // 直前が漢字 (暗|視) の 1 字は格上げしない
+        let input = "暗視ない";
+        let p = LinderaFallbackProvider::new(&a, input);
+        let pos = "暗".len();
+        for c in p.candidates_vec(&ctx(input), pos) {
+            assert_ne!(c.score.band, BAND_KANJI, "{input}: {c:?}");
+        }
     }
 }

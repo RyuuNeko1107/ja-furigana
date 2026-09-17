@@ -160,6 +160,8 @@ impl Analyzer {
                 reading: None,
                 is_proper_noun: false,
                 is_person_name: false,
+                is_ichidan_verb: false,
+                attaches_to_verb: false,
             },
             |surface, details| {
                 let is_proper_noun =
@@ -169,6 +171,17 @@ impl Analyzer {
                     reading: reading_of(details),
                     is_proper_noun,
                     is_person_name: is_proper_noun && detail_at(details, 2) == Some("人名"),
+                    is_ichidan_verb: details.first() == Some(&"動詞")
+                        && detail_at(details, 1) == Some("自立")
+                        && detail_at(details, 4).is_some_and(|t| t.starts_with("一段")),
+                    attaches_to_verb: match (details.first().copied(), detail_at(details, 1)) {
+                        // 断定 (だ / です) は名詞にも付くので含めない
+                        (Some("助動詞"), _) => !detail_at(details, 4)
+                            .is_some_and(|t| t == "特殊・ダ" || t == "特殊・デス"),
+                        (Some("助詞"), Some("接続助詞")) => true,
+                        (Some("動詞"), Some("非自立")) => true,
+                        _ => false,
+                    },
                 }
             },
         )
@@ -230,6 +243,10 @@ pub(crate) struct LightMorph {
     pub is_proper_noun: bool,
     /// 品詞 = 名詞 / 固有名詞 / 人名
     pub is_person_name: bool,
+    /// 品詞 = 動詞/自立 かつ 活用型 = 一段
+    pub is_ichidan_verb: bool,
+    /// 動詞に後接する語 (助動詞 / 接続助詞 / 非自立動詞)
+    pub attaches_to_verb: bool,
 }
 
 /// details[i] を返す。 `*` と空文字は `None` に正規化する。
