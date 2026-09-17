@@ -62,7 +62,7 @@ use crate::scoring::matcher::HIT_WEIGHT_BROAD;
 /// 横取りすると path 構造が壊れる (例: 我々 → 1 token band 150 vs dict 我 +
 /// 々 odoriji band 100 で前者が勝ってしまう)。 そのため band-up 判定では
 /// real CJK ideograph のみ対象とする。
-fn is_real_cjk_ideograph(c: char) -> bool {
+pub(crate) fn is_real_cjk_ideograph(c: char) -> bool {
     matches!(
         c,
         '\u{3400}'..='\u{4DBF}' |    // CJK 拡張 A

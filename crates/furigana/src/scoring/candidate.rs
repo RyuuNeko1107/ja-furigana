@@ -267,6 +267,8 @@ impl Candidate {
 pub(crate) struct RawCandidate<'a> {
     /// IPADIC 由来の連接情報 (コスト lattice engine 用、 それ以外は `None`)
     pub edge: Option<EdgeCost>,
+    /// dict の単漢字 default で読みを上書きしない (= IPADIC の活用込みの読みを守る)
+    pub keep_reading: bool,
     /// reading 文字列 (カタカナ等)
     pub reading: Cow<'a, str>,
     /// input text 上の byte range
@@ -297,7 +299,15 @@ impl<'a> RawCandidate<'a> {
             score,
             is_name: false,
             edge: None,
+            keep_reading: false,
         }
+    }
+
+    /// dict 単漢字 default による読み上書きを禁じる (一段動詞語幹など)。
+    #[must_use]
+    pub fn keep_reading(mut self) -> Self {
+        self.keep_reading = true;
+        self
     }
 
     /// IPADIC 連接情報を付けて返す。
@@ -342,6 +352,7 @@ impl From<Candidate> for RawCandidate<'static> {
             score: c.score,
             is_name: c.is_name,
             edge: None,
+            keep_reading: false,
         }
     }
 }
