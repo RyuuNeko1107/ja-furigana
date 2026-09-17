@@ -18,7 +18,7 @@
 //! - 同 path score の場合は **第一発見** が勝つ (TOML 出現順 / provider 順依存)
 
 use crate::scoring::candidate::{
-    Candidate, CandidateProvider, RawCandidate, Score, ScoringContext,
+    Candidate, CandidateProvider, RawCandidate, Score, ScoringContext, Solver,
 };
 use std::cmp::Ordering;
 
@@ -106,6 +106,10 @@ pub fn solve_path<'a>(
     ctx: &ScoringContext<'a>,
     providers: &[&'a dyn CandidateProvider],
 ) -> Vec<Candidate> {
+    if let Solver::Cost { analyzer, noun_ids } = ctx.solver {
+        return crate::scoring::lattice::solve_path_cost(ctx, providers, analyzer, noun_ids);
+    }
+
     let n = ctx.input.len();
     if n == 0 {
         return Vec::new();
@@ -251,7 +255,7 @@ mod tests {
 
     fn ctx(input: &str) -> ScoringContext<'_> {
         let boundary = Box::leak(Box::new(BoundaryAnalysis::empty()));
-        ScoringContext { input, boundary }
+        ScoringContext::new(input, boundary)
     }
 
     impl CandidateProvider for DictProvider {

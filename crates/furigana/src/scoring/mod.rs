@@ -43,6 +43,7 @@ pub mod dict_bridge;
 pub mod engine;
 pub mod format;
 pub mod inspect;
+pub mod lattice;
 pub mod lindera_fallback;
 pub mod matcher;
 pub mod names;

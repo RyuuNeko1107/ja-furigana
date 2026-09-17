@@ -24,6 +24,34 @@ use std::ops::Range;
 pub struct ScoringContext<'a> {
     pub input: &'a str,
     pub boundary: &'a BoundaryAnalysis,
+    /// path 選択方式 (既定 = band lexicographic、 ADR-0011 の cost lattice は opt-in)
+    pub solver: Solver<'a>,
+}
+
+/// path 選択方式。
+#[derive(Default, Clone, Copy)]
+pub enum Solver<'a> {
+    /// band / edge_count / match_hits の lexicographic 比較 (0.1.0 以来の既定)
+    #[default]
+    Band,
+    /// IPADIC の語コスト + 連接コストで最小コスト path を選ぶ (ADR-0011)
+    Cost {
+        analyzer: &'a crate::analyzer::Analyzer,
+        /// dict 候補に割り当てる連接 id
+        noun_ids: (u16, u16),
+    },
+}
+
+impl<'a> ScoringContext<'a> {
+    /// 既定 (band) の context を作る。
+    #[must_use]
+    pub fn new(input: &'a str, boundary: &'a BoundaryAnalysis) -> Self {
+        Self {
+            input,
+            boundary,
+            solver: Solver::Band,
+        }
+    }
 }
 
 // ─── band 値定数 ─────────────────────────────────────────────────────────────
@@ -237,6 +265,8 @@ impl Candidate {
 /// [`Self::into_candidate`] で [`Candidate`] にする。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawCandidate<'a> {
+    /// IPADIC 由来の連接情報 (コスト lattice engine 用、 それ以外は `None`)
+    pub edge: Option<EdgeCost>,
     /// reading 文字列 (カタカナ等)
     pub reading: Cow<'a, str>,
     /// input text 上の byte range
@@ -247,6 +277,17 @@ pub(crate) struct RawCandidate<'a> {
     pub is_name: bool,
 }
 
+/// IPADIC 単語の連接情報 (コスト lattice engine 用)。
+///
+/// `word_cost` は IPADIC の語コスト、 `left` / `right` は連接表の id。
+/// dict 由来の候補は id を持たないので名詞相当の id を割り当てる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EdgeCost {
+    pub word_cost: i32,
+    pub left: u16,
+    pub right: u16,
+}
+
 impl<'a> RawCandidate<'a> {
     #[must_use]
     pub fn new(reading: impl Into<Cow<'a, str>>, range: Range<usize>, score: Score) -> Self {
@@ -255,7 +296,15 @@ impl<'a> RawCandidate<'a> {
             range,
             score,
             is_name: false,
+            edge: None,
         }
+    }
+
+    /// IPADIC 連接情報を付けて返す。
+    #[must_use]
+    pub fn with_edge_cost(mut self, edge: EdgeCost) -> Self {
+        self.edge = Some(edge);
+        self
     }
 
     /// 人名 flag を立てて返す (builder 風、 ADR-0007)。
@@ -292,6 +341,7 @@ impl From<Candidate> for RawCandidate<'static> {
             range: c.range,
             score: c.score,
             is_name: c.is_name,
+            edge: None,
         }
     }
 }

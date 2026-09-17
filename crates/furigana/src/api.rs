@@ -55,6 +55,8 @@ pub struct Furigana {
     /// accent を推定し `estimated: true` で埋める。 読み出力 (`to_hiragana` 等) には
     /// 一切影響しない (accent_phrases のみ)。
     estimate_accent: bool,
+    /// コスト lattice engine (ADR-0011、 実験中の opt-in)
+    cost_engine: bool,
 }
 
 impl Furigana {
@@ -122,6 +124,7 @@ impl Furigana {
             &self.loanwords,
             self.analyzer(),
             self.estimate_accent,
+            self.cost_engine,
         )
     }
 
@@ -409,6 +412,7 @@ pub struct FuriganaBuilder {
     overrides_files: Vec<PathBuf>,
     extra_entries: Vec<(String, String)>,
     estimate_accent: bool,
+    cost_engine: bool,
 }
 
 impl FuriganaBuilder {
@@ -464,6 +468,16 @@ impl FuriganaBuilder {
     #[must_use]
     pub fn estimate_accent(mut self, enabled: bool) -> Self {
         self.estimate_accent = enabled;
+        self
+    }
+
+    /// コスト lattice engine (ADR-0011) を使う (実験中の opt-in)。
+    ///
+    /// IPADIC の語コスト + 連接コストと dict 候補を 1 本の lattice に並べ、
+    /// コスト最小 path を選ぶ。 環境変数 `FURIGANA_COST_ENGINE=1` でも有効になる。
+    #[must_use]
+    pub fn cost_engine(mut self, enabled: bool) -> Self {
+        self.cost_engine = enabled;
         self
     }
 
@@ -530,6 +544,9 @@ impl FuriganaBuilder {
             number_provider,
             loanwords: Arc::new(loanwords_map),
             estimate_accent: self.estimate_accent,
+            // 実験中の cost lattice engine (ADR-0011)。 環境変数で切り替えて A/B する。
+            cost_engine: self.cost_engine
+                || std::env::var("FURIGANA_COST_ENGINE").is_ok_and(|v| v == "1"),
         })
     }
 }

@@ -287,7 +287,7 @@ mod tests {
 
     fn ctx(input: &str) -> ScoringContext<'_> {
         let boundary = Box::leak(Box::new(BoundaryAnalysis::empty()));
-        ScoringContext { input, boundary }
+        ScoringContext::new(input, boundary)
     }
 
     /// dedup 契約: 1 字 surface が rich entry にある時、emit_entries が char_emitted を

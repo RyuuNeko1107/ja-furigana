@@ -456,7 +456,7 @@ mod tests {
 
     fn ctx(input: &str) -> ScoringContext<'_> {
         let boundary = Box::leak(Box::new(BoundaryAnalysis::empty()));
-        ScoringContext { input, boundary }
+        ScoringContext::new(input, boundary)
     }
 
     // (is_emoji_char の unit test は crate::char_class 側に移動)

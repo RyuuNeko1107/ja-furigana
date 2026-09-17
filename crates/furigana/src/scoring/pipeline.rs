@@ -26,8 +26,9 @@ use crate::scoring::analyze::{
     analyze as run_analyze, analyze_tokens as run_analyze_tokens, AnalyzeResult, Token,
 };
 use crate::scoring::boundary::BoundaryAnalysis;
-use crate::scoring::candidate::{CandidateProvider, ScoringContext};
+use crate::scoring::candidate::{CandidateProvider, ScoringContext, Solver};
 use crate::scoring::dict_bridge::DictBridgeProvider;
+use crate::scoring::lattice::IpadicLatticeProvider;
 use crate::scoring::lindera_fallback::LinderaFallbackProvider;
 use crate::scoring::numbers::NumberCandidateProvider;
 use crate::scoring::odoriji::OdorijiProvider;
@@ -46,6 +47,8 @@ pub struct Pipeline<'a> {
     number_provider: &'a NumberCandidateProvider,
     loanwords: &'a Arc<HashMap<String, String>>,
     analyzer: &'a Analyzer,
+    /// コスト lattice engine (ADR-0011) の opt-in flag。
+    cost_engine: bool,
     /// rule-based accent 推定の opt-in flag (ADR-0007)。 post-pass 適用後に
     /// [`crate::scoring::accent_estimate::estimate`] を走らせるかどうか。
     estimate_accent: bool,
@@ -59,6 +62,7 @@ impl<'a> Pipeline<'a> {
         loanwords: &'a Arc<HashMap<String, String>>,
         analyzer: &'a Analyzer,
         estimate_accent: bool,
+        cost_engine: bool,
     ) -> Self {
         Self {
             dict,
@@ -66,6 +70,7 @@ impl<'a> Pipeline<'a> {
             loanwords,
             analyzer,
             estimate_accent,
+            cost_engine,
         }
     }
 
@@ -116,21 +121,35 @@ impl<'a> Pipeline<'a> {
         );
         let dict_bridge = DictBridgeProvider::new(self.dict);
         let odoriji = OdorijiProvider::new();
-        let lindera = LinderaFallbackProvider::new(self.analyzer, input);
+        // 形態素 layer: 既定は Lindera の最良解 1 本、 cost engine では IPADIC lattice 全体
+        // (ADR-0011)。 他の provider と post-pass は共通。
+        let lindera =
+            (!self.cost_engine).then(|| LinderaFallbackProvider::new(self.analyzer, input));
+        let lattice = self
+            .cost_engine
+            .then(|| IpadicLatticeProvider::new(self.analyzer, input));
+        let morph: &dyn CandidateProvider = match (&lindera, &lattice) {
+            (Some(l), _) => l,
+            (_, Some(l)) => l,
+            _ => unreachable!("morph provider is always built"),
+        };
         let providers: [&dyn CandidateProvider; 6] = [
             &protect,
             &alphabet,
             &dict_bridge,
             self.number_provider,
             &odoriji,
-            &lindera,
+            morph,
         ];
 
         let boundary = BoundaryAnalysis::analyze(input);
-        let ctx = ScoringContext {
-            input,
-            boundary: &boundary,
-        };
+        let mut ctx = ScoringContext::new(input, &boundary);
+        if let Some(l) = &lattice {
+            ctx.solver = Solver::Cost {
+                analyzer: self.analyzer,
+                noun_ids: l.noun_ids(),
+            };
+        }
         run(&ctx, &providers)
     }
 }

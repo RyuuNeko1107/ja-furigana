@@ -9,6 +9,7 @@
 
 use crate::error::{FuriganaError, Result};
 use lindera::dictionary::load_dictionary;
+use lindera::dictionary::Dictionary;
 use lindera::dictionary::Lattice;
 use lindera::mode::Mode;
 use lindera::segmenter::Segmenter;
@@ -144,6 +145,19 @@ impl Analyzer {
                 base_form: get_detail(FIELD_BASE_FORM),
             }
         })
+    }
+
+    /// IPADIC 辞書本体 (単語コスト / 連接コスト / 品詞) を借りて `f` を実行する。
+    ///
+    /// コスト lattice engine ([`crate::scoring::lattice`]) が単語列挙と連接コストに使う。
+    /// Tokenizer と同じ Mutex 下で借りるので解析中は tokenize と直列化されるが、
+    /// 元々 tokenize も同じ lock を取るので 1 解析あたりの lock 回数は変わらない。
+    pub(crate) fn with_dictionary<R>(&self, f: impl FnOnce(&Dictionary) -> R) -> R {
+        let guard = self.tokenizer.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("Tokenizer mutex poisoned; recovering lock and continuing");
+            poisoned.into_inner()
+        });
+        f(&guard.tokenizer.segmenter.dictionary)
     }
 
     /// crate 内部用の軽量 tokenize: surface / reading / 固有名詞判定だけを返す。

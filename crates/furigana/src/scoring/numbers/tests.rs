@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 fn ctx(input: &str) -> ScoringContext<'_> {
     let boundary = Box::leak(Box::new(BoundaryAnalysis::empty()));
-    ScoringContext { input, boundary }
+    ScoringContext::new(input, boundary)
 }
 
 fn rules() -> RulesData {

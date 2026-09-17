@@ -208,11 +208,11 @@ mod tests {
 
     fn ctx(input: &str) -> ScoringContext<'_> {
         let boundary = Box::leak(Box::new(BoundaryAnalysis::empty()));
-        ScoringContext { input, boundary }
+        ScoringContext::new(input, boundary)
     }
 
     fn ctx_with_boundary<'a>(input: &'a str, boundary: &'a BoundaryAnalysis) -> ScoringContext<'a> {
-        ScoringContext { input, boundary }
+        ScoringContext::new(input, boundary)
     }
 
     /// dummy provider: 指定 surface→reading mapping を 全位置で試行
