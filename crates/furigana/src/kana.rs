@@ -401,16 +401,41 @@ pub fn normalize_text(s: &str, compat: &CompatData) -> String {
 /// しか採らず `廿 → 二` と十を落としていた)。 1 文字が複数文字に展開されても、
 /// `normalize_text_aligned` の alignment は unit 単位 (= 原文 1 文字 ↔ 正規化断片) で
 /// 扱うため surface 保持に影響しない (`㍻ → 平成` と同じ扱い)。
-fn normalize_char_piece(ch: char, compat: &CompatData) -> String {
-    let nfkc: String = ch.to_string().nfkc().collect();
+/// 結果は `out` へ直接 push する (= 戻り値 `String` を作らない)。
+///
+/// 旧実装は 1 文字あたり `ch.to_string()` / NFKC collect / `String::with_capacity` /
+/// compat lookup 用の `c.to_string()` / NFC collect で **5 回前後の確保**が走っていた。
+/// これが [`normalize_text_aligned`] から入力 1 文字ごとに呼ばれるため、 通常の
+/// 日本語入力でも文字数 × 5 の確保が解析のたびに乗っていた。
+///
+/// 通常の文字 (= NFKC で変化せず compat にも無い) は **確保ゼロでそのまま push** する。
+/// 単一文字が NFKC で不変なら合成の余地が無いので NFC でも不変 = 旧実装と完全に等価。
+/// 変換が要る文字だけ従来どおりの経路に落とす。
+fn normalize_char_piece_into(ch: char, compat: &CompatData, out: &mut String) {
+    // compat lookup の key は 1 文字。 スタック上の buffer から &str を作れば確保不要。
+    let mut buf = [0u8; 4];
+    let ch_str: &str = ch.encode_utf8(&mut buf);
+
+    // fast path: NFKC が 「自分自身 1 文字」 かつ compat 未登録
+    let mut nfkc_iter = std::iter::once(ch).nfkc();
+    if let Some(first) = nfkc_iter.next() {
+        if first == ch && nfkc_iter.next().is_none() && compat.lookup(ch_str).is_none() {
+            out.push(ch);
+            return;
+        }
+    }
+
+    // slow path: NFKC → compat 置換 → NFC (挙動は旧実装と同一)
+    let nfkc: String = std::iter::once(ch).nfkc().collect();
     let mut replaced = String::with_capacity(nfkc.len());
     for c in nfkc.chars() {
-        match compat.lookup(&c.to_string()) {
+        let mut cbuf = [0u8; 4];
+        match compat.lookup(c.encode_utf8(&mut cbuf)) {
             Some(canonical) => replaced.push_str(canonical),
             None => replaced.push(c),
         }
     }
-    replaced.nfc().collect()
+    out.extend(replaced.nfc());
 }
 
 /// 正規化テキスト + 原文への char 単位 alignment。
@@ -474,7 +499,7 @@ impl NormalizedText {
 /// テキストを正規化しつつ、 原文 surface へ戻すための alignment を保持する。
 ///
 /// 異体字セレクタ (IVS / VS) は除去して直前 unit の原文範囲に併合 (= norm へは寄与
-/// しない)。 それ以外は 1 文字ごとに [`normalize_char_piece`] を適用し、 原文 1 文字 ↔
+/// しない)。 それ以外は 1 文字ごとに [`normalize_char_piece_into`] を適用し、 原文 1 文字 ↔
 /// 正規化断片 1 つの unit を作る。
 #[must_use]
 pub(crate) fn normalize_text_aligned(s: &str, compat: &CompatData) -> NormalizedText {
@@ -496,7 +521,7 @@ pub(crate) fn normalize_text_aligned(s: &str, compat: &CompatData) -> Normalized
             continue;
         }
         let norm_start = text.len();
-        text.push_str(&normalize_char_piece(ch, compat));
+        normalize_char_piece_into(ch, compat, &mut text);
         units.push(NormUnit {
             norm_start,
             orig: orig_off..orig_end,

@@ -26,6 +26,18 @@
 - 解析のたびに SI 単位記号の `HashSet` を作り直していたのを、 provider 構築時の
   1 回に変更 (`Arc` 共有)。 単体では計測ノイズに埋もれる規模。
 
+- **入力正規化の確保を削減**。 `normalize_char_piece` は 1 文字あたり
+  `ch.to_string()` / NFKC collect / `String::with_capacity` / compat lookup 用の
+  `c.to_string()` / NFC collect と **5 回前後の確保**を行い、 これが
+  `normalize_text_aligned` から **入力 1 文字ごと**に呼ばれていた (= 解析のたびに
+  文字数 × 5 の確保)。 NFKC で変化せず compat にも無い文字 (= 通常の日本語のほぼ全て)
+  は確保ゼロでそのまま push する fast path を追加し、 compat lookup の key も
+  `char::encode_utf8` のスタック buffer に変更した。 単一文字が NFKC で不変なら
+  合成の余地が無いため NFC でも不変で、 **出力は完全に同一**
+  (corpus 11,057 件 pass、 髙田 / 廿日 / ①番 / ㍻元年 の実地確認済)。
+  ※速度の実測値は計測機の負荷 (同一バイナリの連続実行で ±50% 振れる状態) により
+  取得できていない。 確保の削減は構造上確実だが、 改善幅は未測定。
+
 - **candidate 収集の `Vec` 確保を削減** (実文で 5〜10%)。 `CandidateProvider` は
   byte 位置ごとに `Vec<Candidate>` を新規確保して返していたため、 「入力 byte 数 ×
   provider 数」 の Vec 確保と、 その伸長に伴う再確保が走っていた。 trait を

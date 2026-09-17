@@ -40,8 +40,28 @@ const HOT: &str = "御飯と御茶を大きく三つ小さく天から一つ御�
 /// bucket 1 の字ばかり (同程度の byte 数)。
 const COLD: &str = "曖昧模糊たる薔薇窯変釉薬瑠璃硝子燐寸蝋燭絨毯襖障子。";
 
+/// `estimate_accent` を有効にした版 (= 本番 wrapper と同じ設定、 ADR-0007)。
+///
+/// bench の既定は opt-in が off なので accent 推定コストが計測に入らない。
+/// 本番 (furigana-api wrapper 2.1.0 以降) は常時 on なので、 その差分も測る。
+fn build_with_accent() -> Furigana {
+    let (core, rules) = (
+        std::env::var("FURIGANA_BENCH_CORE").expect("FURIGANA_BENCH_CORE"),
+        std::env::var("FURIGANA_BENCH_RULES").expect("FURIGANA_BENCH_RULES"),
+    );
+    let f = Furigana::builder()
+        .rules_dir(&rules)
+        .core_dict_dir(&core)
+        .estimate_accent(true)
+        .build()
+        .expect("build with real dict (accent)");
+    f.preload().expect("preload");
+    f
+}
+
 fn bench_share(c: &mut Criterion) {
     let f = build();
+    let f_accent = build_with_accent();
     let analyzer = Analyzer::new().expect("analyzer");
 
     let mut g = c.benchmark_group("lindera_share");
@@ -49,8 +69,18 @@ fn bench_share(c: &mut Criterion) {
         g.bench_with_input(BenchmarkId::new("lindera_only", label), text, |b, t| {
             b.iter(|| black_box(analyzer.tokenize(t)));
         });
+        // solve_path + post-pass まで (= 出力整形を含まない中間段)。
+        // to_ruby との差分が 「整形コスト」、 lindera_only との差分が
+        // 「DP + post-pass コスト」 になる。
+        g.bench_with_input(BenchmarkId::new("tokenize", label), text, |b, t| {
+            b.iter(|| black_box(f.tokenize(t)));
+        });
         g.bench_with_input(BenchmarkId::new("to_ruby", label), text, |b, t| {
             b.iter(|| black_box(f.to_ruby(t)));
+        });
+        // 本番と同じ estimate_accent = true の経路。 to_ruby との差分が accent 推定コスト。
+        g.bench_with_input(BenchmarkId::new("to_ruby_accent", label), text, |b, t| {
+            b.iter(|| black_box(f_accent.to_ruby(t)));
         });
     }
     g.finish();
