@@ -193,7 +193,9 @@ impl Analyzer {
                         (Some("助動詞"), _) => !detail_at(details, 4)
                             .is_some_and(|t| t == "特殊・ダ" || t == "特殊・デス"),
                         (Some("助詞"), Some("接続助詞")) => true,
-                        (Some("動詞"), Some("非自立")) => true,
+                        // 動詞が続く形 = 複合動詞の前半 (見終わる / 出とる / 寝落ちる)。
+                        // 自立・非自立は問わない (西日本の 「とる」 は IPADIC では自立動詞)
+                        (Some("動詞"), _) => true,
                         _ => false,
                     },
                 }
