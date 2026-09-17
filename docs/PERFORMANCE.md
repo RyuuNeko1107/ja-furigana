@@ -1,5 +1,41 @@
 # エンジン性能 (furigana 0.4.3)
 
+## 0. 性能目標 (2026-09-18 決定)
+
+精度を優先するが、 読み上げ BOT / 公開 API の hot path なので **処理量の下限** を決め、
+精度改善はその予算の範囲で行う。
+
+| 種別 | 基準 |
+|---|---|
+| **下限** (割ったら不可) | 実コメント行 (平均 30 B 前後) を 1 スレッドで **10,000 行/秒 以上** |
+| 長文 | 1,000 文字の入力 1 回を **5 ms 以内** |
+| スケーリング | 入力長に対して線形 (位置ごとに入力全体・候補全体を走査する O(N²) を入れない) |
+| **1 変更あたり** | 実コーパス A/B で処理時間 **+10% 以内**。 超える場合は精度の利得と並べて判断する |
+
+2026-09-18 時点の実測は約 57,000 行/秒 (下限の約 5.7 倍)。 この差が精度改善に使える予算。
+
+### 計測方法 (A/B)
+
+criterion はこの開発機でノイズ底が ±5〜8% あり (§2)、 数 % の変化を判定できない。
+lib 変更の判定は次の方法に固定する:
+
+1. 変更前の git ref と作業ツリーで、 それぞれ一括読み変換ツールをビルドする
+2. 実コメント 30 万行 (漢字を含む行を seed 固定で無作為抽出) を **両版交互に 3 回** 流す
+3. 各版の **最小時間** で比較する (バックグラウンド負荷の影響を受けにくい)
+4. 出力差分を全件出し、 改善 / 退行を目視で分類する
+
+メンテナ環境ではこれを 1 コマンドにしている (`stream-comments/scripts/lib_ab.py run --base <ref>`、
+非公開ツール)。 確保量の比較が要る時は counting allocator 付きの一時 example で
+alloc 回数 / bytes と出力 hash を併記する (§2)。
+
+### 判定の実例
+
+| 変更 | 時間 | 採否 |
+|---|---|---|
+| Lindera n-best の次点分割を edge に追加 | **約 5 倍** | 不採用 (精度も改善と退行が拮抗) |
+| 同字連続の文脈判定 + 1 字一段動詞語幹 | +0.2% | 採用 |
+| 確保削減 (Lattice 使い回し / 内部候補型) | -15〜20% | 採用 |
+
 実測日: 2026-09-17 (lib latency は最適化後に再計測) / 実測環境: Windows 11 Home (10.0.26200)、 release build、
 dict = ja-furigana-dict `1f3f5105` (jukugo 22,936 + unihan 43,446 = **66,382 entries**)
 
@@ -59,11 +95,13 @@ dict = ja-furigana-dict `1f3f5105` (jukugo 22,936 + unihan 43,446 = **66,382 ent
 candidate 収集バッファを使い回す前は 3,089 allocs / 490 KiB だった (= 位置ごとの
 `Vec` 確保と伸長時の再確保)。
 
-残りの主因は投機的に生成する `Candidate` の `surface` / `reading` の `String` clone。
-`surface` は常に `input[range]` と同一で本来不要だが、 `AnalyzeResult.candidates` が
-0.1.0 で freeze された public field のため、 `Candidate` から field を落とすことも
-lifetime を付けて借用化することも **破壊的変更**になる。 手を付けるなら
-`candidates` の型を見直す節目 (0.5.0 等) で。
+投機的に生成する `Candidate` の `surface` / `reading` の `String` clone は、
+2026-09-18 に **公開 API を変えずに** 解消した: provider → Viterbi 間を内部型
+`RawCandidate` (surface なし、 reading は借用) にし、 公開型 `Candidate` へは
+採択 path と `analyze()` の `candidates` だけ変換する (provider trait は crate 内部なので非破壊)。
+あわせて Lindera の `Lattice` を使い回し (短文 1 回の確保の最大項だった)、
+pipeline 内部の形態素解析は品詞・活用の `String` を作らない軽量版にした。
+実コメント行で **allocs -35〜43% / bytes -21〜39%**、 出力は完全に同一。
 
 ### 計測上の注意
 
@@ -93,6 +131,9 @@ lifetime を付けて借用化することも **破壊的変更**になる。 �
   一致する連続区間を `partition_point` 2 回で取る方式に変更
   (`Dict::rich_matching_prefix`)。 列挙順・候補集合ともに不変、
   corpus 11,057 件 / lib test 600 件 pass。
+
+- **2026-09-18: 1 回あたりの確保を 35〜43% 削減** (§2 allocation churn)。
+  Lindera fallback の位置 lookup も全 edge 走査から二分探索に変更 (長い入力での O(N²) 除去)。
 
 辞書の entry 数そのものより、 **先頭文字 bucket の偏り**が効く構造だった。
 しかもこの偏りは辞書改善の vein (御X prefix / 数詞+助数詞 / 姓・地名 suffix) が
@@ -139,6 +180,6 @@ $peak=0; while(-not $p.HasExited){ $p.Refresh(); if($p.WorkingSet64 -gt $peak){$
 ## 6. 未計測 / TODO
 
 - ~~criterion bench の再実行 (現行 0.4.3 / 66k entry での更新値)~~ → 2026-09-17 実施 (§2)。
-- `Candidate` の `String` clone 削減 (alloc 7.4 回/byte、 §2 参照)。 provider が
-  `&mut Vec` へ push する形に変えて候補バッファを再利用する案。
+- ~~`Candidate` の `String` clone 削減~~ → 2026-09-18 実施 (§2)。
+- 残る確保の大物は Lindera 内部 (`Lattice::set_text` の一時配列、 `Token::details` の `Vec`) で upstream 側。
 - HTTP serve 経由の p50/p99 latency (常駐時のスループット)。
