@@ -9,7 +9,29 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.3.1` (2026-08-12、 crates.io 4 crate publish = ja-furigana / ja-furigana-voicevox /
+- **LIVE**: `0.4.5` (2026-09-18、 crates.io 4 crate publish + tag v0.4.5)。 内容 =
+  **誤読 fix 2 件 + 確保 35〜43% 削減 + cost lattice engine (opt-in 実験)**。
+  破壊的変更なし、 既定の解析経路の出力は fix 2 件ぶんだけ変化。
+  - 同じ漢字の繰り返し (海海海 → うみうみうみ): `[[kanji]]` の 「前が漢字なら音」 型 match が
+    2 文字目以降だけ効いていた。 連続全体を 1 単位として外側の文字で判定する
+    (`dict_bridge::same_char_run`)。 A/B 478 行変化、 ほぼ全て改善
+  - 1 字だけ切り出された一段動詞 (寝んな → ねんな): Lindera の活用込みの読みを band 100 へ格上げ
+    (一段・自立 / 直後が助動詞 (断定除く)・接続助詞・非自立動詞 / 直前が漢字・お・ご でない / 得 除外)
+  - 性能: Lattice 使い回し + 内部候補型 `RawCandidate` (公開 API 不変) 等で確保 -35〜43%
+  - **cost lattice engine** (`FURIGANA_COST_ENGINE=1`、 ADR-0011): IPADIC の語コスト + 連接コストと
+    dict 候補を 1 本の lattice で解く。 **実験中** (corpus 98.4% / 43,000 行/秒、 既定は band engine)
+  - `docs/PERFORMANCE.md` に性能目標 (下限 10,000 行/秒、 1 変更 +10% 以内) と A/B 手順を明記
+  - **本番 wrapper 未反映** (次: `cargo update -p ja-furigana` → wrapper bump → debian デプロイ)
+- (履歴) `0.4.4` (2026-09-17、 crates.io 4 crate publish + GitHub release v0.4.4 =
+  5 platform binary + Docker)。 内容 = **性能改善 3 件** (実文 約 1.7 倍速: long 287→200µs /
+  medium 85→52µs) + 促音化 fix。 破壊的変更なし、 **公開 API も出力も不変** (corpus 11,058 件 100%)。
+  最大の効き所は `DictBridgeProvider` の bucket **全件走査** 除去 (= sort 済み bucket に
+  `partition_point` 2 回で先頭 2 文字の連続区間を取る `Dict::rich_matching_prefix`)。
+  「御」 713 件 / 「大」 358 件 のような **実文で頻出する字だけ bucket が肥大** しており、
+  辞書改善を続けるほど遅くなる構造だった。 本番 wrapper `2.6.1` 反映済み。
+  残件: 入力正規化の確保削減 (`normalize_char_piece`) は **速度未測定** (計測機が OBS 常駐で
+  同一バイナリの連続実行ですら ±50% 振れたため)、 静かな環境で `cargo bench --bench lookup` 再計測のこと
+- (履歴) `0.3.1` (2026-08-12、 crates.io 4 crate publish = ja-furigana / ja-furigana-voicevox /
   **ja-furigana-aquestalk** (新規) / ja-furigana-cli、 tag v0.3.0 + v0.3.1)。
   0.3.0 = TTS adapter 2 本立て (VOICEVOX kana 記法 + 本家 AquesTalk 音声記号列) + 共有コアの
   lib 移設 (`furigana::accent_symbols`、 ADR-0009) + `TtsOptions::silence_symbols`
