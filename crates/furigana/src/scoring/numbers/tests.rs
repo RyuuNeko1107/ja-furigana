@@ -32,7 +32,7 @@ fn find<'a>(cands: &'a [Candidate], surface: &str) -> Option<&'a Candidate> {
 #[test]
 fn empty_rules_yields_empty_candidates_for_pure_number() {
     let p = NumberCandidateProvider::new(&RulesData::default());
-    let cands = p.candidates_at(&ctx("3"), 0);
+    let cands = p.candidates_vec(&ctx("3"), 0);
     // counter / scale / si_unit / symbol いずれも空、 しかし DIGIT は static なので 1 候補
     assert_eq!(cands.len(), 1);
     assert_eq!(cands[0].surface, "3");
@@ -42,14 +42,14 @@ fn empty_rules_yields_empty_candidates_for_pure_number() {
 #[test]
 fn empty_input_yields_empty() {
     let p = provider();
-    assert!(p.candidates_at(&ctx(""), 0).is_empty());
+    assert!(p.candidates_vec(&ctx(""), 0).is_empty());
 }
 
 #[test]
 fn pos_at_end_yields_empty() {
     let p = provider();
     let input = "3本";
-    assert!(p.candidates_at(&ctx(input), input.len()).is_empty());
+    assert!(p.candidates_vec(&ctx(input), input.len()).is_empty());
 }
 
 // ─── 数詞慣用語句 (numeric_phrases、 ★0.2.0 再統合) ──────────────────────
@@ -57,7 +57,7 @@ fn pos_at_end_yields_empty() {
 #[test]
 fn phrase_basic_hatachi() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("二十歳になった"), 0);
+    let cands = p.candidates_vec(&ctx("二十歳になった"), 0);
     let c = find(&cands, "二十歳").expect("二十歳 candidate");
     assert_eq!(c.reading, "ハタチ");
     assert_eq!(c.score.band, BAND_SPECIAL);
@@ -69,7 +69,7 @@ fn phrase_non_digit_lead_asatte() {
     // 「明後日」 は先頭が数字系 char ではない → numeric lead guard より前の
     // try_phrase で拾われることを確認する (guard 後だと絶対に出ない)。
     let p = provider();
-    let cands = p.candidates_at(&ctx("明後日は晴れ"), 0);
+    let cands = p.candidates_vec(&ctx("明後日は晴れ"), 0);
     let c = find(&cands, "明後日").expect("明後日 candidate");
     assert_eq!(c.reading, "アサッテ");
 }
@@ -79,7 +79,7 @@ fn phrase_overlapping_surfaces_both_emitted() {
     // 「一人前」 の pos 0 では 「一人前」 と 「一人」 の両方が candidate に上がる。
     // 採択は DP の length / edge_count 軸 (長い方が勝つ) に委ねる。
     let p = provider();
-    let cands = p.candidates_at(&ctx("一人前の寿司"), 0);
+    let cands = p.candidates_vec(&ctx("一人前の寿司"), 0);
     assert_eq!(
         find(&cands, "一人前").map(|c| c.reading.as_str()),
         Some("イチニンマエ")
@@ -93,7 +93,7 @@ fn phrase_overlapping_surfaces_both_emitted() {
 #[test]
 fn phrase_empty_rules_yields_no_phrase_candidates() {
     let p = NumberCandidateProvider::new(&RulesData::default());
-    let cands = p.candidates_at(&ctx("二十歳"), 0);
+    let cands = p.candidates_vec(&ctx("二十歳"), 0);
     assert!(
         find(&cands, "二十歳").is_none(),
         "空 rules では phrase candidate なし: {cands:?}"
@@ -105,7 +105,7 @@ fn phrase_empty_rules_yields_no_phrase_candidates() {
 #[test]
 fn single_counter_basic() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("3本のバナナ"), 0);
+    let cands = p.candidates_vec(&ctx("3本のバナナ"), 0);
     let c = find(&cands, "3本").expect("3本 candidate");
     assert_eq!(c.reading, "サンボン");
     assert_eq!(c.score.band, BAND_SPECIAL);
@@ -118,17 +118,17 @@ fn recursive_counter_me_through_provider() {
     // regression: 以前は 「2個」 で止まり 「目」 が単漢字 fallback で 「モク」 と
     // 誤読されて 「ニコモク」 になっていた。
     let p = provider();
-    let c2 = find(&p.candidates_at(&ctx("2個目"), 0), "2個目")
+    let c2 = find(&p.candidates_vec(&ctx("2個目"), 0), "2個目")
         .expect("2個目 candidate")
         .clone();
     assert_eq!(c2.reading, "ニコメ");
     // 「5 人目」 = 人 special (5→ゴニン) + メ → ゴニンメ
-    let c5 = find(&p.candidates_at(&ctx("5人目"), 0), "5人目")
+    let c5 = find(&p.candidates_vec(&ctx("5人目"), 0), "5人目")
         .expect("5人目 candidate")
         .clone();
     assert_eq!(c5.reading, "ゴニンメ");
     // 「3 回目」 = 回 default + メ → サンカイメ
-    let c3 = find(&p.candidates_at(&ctx("3回目"), 0), "3回目")
+    let c3 = find(&p.candidates_vec(&ctx("3回目"), 0), "3回目")
         .expect("3回目 candidate")
         .clone();
     assert_eq!(c3.reading, "サンカイメ");
@@ -138,18 +138,18 @@ fn recursive_counter_me_through_provider() {
 fn recursive_counter_me_kanji_numeral() {
     // 漢数字版: 「一個目」 → イッコメ (個 + 目)。 旧: 個 までで止まり 目 → モク。
     let p = provider();
-    let c1 = find(&p.candidates_at(&ctx("一個目"), 0), "一個目")
+    let c1 = find(&p.candidates_vec(&ctx("一個目"), 0), "一個目")
         .expect("一個目 candidate")
         .clone();
     assert_eq!(c1.reading, "イッコメ");
     // 「二回目」 → ニカイメ
-    let c2 = find(&p.candidates_at(&ctx("二回目"), 0), "二回目")
+    let c2 = find(&p.candidates_vec(&ctx("二回目"), 0), "二回目")
         .expect("二回目 candidate")
         .clone();
     assert_eq!(c2.reading, "ニカイメ");
     // bare 漢数字 + 助数詞 (目なし) は candidate にしない (chunker 互換維持)
     assert!(
-        find(&p.candidates_at(&ctx("一個"), 0), "一個").is_none(),
+        find(&p.candidates_vec(&ctx("一個"), 0), "一個").is_none(),
         "漢数字 + 助数詞 (目なし) は kanji recursive regex に match しない"
     );
 }
@@ -158,7 +158,7 @@ fn recursive_counter_me_kanji_numeral() {
 fn single_counter_includes_bare_digit_too() {
     // 「3本」 の位置 0 では digit "3" 候補も同時に提案される (DP が長い方を選ぶ)
     let p = provider();
-    let cands = p.candidates_at(&ctx("3本のバナナ"), 0);
+    let cands = p.candidates_vec(&ctx("3本のバナナ"), 0);
     assert!(
         find(&cands, "3").is_some(),
         "bare digit candidate should exist"
@@ -172,7 +172,7 @@ fn single_counter_includes_bare_digit_too() {
 #[test]
 fn single_counter_zero_no_sokuon() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("0本"), 0);
+    let cands = p.candidates_vec(&ctx("0本"), 0);
     let c = find(&cands, "0本").expect("0本 candidate");
     assert_eq!(c.reading, "ゼロホン");
 }
@@ -181,7 +181,7 @@ fn single_counter_zero_no_sokuon() {
 fn single_counter_day_uses_period_default() {
     // 「N日」 単独は **期間扱い**: days.toml 特殊読み (1=ツイタチ) を bypass、 default 「ニチ」
     let p = provider();
-    let cands = p.candidates_at(&ctx("1日に2回"), 0);
+    let cands = p.candidates_vec(&ctx("1日に2回"), 0);
     let c = find(&cands, "1日").expect("1日 candidate");
     assert_eq!(c.reading, "イチニチ");
 }
@@ -189,7 +189,7 @@ fn single_counter_day_uses_period_default() {
 #[test]
 fn single_counter_handles_full_width_digit() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("３本"), 0);
+    let cands = p.candidates_vec(&ctx("３本"), 0);
     let c = find(&cands, "３本").expect("full-width counter candidate");
     assert_eq!(c.reading, "サンボン");
 }
@@ -199,7 +199,7 @@ fn single_counter_kansuji_only_in_date_pattern() {
     // 漢数字 「一日」 単独は counter_re (NUM_PAT = Arabic 数字限定) では match しない、
     // 既存 chunker と同じ挙動 (= 漢数字 normalization は DATE_NUM_PAT 経由でのみ動く)。
     let p = provider();
-    let cands = p.candidates_at(&ctx("一日中"), 0);
+    let cands = p.candidates_vec(&ctx("一日中"), 0);
     assert!(
         find(&cands, "一日").is_none(),
         "漢数字 単独 + counter は candidate にならない (chunker 互換): {cands:?}",
@@ -210,7 +210,7 @@ fn single_counter_kansuji_only_in_date_pattern() {
 fn date_md_normalizes_kansuji() {
     // 日付 pattern 内の漢数字は kansuji_to_arabic で normalize される。
     let p = provider();
-    let cands = p.candidates_at(&ctx("六月一日"), 0);
+    let cands = p.candidates_vec(&ctx("六月一日"), 0);
     let c = find(&cands, "六月一日").expect("date MD with kansuji");
     // 一日 → days.toml の特殊読み (ツイタチ)。contains だと月部の脱落・順序入替を
     // 見逃すので全文一致で固定。
@@ -222,7 +222,7 @@ fn date_md_normalizes_kansuji() {
 #[test]
 fn date_full_emits_single_candidate() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("2025年10月30日に集合"), 0);
+    let cands = p.candidates_vec(&ctx("2025年10月30日に集合"), 0);
     let c = find(&cands, "2025年10月30日").expect("date full candidate");
     // 年・月・日すべてを完全一致で固定 (contains だと年/日の脱落を見逃す)。
     assert_eq!(c.reading, "ニセンニジュウゴネンジュウガツサンジュウニチ");
@@ -233,7 +233,7 @@ fn date_full_emits_single_candidate() {
 fn date_md_uses_special_day_reading() {
     // 日付内 「1日」 は days.toml の 「ツイタチ」
     let p = provider();
-    let cands = p.candidates_at(&ctx("1月1日に集合"), 0);
+    let cands = p.candidates_vec(&ctx("1月1日に集合"), 0);
     let c = find(&cands, "1月1日").expect("date MD candidate");
     assert_eq!(c.reading, "イチガツツイタチ");
 }
@@ -243,7 +243,7 @@ fn date_md_uses_special_day_reading() {
 #[test]
 fn time_colon_basic() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("9:30に集合"), 0);
+    let cands = p.candidates_vec(&ctx("9:30に集合"), 0);
     let c = find(&cands, "9:30").expect("time colon candidate");
     // 時・分を通して全文固定 (fixture rules が決定する促音形を pin)。
     assert_eq!(c.reading, "クジサンジュップン");
@@ -252,7 +252,7 @@ fn time_colon_basic() {
 #[test]
 fn time_jp_full() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("9時30分に集合"), 0);
+    let cands = p.candidates_vec(&ctx("9時30分に集合"), 0);
     let c = find(&cands, "9時30分").expect("time JP candidate");
     // 旧 test は分部 (30分) を一切見ていなかった。全文固定。
     assert_eq!(c.reading, "クジサンジュップン");
@@ -261,7 +261,7 @@ fn time_jp_full() {
 #[test]
 fn time_jp_hour_only() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("9時に集合"), 0);
+    let cands = p.candidates_vec(&ctx("9時に集合"), 0);
     let c = find(&cands, "9時").expect("time JP hour-only candidate");
     assert_eq!(c.reading, "クジ");
 }
@@ -273,7 +273,7 @@ fn scale_with_trailing_unit_when_units_table_has_kanji_unit() {
     // fixture rules の units は SI 単位 (km / L 等) のみで 「円」 を含まないので、
     // build_scale_regex の trailing_unit は None になる。 scale candidate は 「3万」 で出る。
     let p = provider();
-    let cands = p.candidates_at(&ctx("3万円のもの"), 0);
+    let cands = p.candidates_vec(&ctx("3万円のもの"), 0);
     // fixture units に 「円」 は無いので scale candidate は 「3万」。!is_empty() だと
     // 誤読でも緑になるので読みを完全一致で固定する。
     let c = find(&cands, "3万").expect("scale candidate 3万");
@@ -283,7 +283,7 @@ fn scale_with_trailing_unit_when_units_table_has_kanji_unit() {
 #[test]
 fn scale_without_trailing_unit() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("3万"), 0);
+    let cands = p.candidates_vec(&ctx("3万"), 0);
     let c = find(&cands, "3万").expect("scale candidate");
     assert_eq!(c.reading, "サンマン");
 }
@@ -293,7 +293,7 @@ fn scale_without_trailing_unit() {
 #[test]
 fn si_unit_basic() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("100km先"), 0);
+    let cands = p.candidates_vec(&ctx("100km先"), 0);
     let c = find(&cands, "100km").expect("SI unit candidate");
     // 数値部+単位部を通して固定 (順序 「キロメートルヒャク」 等の誤結合を排除)。
     // 100 + カ行の単位 は促音化する (★2026-09-15: ヒャク → ヒャッ)。
@@ -305,7 +305,7 @@ fn si_unit_basic() {
 #[test]
 fn symbol_single_char() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("+5"), 0);
+    let cands = p.candidates_vec(&ctx("+5"), 0);
     let c = find(&cands, "+").expect("symbol candidate");
     assert_eq!(c.reading, "プラス");
     assert_eq!(c.score.length, 1);
@@ -316,7 +316,7 @@ fn symbol_skipped_when_not_in_table() {
     // counters.toml の simple に 「‰」 もあるが symbols.toml fixture には未登録だと no-op
     // (= '※' のような未登録記号は 7 番からは候補出ず、 8 番素の数字でも該当しない)
     let p = provider();
-    let cands = p.candidates_at(&ctx("※"), 0);
+    let cands = p.candidates_vec(&ctx("※"), 0);
     // 候補ゼロ (記号 table miss + digit miss)
     assert!(cands.is_empty(), "expected no candidates: {cands:?}");
 }
@@ -327,7 +327,7 @@ fn tilde_emits_kara_in_numeric_context() {
     let p = provider();
     let input = "2〜3回";
     let pos = "2".len(); // 〜 の byte position
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "〜").expect("tilde candidate in numeric context");
     assert_eq!(c.reading, "から");
 }
@@ -339,7 +339,7 @@ fn tilde_silent_in_kana_context() {
     let p = provider();
     let input = "へ〜うま";
     let pos = "へ".len(); // 〜 の byte position
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "〜").expect("tilde candidate in kana context");
     assert_eq!(c.reading, "", "kana 文脈の 〜 は読み上げない (空 reading)");
 }
@@ -351,7 +351,7 @@ fn tilde_silent_at_end_of_string() {
     let p = provider();
     let input = "がんばれ〜";
     let pos = "がんばれ".len(); // 末尾 〜 の byte position
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "〜").expect("tilde candidate at end");
     assert_eq!(c.reading, "", "文末の 〜 は読み上げない (空 reading)");
 }
@@ -363,7 +363,7 @@ fn tilde_emits_kara_when_only_prev_is_digit() {
     let p = provider();
     let input = "2〜あ";
     let pos = "2".len();
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     assert!(cands
         .iter()
         .any(|c| c.surface == "〜" && c.reading == "から"));
@@ -379,7 +379,7 @@ fn minus_between_digits_is_silent() {
     let p = provider();
     let input = "3-1";
     let pos = "3".len();
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "-").expect("hyphen candidate between digits");
     assert_eq!(c.reading, "", "数字間の - は読み上げない");
     assert!(
@@ -392,7 +392,7 @@ fn minus_between_digits_is_silent() {
 fn minus_emits_reading_when_only_next_is_digit() {
     // 「-3」 (負数 / 文頭) も数字 context。
     let p = provider();
-    let cands = p.candidates_at(&ctx("-3"), 0);
+    let cands = p.candidates_vec(&ctx("-3"), 0);
     assert!(cands
         .iter()
         .any(|c| c.surface == "-" && c.reading == "マイナス"));
@@ -404,7 +404,7 @@ fn hyphen_between_letters_is_silent() {
     let p = provider();
     let input = "Wi-Fi";
     let pos = "Wi".len();
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "-").expect("hyphen candidate between letters");
     assert_eq!(c.reading, "", "英字間の - は読み上げない (空 reading)");
 }
@@ -413,11 +413,11 @@ fn hyphen_between_letters_is_silent() {
 fn hyphen_in_kana_context_is_silent() {
     // 「あ-い」 「終わり-」 のような区切り用途も読まない。
     let p = provider();
-    let cands = p.candidates_at(&ctx("あ-い"), "あ".len());
+    let cands = p.candidates_vec(&ctx("あ-い"), "あ".len());
     let c = find(&cands, "-").expect("hyphen candidate in kana context");
     assert_eq!(c.reading, "");
 
-    let cands = p.candidates_at(&ctx("終わり-"), "終わり".len());
+    let cands = p.candidates_vec(&ctx("終わり-"), "終わり".len());
     let c = find(&cands, "-").expect("hyphen candidate at end");
     assert_eq!(c.reading, "");
 }
@@ -429,7 +429,7 @@ fn fullwidth_minus_follows_same_context_rule() {
     let p = provider();
     for ch in ['\u{FF0D}', '\u{2212}'] {
         let neg = format!("{ch}3");
-        let cands = p.candidates_at(&ctx(&neg), 0);
+        let cands = p.candidates_vec(&ctx(&neg), 0);
         assert!(
             cands
                 .iter()
@@ -439,7 +439,7 @@ fn fullwidth_minus_follows_same_context_rule() {
 
         let score = format!("3{ch}1");
         let pos = "3".len();
-        let cands = p.candidates_at(&ctx(&score), pos);
+        let cands = p.candidates_vec(&ctx(&score), pos);
         let c = find(&cands, &ch.to_string()).expect("hyphen candidate");
         assert_eq!(c.reading, "", "数字間の {ch} は無音");
     }
@@ -450,7 +450,7 @@ fn fullwidth_minus_follows_same_context_rule() {
 #[test]
 fn bare_digit_basic() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("12345です"), 0);
+    let cands = p.candidates_vec(&ctx("12345です"), 0);
     let c = find(&cands, "12345").expect("bare digit candidate");
     // 数値合成の本丸経路。!is_empty() だと桁上がりの誤りを見逃すので完全一致で固定。
     assert_eq!(c.reading, "イチマンニセンサンビャクヨンジュウゴ");
@@ -460,7 +460,7 @@ fn bare_digit_basic() {
 #[test]
 fn bare_digit_handles_full_width() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("１２３"), 0);
+    let cands = p.candidates_vec(&ctx("１２３"), 0);
     let c = find(&cands, "１２３").expect("full-width digit candidate");
     assert_eq!(c.reading, "ヒャクニジュウサン");
 }
@@ -472,7 +472,7 @@ fn date_md_and_counter_both_emitted_at_pos_0() {
     // 「1月1日」 の pos 0 で 「1月1日」 (date MD) と 「1月」 (counter) が並列に出る
     // (DP が edge_count で longer match を選ぶ責務)
     let p = provider();
-    let cands = p.candidates_at(&ctx("1月1日"), 0);
+    let cands = p.candidates_vec(&ctx("1月1日"), 0);
     assert!(find(&cands, "1月1日").is_some(), "date candidate");
     assert!(find(&cands, "1月").is_some(), "counter candidate");
 }
@@ -481,7 +481,7 @@ fn date_md_and_counter_both_emitted_at_pos_0() {
 fn si_and_scale_dont_collide_for_pure_number() {
     // 「100」 単独 (unit / scale なし) は digit のみ
     let p = provider();
-    let cands = p.candidates_at(&ctx("100"), 0);
+    let cands = p.candidates_vec(&ctx("100"), 0);
     // "100" digit candidate
     assert!(find(&cands, "100").is_some(), "digit candidate");
     // SI 候補は出ない (single の k や m もないため)
@@ -495,7 +495,7 @@ fn candidate_range_aligns_with_input_bytes() {
     let p = provider();
     let input = "abc3本";
     let pos = 3; // "abc" 後の "3" 位置 (3 ASCII bytes)
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "3本").expect("3本 candidate at offset 3");
     // "3本" = "3" (1 byte) + "本" (3 bytes UTF-8) = 4 bytes
     assert_eq!(c.range, 3..7);
@@ -506,7 +506,7 @@ fn candidate_range_aligns_with_input_bytes() {
 #[test]
 fn digit_regex_is_static_and_works_with_empty_rules() {
     let p = NumberCandidateProvider::new(&RulesData::default());
-    let cands = p.candidates_at(&ctx("42x"), 0);
+    let cands = p.candidates_vec(&ctx("42x"), 0);
     let c = find(&cands, "42").expect("bare digit candidate even with empty rules");
     assert_eq!(c.reading, "ヨンジュウニ");
 }
@@ -519,7 +519,7 @@ fn si_unit_lookup_miss_emits_no_candidate() {
     // 以前は空文字を連結して 「ヨン」 だけ返し、 **単位文字を黙って落として**
     // いた。 候補を出さず alphabet passthrough に委ねるのが正しい。
     let p = provider();
-    let cands = p.candidates_at(&ctx("4G"), 0);
+    let cands = p.candidates_vec(&ctx("4G"), 0);
     assert!(
         find(&cands, "4G").is_none(),
         "解決できない単位 span は候補化しない: {cands:?}"
@@ -529,7 +529,7 @@ fn si_unit_lookup_miss_emits_no_candidate() {
 #[test]
 fn si_unit_lowercase_still_reads() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("4g"), 0);
+    let cands = p.candidates_vec(&ctx("4g"), 0);
     let c = find(&cands, "4g").expect("小文字 g は読める");
     assert_eq!(c.reading, "ヨングラム");
 }
@@ -539,7 +539,7 @@ fn bare_day_counter_honors_specials() {
     // 単独 「2 日」 は暦の日付ではないので days.toml を使わないが、
     // counter 側 specials は尊重する (期間表現でも フツカ)。
     let p = provider();
-    let cands = p.candidates_at(&ctx("2日"), 0);
+    let cands = p.candidates_vec(&ctx("2日"), 0);
     let c = find(&cands, "2日").expect("2日 候補");
     assert_eq!(c.reading, "フツカ");
 }
@@ -547,7 +547,7 @@ fn bare_day_counter_honors_specials() {
 #[test]
 fn bare_day_counter_without_specials_falls_back_to_default() {
     let p = provider();
-    let cands = p.candidates_at(&ctx("5日"), 0);
+    let cands = p.candidates_vec(&ctx("5日"), 0);
     let c = find(&cands, "5日").expect("5日 候補");
     assert_eq!(c.reading, "ゴニチ");
 }
@@ -558,7 +558,7 @@ fn hyphen_after_latin_before_digit_is_silent() {
     let p = provider();
     let input = "RX-78";
     let pos = "RX".len();
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "-").expect("hyphen candidate after latin");
     assert_eq!(c.reading, "", "英字直後の - は読み上げない");
 }
@@ -569,7 +569,7 @@ fn minus_after_kanji_is_still_sign() {
     let p = provider();
     let input = "弾道-3";
     let pos = "弾道".len();
-    let cands = p.candidates_at(&ctx(input), pos);
+    let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "-").expect("minus candidate after kanji");
     assert_eq!(c.reading, "マイナス");
 }

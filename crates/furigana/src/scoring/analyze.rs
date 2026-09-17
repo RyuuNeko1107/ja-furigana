@@ -137,7 +137,7 @@ pub fn analyze(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) -> An
         .map(|&pos| {
             let mut all = Vec::new();
             for provider in providers {
-                all.extend(provider.candidates_at(ctx, pos));
+                provider.candidates_at(ctx, pos, &mut all);
             }
             all
         })
@@ -213,8 +213,7 @@ mod tests {
     }
 
     impl CandidateProvider for DictProvider {
-        fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
-            let mut out = Vec::new();
+        fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
             for (surface, reading, score) in &self.entries {
                 if ctx.input[pos..].starts_with(surface.as_str()) {
                     out.push(Candidate::new(
@@ -225,7 +224,6 @@ mod tests {
                     ));
                 }
             }
-            out
         }
     }
 

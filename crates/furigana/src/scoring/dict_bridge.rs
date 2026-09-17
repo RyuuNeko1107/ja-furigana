@@ -148,28 +148,24 @@ impl<'a> DictBridgeProvider<'a> {
 }
 
 impl<'a> CandidateProvider for DictBridgeProvider<'a> {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
         let input = ctx.input;
         let tail = &input[pos..];
         let Some(first_char) = tail.chars().next() else {
-            return Vec::new();
+            return;
         };
         let first_len = first_char.len_utf8();
-        let mut out = Vec::new();
 
         // priority: entries (rich) > kanji block > unihan、 先頭 char surface 1 つ分は
         // 上位 phase が emit したら下位は skip (= 旧 `emitted` HashSet の dedup 等価、
         // ただし query 対象は常に先頭 1 字 surface なので bool で十分)。
-        let mut char_emitted = self.emit_entries(input, pos, tail, &mut out);
+        let mut char_emitted = self.emit_entries(input, pos, tail, out);
         if !char_emitted {
-            char_emitted =
-                self.emit_kanji_blocks(input, pos, tail, first_char, first_len, &mut out);
+            char_emitted = self.emit_kanji_blocks(input, pos, tail, first_char, first_len, out);
         }
         if !char_emitted {
-            self.emit_unihan(pos, tail, first_len, &mut out);
+            self.emit_unihan(pos, tail, first_len, out);
         }
-
-        out
     }
 }
 #[cfg(test)]
@@ -195,7 +191,7 @@ mod tests {
         // unihan fallback が同じ「犬」候補を二重に出してしまう。
         let dict = Dict::from_toml_str("[entries]\n\"犬\" = \"イヌ\"\n", "t.toml").unwrap();
         let provider = DictBridgeProvider::new(&dict);
-        let cands = provider.candidates_at(&ctx("犬"), 0);
+        let cands = provider.candidates_vec(&ctx("犬"), 0);
         assert_eq!(
             cands.len(),
             1,
@@ -210,7 +206,7 @@ mod tests {
     fn jukugo_entry_uses_dict_exact_band_and_full_range() {
         let dict = Dict::from_toml_str("[entries]\n\"猫舌\" = \"ネコジタ\"\n", "t.toml").unwrap();
         let provider = DictBridgeProvider::new(&dict);
-        let cands = provider.candidates_at(&ctx("猫舌だ"), 0);
+        let cands = provider.candidates_vec(&ctx("猫舌だ"), 0);
         let neko = cands
             .iter()
             .find(|c| c.surface == "猫舌")
@@ -226,6 +222,6 @@ mod tests {
         let dict = Dict::from_toml_str("[entries]\n\"犬\" = \"イヌ\"\n", "t.toml").unwrap();
         let provider = DictBridgeProvider::new(&dict);
         // 入力に「犬」が無いので候補ゼロ
-        assert!(provider.candidates_at(&ctx("猫"), 0).is_empty());
+        assert!(provider.candidates_vec(&ctx("猫"), 0).is_empty());
     }
 }

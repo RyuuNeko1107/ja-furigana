@@ -534,17 +534,16 @@ impl NumberCandidateProvider {
 }
 
 impl CandidateProvider for NumberCandidateProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
         let input = ctx.input;
-        let mut out: Vec<Candidate> = Vec::new();
         let rest = &input[pos..];
         let Some(first_char) = rest.chars().next() else {
-            return out;
+            return;
         };
 
         // section 0: 数詞慣用語句。 「明後日」 等 数字以外の先頭もあるため
         // numeric lead 判定より前に評価する (非 hit 位置は HashMap lookup 1 回)。
-        self.try_phrase(input, pos, rest, first_char, &mut out);
+        self.try_phrase(input, pos, rest, first_char, out);
 
         // ─── 先頭文字 dispatch (hot path 最適化) ─────────────────────────────
         // 数値系正規表現は全て **数字系の先頭文字** を要求する (NUM_PAT = 任意符号 +
@@ -567,21 +566,19 @@ impl CandidateProvider for NumberCandidateProvider {
                     .next_back()
                     .is_some_and(|c| is_digit_like_char(c) || c.is_ascii_alphabetic());
         if !numeric_lead || sign_is_separator {
-            self.emit_symbol(input, pos, rest, &mut out);
-            return out;
+            self.emit_symbol(input, pos, rest, out);
+            return;
         }
 
         // 適用順 = 優先順 (module doc の 1〜8 と対応)。
-        self.try_date(input, pos, rest, &mut out);
-        self.try_time_jp(input, pos, rest, &mut out);
-        self.try_time_colon(input, pos, rest, &mut out);
-        self.try_scale(input, pos, rest, &mut out);
-        self.try_si_unit(input, pos, rest, &mut out);
-        self.try_counter(input, pos, rest, &mut out);
-        self.try_counter_kanji(input, pos, rest, &mut out);
-        self.emit_symbol(input, pos, rest, &mut out);
-        self.try_digit(input, pos, rest, &mut out);
-
-        out
+        self.try_date(input, pos, rest, out);
+        self.try_time_jp(input, pos, rest, out);
+        self.try_time_colon(input, pos, rest, out);
+        self.try_scale(input, pos, rest, out);
+        self.try_si_unit(input, pos, rest, out);
+        self.try_counter(input, pos, rest, out);
+        self.try_counter_kanji(input, pos, rest, out);
+        self.emit_symbol(input, pos, rest, out);
+        self.try_digit(input, pos, rest, out);
     }
 }

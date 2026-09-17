@@ -267,9 +267,10 @@ impl LinderaFallbackProvider {
 }
 
 impl CandidateProvider for LinderaFallbackProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
         let input = ctx.input;
-        self.edges
+        let found = self
+            .edges
             .iter()
             .filter(|(start, _, _, _)| *start == pos)
             .map(|(start, end, reading, is_name)| {
@@ -290,8 +291,8 @@ impl CandidateProvider for LinderaFallbackProvider {
                 };
                 Candidate::new(surface.to_string(), reading.clone(), *start..*end, score)
                     .with_name_flag(*is_name)
-            })
-            .collect()
+            });
+        out.extend(found);
     }
 }
 
@@ -359,7 +360,7 @@ mod tests {
         let p = LinderaFallbackProvider::new(&a, input);
         // 「お婆ちゃん」 (= 0..12 bytes) の直後、 「す」 の位置から始まる edge があること
         let pos = "お婆ちゃん".len();
-        let cands = p.candidates_at(&ctx(input), pos);
+        let cands = p.candidates_vec(&ctx(input), pos);
         assert!(
             !cands.is_empty(),
             "かな token 途中の位置 {pos} から始まる edge が無い (entry の継続先が消える)"
@@ -379,7 +380,7 @@ mod tests {
         let p = LinderaFallbackProvider::new(&a, input);
         let pos = "お婆ちゃん".len();
         let c = p
-            .candidates_at(&ctx(input), pos)
+            .candidates_vec(&ctx(input), pos)
             .into_iter()
             .find(|c| c.surface == "すげぇ")
             .expect("suffix edge");
@@ -395,7 +396,7 @@ mod tests {
         // 「書」 の位置 (= token 途中) から Lindera 由来 edge は生えない
         let pos = "図".len();
         assert!(p
-            .candidates_at(&ctx(input), pos)
+            .candidates_vec(&ctx(input), pos)
             .iter()
             .all(|c| c.surface != "書館"));
     }
@@ -404,7 +405,7 @@ mod tests {
     fn empty_input_yields_no_edges() {
         let a = analyzer();
         let p = LinderaFallbackProvider::new(&a, "");
-        assert_eq!(p.candidates_at(&ctx(""), 0).len(), 0);
+        assert_eq!(p.candidates_vec(&ctx(""), 0).len(), 0);
     }
 
     #[test]
@@ -413,7 +414,7 @@ mod tests {
         let input = "猫が好き";
         let p = LinderaFallbackProvider::new(&a, input);
         // 「猫」 の byte 範囲は 0..3 (UTF-8 3 byte)、 「が」 は 3..6
-        let cands_at_3 = p.candidates_at(&ctx(input), 3);
+        let cands_at_3 = p.candidates_vec(&ctx(input), 3);
         assert!(
             !cands_at_3.is_empty(),
             "expected Lindera edge at pos=3 (=が)"
@@ -436,7 +437,7 @@ mod tests {
         let a = analyzer();
         let input = "最近の話";
         let p = LinderaFallbackProvider::new(&a, input);
-        let cands_at_0 = p.candidates_at(&ctx(input), 0);
+        let cands_at_0 = p.candidates_vec(&ctx(input), 0);
         // find が None だと旧 test は no-op で緑になっていた。候補存在を強制する。
         let saikin = cands_at_0
             .iter()
@@ -454,7 +455,7 @@ mod tests {
         let a = analyzer();
         let input = "私";
         let p = LinderaFallbackProvider::new(&a, input);
-        let cands = p.candidates_at(&ctx(input), 0);
+        let cands = p.candidates_vec(&ctx(input), 0);
         let watashi = cands
             .iter()
             .find(|c| c.surface == "私")
@@ -468,7 +469,7 @@ mod tests {
         let a = analyzer();
         let input = "来た";
         let p = LinderaFallbackProvider::new(&a, input);
-        let cands = p.candidates_at(&ctx(input), 0);
+        let cands = p.candidates_vec(&ctx(input), 0);
         // 空 Vec だと旧 for は vacuously pass。少なくとも 1 edge は出るはず。
         assert!(!cands.is_empty(), "「来た」 は edge を生むはず");
         // Lindera が 「来」 + 「た」 と 2 token に分ける場合、 各々 1 字 → 50。
@@ -489,7 +490,7 @@ mod tests {
         let a = analyzer();
         let input = "★";
         let p = LinderaFallbackProvider::new(&a, input);
-        let cands = p.candidates_at(&ctx(input), 0);
+        let cands = p.candidates_vec(&ctx(input), 0);
         // safety net は「必ず」 edge を出す契約 (空だと後段で文字が消える)。
         let first = cands
             .first()

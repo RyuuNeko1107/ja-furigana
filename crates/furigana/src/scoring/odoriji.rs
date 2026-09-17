@@ -57,21 +57,21 @@ impl OdorijiProvider {
 }
 
 impl CandidateProvider for OdorijiProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
         let tail = &ctx.input[pos..];
         let Some(c) = tail.chars().next() else {
-            return Vec::new();
+            return;
         };
         if c != ODORIJI_CHAR {
-            return Vec::new();
+            return;
         }
         let len = c.len_utf8();
-        vec![Candidate::new(
+        out.push(Candidate::new(
             ODORIJI_CHAR.to_string(),
             ODORIJI_CHAR.to_string(), // placeholder、 post-pass で連濁適用
             pos..pos + len,
             Score::new(BAND_KANJI, 1, 0),
-        )]
+        ));
     }
 }
 
@@ -142,7 +142,7 @@ mod tests {
         let p = OdorijiProvider::new();
         // "神々" = 神 (3 bytes) + 々 (3 bytes)
         let input = "神々";
-        let cands = p.candidates_at(&ctx(input), 3);
+        let cands = p.candidates_vec(&ctx(input), 3);
         assert_eq!(cands.len(), 1);
         assert_eq!(cands[0].surface, "々");
         assert_eq!(cands[0].reading, "々"); // placeholder
@@ -155,7 +155,7 @@ mod tests {
         let p = OdorijiProvider::new();
         let input = "神々";
         // pos 0 は 「神」 (々 ではない)
-        assert!(p.candidates_at(&ctx(input), 0).is_empty());
+        assert!(p.candidates_vec(&ctx(input), 0).is_empty());
     }
 
     #[test]
@@ -163,13 +163,13 @@ mod tests {
         let p = OdorijiProvider::new();
         let input = "神";
         // pos 3 は input.len() = 入力末尾
-        assert!(p.candidates_at(&ctx(input), 3).is_empty());
+        assert!(p.candidates_vec(&ctx(input), 3).is_empty());
     }
 
     #[test]
     fn provider_returns_empty_for_empty_input() {
         let p = OdorijiProvider::new();
-        assert!(p.candidates_at(&ctx(""), 0).is_empty());
+        assert!(p.candidates_vec(&ctx(""), 0).is_empty());
     }
 
     // ─── apply_rendaku_inplace: 連濁あり ─────────────────────────────────────

@@ -167,8 +167,7 @@ impl ProtectTokenProvider {
 }
 
 impl CandidateProvider for ProtectTokenProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
-        let mut out = Vec::new();
+    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
         for token in &self.tokens {
             if token.range.start == pos {
                 let surface = &ctx.input[token.range.clone()];
@@ -182,7 +181,6 @@ impl CandidateProvider for ProtectTokenProvider {
                 ));
             }
         }
-        out
     }
 }
 
@@ -399,8 +397,7 @@ impl AlphabetPassthroughProvider {
 }
 
 impl CandidateProvider for AlphabetPassthroughProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
-        let mut out = Vec::new();
+    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
         for range in &self.ranges {
             if range.start != pos {
                 continue;
@@ -441,7 +438,6 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                 Score::new(band, length, 0),
             ));
         }
-        out
     }
 }
 
@@ -567,7 +563,7 @@ mod tests {
         let input = "foo https://example.com bar";
         let provider = ProtectTokenProvider::new(input);
         let url_start = input.find("https").unwrap();
-        let candidates = provider.candidates_at(&ctx(input), url_start);
+        let candidates = provider.candidates_vec(&ctx(input), url_start);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].surface, "https://example.com");
         assert_eq!(candidates[0].reading, "https://example.com"); // passthrough
@@ -578,7 +574,7 @@ mod tests {
     fn provider_returns_empty_at_non_token_position() {
         let input = "foo https://example.com bar";
         let provider = ProtectTokenProvider::new(input);
-        let candidates = provider.candidates_at(&ctx(input), 0);
+        let candidates = provider.candidates_vec(&ctx(input), 0);
         assert!(candidates.is_empty(), "pos 0 は URL の start ではない");
     }
 
@@ -587,7 +583,7 @@ mod tests {
         let input = "Hi😀";
         let provider = ProtectTokenProvider::new(input);
         let emoji_start = input.find('😀').unwrap();
-        let candidates = provider.candidates_at(&ctx(input), emoji_start);
+        let candidates = provider.candidates_vec(&ctx(input), emoji_start);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].surface, "😀");
         assert_eq!(candidates[0].reading, "😀"); // passthrough、 ひらがな化しない
@@ -598,7 +594,7 @@ mod tests {
         let input = "ただのテキスト";
         let provider = ProtectTokenProvider::new(input);
         assert!(provider.tokens().is_empty());
-        assert!(provider.candidates_at(&ctx(input), 0).is_empty());
+        assert!(provider.candidates_vec(&ctx(input), 0).is_empty());
     }
 
     #[test]
@@ -717,7 +713,7 @@ mod tests {
         lookup.insert("wi-fi".to_string(), "ワイファイ".to_string());
         let provider = AlphabetPassthroughProvider::new(input, Arc::new(lookup));
         let pos = "ポケット".len();
-        let candidates = provider.candidates_at(&ctx(input), pos);
+        let candidates = provider.candidates_vec(&ctx(input), pos);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].surface, "Wi-Fi");
         assert_eq!(candidates[0].reading, "ワイファイ");
@@ -731,7 +727,7 @@ mod tests {
         let mut lookup = HashMap::new();
         lookup.insert("wifi".to_string(), "ワイファイ".to_string());
         let provider = AlphabetPassthroughProvider::new(input, Arc::new(lookup));
-        let candidates = provider.candidates_at(&ctx(input), 0);
+        let candidates = provider.candidates_vec(&ctx(input), 0);
         assert_eq!(candidates[0].reading, "ワイファイ");
         assert_eq!(candidates[0].score.band, BAND_DICT_EXACT);
     }
@@ -740,7 +736,7 @@ mod tests {
     fn alphabet_passthrough_unknown_hyphenated_word_passes_through_whole() {
         let input = "Blu-ray";
         let provider = AlphabetPassthroughProvider::passthrough_only(input);
-        let candidates = provider.candidates_at(&ctx(input), 0);
+        let candidates = provider.candidates_vec(&ctx(input), 0);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].surface, "Blu-ray");
         assert_eq!(candidates[0].reading, "Blu-ray");
@@ -769,7 +765,7 @@ mod tests {
     fn alphabet_passthrough_provider_returns_surface_when_no_lookup() {
         let input = "APIサーバー";
         let provider = AlphabetPassthroughProvider::passthrough_only(input);
-        let candidates = provider.candidates_at(&ctx(input), 0);
+        let candidates = provider.candidates_vec(&ctx(input), 0);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].surface, "API");
         assert_eq!(candidates[0].reading, "API"); // passthrough: reading = surface
@@ -783,7 +779,7 @@ mod tests {
         let mut lookup = HashMap::new();
         lookup.insert("api".to_string(), "エーピーアイ".to_string());
         let provider = AlphabetPassthroughProvider::new(input, Arc::new(lookup));
-        let candidates = provider.candidates_at(&ctx(input), 0);
+        let candidates = provider.candidates_vec(&ctx(input), 0);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].surface, "API");
         assert_eq!(candidates[0].reading, "エーピーアイ");
@@ -795,7 +791,7 @@ mod tests {
         let mut lookup = HashMap::new();
         lookup.insert("api".to_string(), "エーピーアイ".to_string());
         let provider = AlphabetPassthroughProvider::new(input, Arc::new(lookup));
-        let candidates = provider.candidates_at(&ctx(input), 0);
+        let candidates = provider.candidates_vec(&ctx(input), 0);
         assert_eq!(candidates.len(), 1);
         // surface は full-width のまま、 normalize されるのは lookup key のみ
         assert_eq!(candidates[0].surface, "ＡＰＩ");
@@ -807,7 +803,7 @@ mod tests {
         let input = "APIサーバー";
         let provider = AlphabetPassthroughProvider::passthrough_only(input);
         // pos 3 は 「サ」 の start (= API の後)、 alphabet ではない
-        assert!(provider.candidates_at(&ctx(input), 3).is_empty());
+        assert!(provider.candidates_vec(&ctx(input), 3).is_empty());
     }
 
     #[test]
@@ -815,6 +811,6 @@ mod tests {
         let input = "ただの日本語";
         let provider = AlphabetPassthroughProvider::passthrough_only(input);
         assert!(provider.ranges().is_empty());
-        assert!(provider.candidates_at(&ctx(input), 0).is_empty());
+        assert!(provider.candidates_vec(&ctx(input), 0).is_empty());
     }
 }

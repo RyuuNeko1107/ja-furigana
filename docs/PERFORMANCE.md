@@ -55,8 +55,15 @@ dict = ja-furigana-dict `1f3f5105` (jukugo 22,936 + unihan 43,446 = **66,382 ent
 
 ### allocation churn
 
-415 B の `to_ruby` 1 回で **3,089 allocs / 490 KiB** (≒ 7.4 alloc/byte、 入力長にほぼ線形)。
-投機的に生成する `Candidate` の `String` clone が主因で、 次の最適化余地はここ。
+415 B の `to_ruby` 1 回で **2,947 allocs / 415 KiB** (≒ 7.1 alloc/byte、 入力長にほぼ線形)。
+candidate 収集バッファを使い回す前は 3,089 allocs / 490 KiB だった (= 位置ごとの
+`Vec` 確保と伸長時の再確保)。
+
+残りの主因は投機的に生成する `Candidate` の `surface` / `reading` の `String` clone。
+`surface` は常に `input[range]` と同一で本来不要だが、 `AnalyzeResult.candidates` が
+0.1.0 で freeze された public field のため、 `Candidate` から field を落とすことも
+lifetime を付けて借用化することも **破壊的変更**になる。 手を付けるなら
+`candidates` の型を見直す節目 (0.5.0 等) で。
 
 ### 計測上の注意
 

@@ -227,11 +227,26 @@ impl Candidate {
 /// `candidates_at` は **byte 位置 `pos` から始まる** 候補を返す。 caller (Smart engine)
 /// は input 上の各位置で全 provider を呼び出して候補を集約、 Viterbi-like DP で path を解く。
 pub trait CandidateProvider {
-    /// `ctx.input` の byte 位置 `pos` から始まる candidate を全列挙して返す。
+    /// `ctx.input` の byte 位置 `pos` から始まる candidate を `out` へ push する。
     ///
-    /// 候補が無い (= この位置から始まる surface が dict / kanji / etc に存在しない) 場合は空 Vec。
-    /// 候補が複数あっても OK (= 同位置から異なる surface 長の candidate を返してよい)。
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate>;
+    /// 候補が無い (= この位置から始まる surface が dict / kanji / etc に存在しない) 場合は
+    /// 何も push しない。 候補が複数あっても OK (= 同位置から異なる surface 長の candidate を
+    /// push してよい)。
+    ///
+    /// **`out` は caller が使い回すバッファ** (= 呼び出し前に clear 済み)。 `Vec` を返す形だと
+    /// byte 位置 × provider ごとに Vec 確保が走るため、 push-into 形にしている。
+    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>);
+
+    /// test 用: 1 位置の候補を `Vec` で受け取る薄い helper。
+    ///
+    /// production 経路は [`Self::candidates_at`] にバッファを渡して alloc を避けるが、
+    /// 単体 test は 1 位置の結果を直接 assert したいので、その場合だけこちらを使う。
+    #[cfg(test)]
+    fn candidates_vec(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+        let mut out = Vec::new();
+        self.candidates_at(ctx, pos, &mut out);
+        out
+    }
 }
 
 #[cfg(test)]

@@ -113,18 +113,21 @@ pub fn solve_path(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) ->
     // parent[i] = (prev_pos, candidate) — i に到達するために使った edge
     let mut parent: Vec<Option<(usize, Candidate)>> = vec![None; n + 1];
 
+    // 各位置の候補収集バッファ (位置ごとに確保し直さず clear して使い回す)
+    let mut all_candidates: Vec<Candidate> = Vec::new();
+
     for pos in 0..n {
         let Some(current_score) = dp[pos] else {
             continue; // 到達不能位置
         };
 
-        // この位置から始まる候補を全 provider から収集
-        let mut all_candidates: Vec<Candidate> = Vec::new();
+        // この位置から始まる候補を全 provider から収集 (バッファは全位置で使い回す)
+        all_candidates.clear();
         for provider in providers {
-            all_candidates.extend(provider.candidates_at(ctx, pos));
+            provider.candidates_at(ctx, pos, &mut all_candidates);
         }
 
-        for cand in all_candidates {
+        for cand in all_candidates.drain(..) {
             // valid range の確認
             if cand.range.start != pos {
                 continue; // provider が間違った位置の candidate を返した
@@ -246,8 +249,7 @@ mod tests {
     }
 
     impl CandidateProvider for DictProvider {
-        fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
-            let mut out = Vec::new();
+        fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
             for (surface, reading, score) in &self.entries {
                 if ctx.input[pos..].starts_with(surface.as_str()) {
                     let end = pos + surface.len();
@@ -259,7 +261,6 @@ mod tests {
                     ));
                 }
             }
-            out
         }
     }
 
@@ -269,17 +270,17 @@ mod tests {
     }
 
     impl CandidateProvider for CharProvider {
-        fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+        fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
             let Some(c) = ctx.input[pos..].chars().next() else {
-                return Vec::new();
+                return;
             };
             let len = c.len_utf8();
-            vec![Candidate::new(
+            out.push(Candidate::new(
                 c.to_string(),
                 c.to_string(), // dummy reading = surface
                 pos..pos + len,
                 self.score,
-            )]
+            ));
         }
     }
 
@@ -444,8 +445,8 @@ mod tests {
         // 0-length (= range.start == range.end) は skip される
         struct BadProvider;
         impl CandidateProvider for BadProvider {
-            fn candidates_at(&self, _ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
-                vec![Candidate::new("", "", pos..pos, Score::dict_exact(0))]
+            fn candidates_at(&self, _ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+                out.push(Candidate::new("", "", pos..pos, Score::dict_exact(0)));
             }
         }
         let chars = CharProvider {
@@ -465,14 +466,14 @@ mod tests {
     fn solve_path_skips_out_of_bounds_candidate() {
         struct OobProvider;
         impl CandidateProvider for OobProvider {
-            fn candidates_at(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+            fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
                 // input 末尾を超える range を返す壊れた provider
-                vec![Candidate::new(
+                out.push(Candidate::new(
                     "猫猫",
                     "ネコネコ",
                     pos..ctx.input.len() + 3,
                     Score::dict_exact(2),
-                )]
+                ));
             }
         }
         let chars = CharProvider {

@@ -26,6 +26,14 @@
 - 解析のたびに SI 単位記号の `HashSet` を作り直していたのを、 provider 構築時の
   1 回に変更 (`Arc` 共有)。 単体では計測ノイズに埋もれる規模。
 
+- **candidate 収集の `Vec` 確保を削減** (実文で 5〜10%)。 `CandidateProvider` は
+  byte 位置ごとに `Vec<Candidate>` を新規確保して返していたため、 「入力 byte 数 ×
+  provider 数」 の Vec 確保と、 その伸長に伴う再確保が走っていた。 trait を
+  `candidates_at(.., out: &mut Vec<Candidate>)` の push-into 形に変更し、
+  `solve_path` が 1 本のバッファを全位置で使い回すようにした。
+  415 B の `to_ruby` 1 回あたり alloc 回数 3,089 → 2,947、 確保バイト数
+  490 KiB → 415 KiB (-15%)。 `scoring` は `pub(crate)` なので公開 API は不変。
+
 ### Fixed
 
 - 百の位で終わる数 + 促音化する助数詞が促音にならなかったのを修正
