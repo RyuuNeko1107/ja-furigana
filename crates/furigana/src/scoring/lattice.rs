@@ -352,6 +352,8 @@ struct Node<'a> {
 struct PathCost {
     /// path 中の最小 band (大きいほど良い)
     weakest_band: u16,
+    /// edge 数 (少ないほど良い)
+    edges: u32,
     /// IPADIC の語コスト + 連接コストの合計 (小さいほど良い)
     total: i32,
     /// dict match の hit 数の合計 (大きいほど良い)
@@ -365,6 +367,7 @@ struct PathCost {
 impl PathCost {
     const START: Self = Self {
         weakest_band: u16::MAX,
+        edges: 0,
         total: 0,
         hits: 0,
         authored: 0,
@@ -374,6 +377,7 @@ impl PathCost {
     fn add_edge(self, band: u16, cost: i32, hits: u8, authored: bool, weight: u8) -> Self {
         Self {
             weakest_band: self.weakest_band.min(band),
+            edges: self.edges + 1,
             total: self.total + cost,
             hits: self.hits + u32::from(hits),
             authored: self.authored + u32::from(authored),
@@ -386,20 +390,25 @@ impl PathCost {
     /// コストが同点になるのは 「dict entry が同じ区切りの IPADIC 語のコストを借りている」
     /// 場合で、 そこは band engine と同じく match_hits と dict 由来を優先する
     /// (= 所為 = セイ / 五日 = イツカ が IPADIC の読みに負けない)。
-    /// 比較は **最弱 band → 総コスト → match_hits → weight → dict 由来 edge 数**。
+    /// 比較は **最弱 band → edge 数 (少ない) → 総コスト → match_hits → weight → dict 由来数**。
     ///
-    /// 前半 2 つが主で、 後半は 「dict entry が同区切りの IPADIC 語のコストを借りていて
-    /// コストが同点」 の時の決着 (= 五日 の イツカ と ゴニチ、 所為 の セイ と ショイ のように
-    /// 同じ surface に複数の読みがある場合)。 band engine の tie-break と同じ軸。
+    /// 前 2 軸は現行 band engine と同じ (= 辞書の序列と 「長い語を優先」)。
+    /// コストを edge 数より先にすると、 数詞の連鎖が安いため 三百円 が 三 + 百 + 円 に割れる。
+    /// 「dict entry が覆った文字数」 を第 2 軸にする案も試したが corpus 98.3% と悪化した。
+    /// **コストはその次**: 上 2 軸が並ぶところ (= 現行 engine が決め手を持たず列挙順で
+    /// 決めていた領域、 数値上げ = 数値 + 上げ と 数 + 値上げ が典型) を IPADIC の
+    /// 語コスト + 連接コストで裁く。
     fn better_than(&self, other: &Self) -> bool {
         (
             self.weakest_band,
+            std::cmp::Reverse(self.edges),
             std::cmp::Reverse(self.total),
             self.hits,
             self.weight,
             self.authored,
         ) > (
             other.weakest_band,
+            std::cmp::Reverse(other.edges),
             std::cmp::Reverse(other.total),
             other.hits,
             other.weight,
