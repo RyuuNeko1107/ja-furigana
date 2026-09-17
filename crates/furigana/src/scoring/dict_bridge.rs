@@ -3,7 +3,7 @@
 
 use crate::dict::Dict;
 use crate::scoring::candidate::{
-    Candidate, CandidateProvider, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
+    CandidateProvider, RawCandidate, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
 };
 use crate::scoring::matcher::{
     next2_logical_token, next_logical_token, prev_logical_token, resolve_readings, MatchContext,
@@ -53,7 +53,16 @@ impl<'a> DictBridgeProvider<'a> {
     ///
     /// `tail` の接頭辞になりうる entry だけを引く ([`Dict::rich_matching_prefix`])。
     /// 旧実装は全 ~44k entry を毎位置 linear scan していた (O(N×M))。
-    fn emit_entries(&self, input: &str, pos: usize, tail: &str, out: &mut Vec<Candidate>) -> bool {
+    fn emit_entries<'b>(
+        &self,
+        input: &str,
+        pos: usize,
+        tail: &str,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) -> bool
+    where
+        'a: 'b,
+    {
         let mut char_emitted = false;
         for (surface, entry) in self.dict.rich_matching_prefix(tail) {
             if !tail.starts_with(surface) {
@@ -78,9 +87,8 @@ impl<'a> DictBridgeProvider<'a> {
                 entry.alternatives(),
                 &mctx,
             ) {
-                out.push(Candidate::new(
-                    surface.to_string(),
-                    reading.to_string(),
+                out.push(RawCandidate::new(
+                    reading,
                     pos..end_pos,
                     Score::with_weight(band, length, hits, weight),
                 ));
@@ -95,16 +103,17 @@ impl<'a> DictBridgeProvider<'a> {
 
     /// `[[kanji]]` block を emit (先頭 char の最初の 1 block のみ、 旧実装の dedup 等価)。
     /// 戻り値 = emit したか。 char index 引き ([`Dict::kanji_starting_with`])。
-    fn emit_kanji_blocks(
+    fn emit_kanji_blocks<'b>(
         &self,
         input: &str,
         pos: usize,
-        tail: &str,
         first_char: char,
         first_len: usize,
-        out: &mut Vec<Candidate>,
-    ) -> bool {
-        let surface = &tail[..first_len];
+        out: &mut Vec<RawCandidate<'b>>,
+    ) -> bool
+    where
+        'a: 'b,
+    {
         let end_pos = pos + first_len;
         // 旧実装は char 一致 block を全 walk して **最初の 1 つだけ** emit していた
         // (以降は emitted dedup で skip)。 index は char 一致 block のみ返すので first。
@@ -115,9 +124,8 @@ impl<'a> DictBridgeProvider<'a> {
         for (reading, weight, hits) in
             resolve_readings(&block.matches, &block.default, &block.alt, &mctx)
         {
-            out.push(Candidate::new(
-                surface.to_string(),
-                reading.to_string(),
+            out.push(RawCandidate::new(
+                reading,
                 pos..end_pos,
                 Score::with_weight(BAND_KANJI, 1, hits, weight),
             ));
@@ -134,12 +142,19 @@ impl<'a> DictBridgeProvider<'a> {
     /// = mutation は等価変異になるので `.cargo/mutants.toml` で除外している。
     /// 将来 unihan-only の load 経路 (rich にも kanji にも載らない 1 字 reading) を
     /// 追加する場合は、その除外を外して本フォールバックを直接テストすること。
-    fn emit_unihan(&self, pos: usize, tail: &str, first_len: usize, out: &mut Vec<Candidate>) {
+    fn emit_unihan<'b>(
+        &self,
+        pos: usize,
+        tail: &str,
+        first_len: usize,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) where
+        'a: 'b,
+    {
         let surface = &tail[..first_len];
         if let Some(reading) = self.dict.lookup_unihan(surface) {
-            out.push(Candidate::new(
-                surface.to_string(),
-                reading.to_string(),
+            out.push(RawCandidate::new(
+                reading,
                 pos..pos + first_len,
                 Score::kanji(1),
             ));
@@ -148,7 +163,12 @@ impl<'a> DictBridgeProvider<'a> {
 }
 
 impl<'a> CandidateProvider for DictBridgeProvider<'a> {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+    fn candidates_at<'b>(
+        &'b self,
+        ctx: &ScoringContext<'b>,
+        pos: usize,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) {
         let input = ctx.input;
         let tail = &input[pos..];
         let Some(first_char) = tail.chars().next() else {
@@ -161,7 +181,7 @@ impl<'a> CandidateProvider for DictBridgeProvider<'a> {
         // ただし query 対象は常に先頭 1 字 surface なので bool で十分)。
         let mut char_emitted = self.emit_entries(input, pos, tail, out);
         if !char_emitted {
-            char_emitted = self.emit_kanji_blocks(input, pos, tail, first_char, first_len, out);
+            char_emitted = self.emit_kanji_blocks(input, pos, first_char, first_len, out);
         }
         if !char_emitted {
             self.emit_unihan(pos, tail, first_len, out);

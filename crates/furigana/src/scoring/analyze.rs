@@ -14,7 +14,7 @@
 //! - **lib は collect しない** (OSS ローカル完結方針)、 caller 任意で persist
 
 use crate::scoring::bracket::{parse_bracket_notation, strip_intonation_markers, AccentPhrase};
-use crate::scoring::candidate::{Candidate, CandidateProvider, ScoringContext};
+use crate::scoring::candidate::{Candidate, CandidateProvider, RawCandidate, ScoringContext};
 use crate::scoring::engine::solve_path;
 use serde::Serialize;
 use std::ops::Range;
@@ -104,7 +104,10 @@ pub struct AnalyzeResult {
 /// その死荷重を払わず [`solve_path`] → Token 変換のみ行う。 inspect が要る caller は
 /// 引き続き [`analyze`] を使う。
 #[must_use]
-pub fn analyze_tokens(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) -> Vec<Token> {
+pub fn analyze_tokens<'a>(
+    ctx: &ScoringContext<'a>,
+    providers: &[&'a dyn CandidateProvider],
+) -> Vec<Token> {
     solve_path(ctx, providers)
         .iter()
         .map(Token::from_candidate)
@@ -121,7 +124,10 @@ pub fn analyze_tokens(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]
 /// - 入力空 → 全 field 空
 /// - path 構築不能 (= input 覆い切れない) → tokens / path_indices 空、 candidates / boundary_regions は計算結果残る
 /// - path 構築成功 → tokens / path_indices / candidates が同 length、 path_indices[i] = tokens[i].range.start
-pub fn analyze(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) -> AnalyzeResult {
+pub fn analyze<'a>(
+    ctx: &ScoringContext<'a>,
+    providers: &[&'a dyn CandidateProvider],
+) -> AnalyzeResult {
     // 1. solve_path で採択 path 取得
     let path = solve_path(ctx, providers);
 
@@ -135,11 +141,13 @@ pub fn analyze(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) -> An
     let candidates: Vec<Vec<Candidate>> = path_indices
         .iter()
         .map(|&pos| {
-            let mut all = Vec::new();
+            let mut all: Vec<RawCandidate<'a>> = Vec::new();
             for provider in providers {
                 provider.candidates_at(ctx, pos, &mut all);
             }
-            all
+            all.into_iter()
+                .map(|c| c.into_candidate(ctx.input))
+                .collect()
         })
         .collect();
 
@@ -213,15 +221,23 @@ mod tests {
     }
 
     impl CandidateProvider for DictProvider {
-        fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+        fn candidates_at<'a>(
+            &'a self,
+            ctx: &ScoringContext<'a>,
+            pos: usize,
+            out: &mut Vec<RawCandidate<'a>>,
+        ) {
             for (surface, reading, score) in &self.entries {
                 if ctx.input[pos..].starts_with(surface.as_str()) {
-                    out.push(Candidate::new(
-                        surface.clone(),
-                        reading.clone(),
-                        pos..pos + surface.len(),
-                        *score,
-                    ));
+                    out.push(
+                        Candidate::new(
+                            surface.clone(),
+                            reading.clone(),
+                            pos..pos + surface.len(),
+                            *score,
+                        )
+                        .into(),
+                    );
                 }
             }
         }

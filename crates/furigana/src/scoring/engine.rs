@@ -17,7 +17,9 @@
 //! - candidate range は valid (= `range.start <= range.end <= input.len()`) であること、 invalid range は skip
 //! - 同 path score の場合は **第一発見** が勝つ (TOML 出現順 / provider 順依存)
 
-use crate::scoring::candidate::{Candidate, CandidateProvider, Score, ScoringContext};
+use crate::scoring::candidate::{
+    Candidate, CandidateProvider, RawCandidate, Score, ScoringContext,
+};
 use std::cmp::Ordering;
 
 /// path 全体の累積 score。
@@ -100,7 +102,10 @@ impl PartialOrd for PathScore {
 ///
 /// O(N × C) — N = input byte 長、 C = 各位置での平均候補数。
 /// providers の中身次第、 通常は十分高速。
-pub fn solve_path(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) -> Vec<Candidate> {
+pub fn solve_path<'a>(
+    ctx: &ScoringContext<'a>,
+    providers: &[&'a dyn CandidateProvider],
+) -> Vec<Candidate> {
     let n = ctx.input.len();
     if n == 0 {
         return Vec::new();
@@ -111,10 +116,11 @@ pub fn solve_path(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) ->
     dp[0] = Some(PathScore::ZERO);
 
     // parent[i] = (prev_pos, candidate) — i に到達するために使った edge
-    let mut parent: Vec<Option<(usize, Candidate)>> = vec![None; n + 1];
+    // (候補は内部型 [`RawCandidate`] のまま持ち、 公開型へは採択 path だけ変換する)
+    let mut parent: Vec<Option<(usize, RawCandidate<'a>)>> = vec![None; n + 1];
 
     // 各位置の候補収集バッファ (位置ごとに確保し直さず clear して使い回す)
-    let mut all_candidates: Vec<Candidate> = Vec::new();
+    let mut all_candidates: Vec<RawCandidate<'a>> = Vec::new();
 
     for pos in 0..n {
         let Some(current_score) = dp[pos] else {
@@ -164,7 +170,7 @@ pub fn solve_path(ctx: &ScoringContext, providers: &[&dyn CandidateProvider]) ->
             // 矛盾: dp[pos] あるが parent なし → 空 Vec で諦める
             return Vec::new();
         };
-        path.push(cand);
+        path.push(cand.into_candidate(ctx.input));
         pos = prev_pos;
     }
     path.reverse();
@@ -249,16 +255,18 @@ mod tests {
     }
 
     impl CandidateProvider for DictProvider {
-        fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+        fn candidates_at<'a>(
+            &'a self,
+            ctx: &ScoringContext<'a>,
+            pos: usize,
+            out: &mut Vec<RawCandidate<'a>>,
+        ) {
             for (surface, reading, score) in &self.entries {
                 if ctx.input[pos..].starts_with(surface.as_str()) {
                     let end = pos + surface.len();
-                    out.push(Candidate::new(
-                        surface.clone(),
-                        reading.clone(),
-                        pos..end,
-                        *score,
-                    ));
+                    out.push(
+                        Candidate::new(surface.clone(), reading.clone(), pos..end, *score).into(),
+                    );
                 }
             }
         }
@@ -270,17 +278,25 @@ mod tests {
     }
 
     impl CandidateProvider for CharProvider {
-        fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+        fn candidates_at<'a>(
+            &'a self,
+            ctx: &ScoringContext<'a>,
+            pos: usize,
+            out: &mut Vec<RawCandidate<'a>>,
+        ) {
             let Some(c) = ctx.input[pos..].chars().next() else {
                 return;
             };
             let len = c.len_utf8();
-            out.push(Candidate::new(
-                c.to_string(),
-                c.to_string(), // dummy reading = surface
-                pos..pos + len,
-                self.score,
-            ));
+            out.push(
+                Candidate::new(
+                    c.to_string(),
+                    c.to_string(), // dummy reading = surface
+                    pos..pos + len,
+                    self.score,
+                )
+                .into(),
+            );
         }
     }
 
@@ -445,8 +461,13 @@ mod tests {
         // 0-length (= range.start == range.end) は skip される
         struct BadProvider;
         impl CandidateProvider for BadProvider {
-            fn candidates_at(&self, _ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
-                out.push(Candidate::new("", "", pos..pos, Score::dict_exact(0)));
+            fn candidates_at<'a>(
+                &'a self,
+                _ctx: &ScoringContext<'a>,
+                pos: usize,
+                out: &mut Vec<RawCandidate<'a>>,
+            ) {
+                out.push(Candidate::new("", "", pos..pos, Score::dict_exact(0)).into());
             }
         }
         let chars = CharProvider {
@@ -466,14 +487,22 @@ mod tests {
     fn solve_path_skips_out_of_bounds_candidate() {
         struct OobProvider;
         impl CandidateProvider for OobProvider {
-            fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+            fn candidates_at<'a>(
+                &'a self,
+                ctx: &ScoringContext<'a>,
+                pos: usize,
+                out: &mut Vec<RawCandidate<'a>>,
+            ) {
                 // input 末尾を超える range を返す壊れた provider
-                out.push(Candidate::new(
-                    "猫猫",
-                    "ネコネコ",
-                    pos..ctx.input.len() + 3,
-                    Score::dict_exact(2),
-                ));
+                out.push(
+                    Candidate::new(
+                        "猫猫",
+                        "ネコネコ",
+                        pos..ctx.input.len() + 3,
+                        Score::dict_exact(2),
+                    )
+                    .into(),
+                );
             }
         }
         let chars = CharProvider {

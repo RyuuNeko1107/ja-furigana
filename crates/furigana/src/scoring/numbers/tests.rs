@@ -4,6 +4,7 @@
 use super::*;
 use crate::loader::load_rules_dir;
 use crate::scoring::boundary::BoundaryAnalysis;
+use crate::scoring::candidate::Candidate;
 use std::path::PathBuf;
 
 fn ctx(input: &str) -> ScoringContext<'_> {

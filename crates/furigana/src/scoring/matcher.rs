@@ -437,13 +437,18 @@ pub type ResolvedReading<'a> = (&'a str, u8, u8);
 ///    alt の match_hits は **常に 0**: match_hits は lexicographic で weight より上位の
 ///    軸なので、 alt に載せると path 選択で default を逆転しうる
 ///    (= ADR-0004 の 「default が常に path に乗る」 不変条件が壊れる)。
-#[must_use]
-pub fn resolve_readings<'a>(
+///
+/// 候補生成の hot path で毎回 `Vec` を確保しないよう iterator で返す
+/// (primary は即時評価、 alt の condition は iterate 時に評価)。
+pub fn resolve_readings<'a, 'c>(
     matches: &'a [MatchBlock],
     default: &'a str,
     alts: &'a [Alternative],
-    ctx: &MatchContext<'_>,
-) -> Vec<ResolvedReading<'a>> {
+    ctx: &'c MatchContext<'_>,
+) -> impl Iterator<Item = ResolvedReading<'a>> + 'c
+where
+    'a: 'c,
+{
     let (primary, primary_hits) = matches
         .iter()
         .find_map(|m| {
@@ -452,13 +457,11 @@ pub fn resolve_readings<'a>(
                 .map(|hits| (m.reading.as_str(), hits))
         })
         .unwrap_or((default, 0));
-    let mut out = vec![(primary, WEIGHT_DEFAULT, primary_hits)];
-    for alt in alts {
-        if alt.condition.matches_context(ctx) {
-            out.push((alt.reading.as_str(), alt.weight, 0));
-        }
-    }
-    out
+    std::iter::once((primary, WEIGHT_DEFAULT, primary_hits)).chain(
+        alts.iter()
+            .filter(move |alt| alt.condition.matches_context(ctx))
+            .map(|alt| (alt.reading.as_str(), alt.weight, 0)),
+    )
 }
 
 #[cfg(test)]
@@ -950,10 +953,12 @@ mod tests {
             },
         }];
         // match block hit → primary に重み付き hits
-        let hit = resolve_readings(&matches, "ウワテ", &[], &MatchContext::with_next("だ"));
+        let hit = resolve_readings(&matches, "ウワテ", &[], &MatchContext::with_next("だ"))
+            .collect::<Vec<_>>();
         assert_eq!(hit, vec![("ジョウズ", WEIGHT_DEFAULT, HIT_WEIGHT_LITERAL)]);
         // miss → default、 hits 0
-        let miss = resolve_readings(&matches, "ウワテ", &[], &MatchContext::empty());
+        let miss =
+            resolve_readings(&matches, "ウワテ", &[], &MatchContext::empty()).collect::<Vec<_>>();
         assert_eq!(miss, vec![("ウワテ", WEIGHT_DEFAULT, 0)]);
     }
 
@@ -969,7 +974,8 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let out = resolve_readings(&[], "ウワテ", &alts, &MatchContext::with_next("から"));
+        let out = resolve_readings(&[], "ウワテ", &alts, &MatchContext::with_next("から"))
+            .collect::<Vec<_>>();
         assert_eq!(out, vec![("ウワテ", WEIGHT_DEFAULT, 0), ("カミテ", 30, 0)]);
     }
 

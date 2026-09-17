@@ -18,7 +18,7 @@
 
 use crate::char_class::{self, is_digit_char};
 use crate::scoring::candidate::{
-    Candidate, CandidateProvider, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
+    CandidateProvider, RawCandidate, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
     BAND_PROTECTED,
 };
 use once_cell::sync::Lazy;
@@ -167,15 +167,19 @@ impl ProtectTokenProvider {
 }
 
 impl CandidateProvider for ProtectTokenProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+    fn candidates_at<'b>(
+        &'b self,
+        ctx: &ScoringContext<'b>,
+        pos: usize,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) {
         for token in &self.tokens {
             if token.range.start == pos {
                 let surface = &ctx.input[token.range.clone()];
                 let char_count = surface.chars().count();
                 let length = u8::try_from(char_count).unwrap_or(u8::MAX);
-                out.push(Candidate::new(
-                    surface.to_string(),
-                    surface.to_string(), // reading = surface (passthrough)
+                out.push(RawCandidate::new(
+                    surface, // reading = surface (passthrough)
                     token.range.clone(),
                     Score::new(BAND_PROTECTED, length, 0),
                 ));
@@ -397,7 +401,12 @@ impl AlphabetPassthroughProvider {
 }
 
 impl CandidateProvider for AlphabetPassthroughProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+    fn candidates_at<'b>(
+        &'b self,
+        ctx: &ScoringContext<'b>,
+        pos: usize,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) {
         for range in &self.ranges {
             if range.start != pos {
                 continue;
@@ -427,12 +436,11 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                 strip_alphabet_connectors(&normalized).and_then(|k| self.lookup.get(&k))
             });
             let (reading, band) = match hit {
-                Some(r) => (r.clone(), BAND_DICT_EXACT),
-                None => (surface.to_string(), BAND_KANJI), // passthrough miss は fallback band
+                Some(r) => (r.as_str(), BAND_DICT_EXACT),
+                None => (surface, BAND_KANJI), // passthrough miss は fallback band
             };
 
-            out.push(Candidate::new(
-                surface.to_string(),
+            out.push(RawCandidate::new(
                 reading,
                 range.clone(),
                 Score::new(band, length, 0),

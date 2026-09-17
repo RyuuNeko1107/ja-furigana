@@ -9,6 +9,7 @@
 
 use crate::error::{FuriganaError, Result};
 use lindera::dictionary::load_dictionary;
+use lindera::dictionary::Lattice;
 use lindera::mode::Mode;
 use lindera::segmenter::Segmenter;
 use lindera::tokenizer::Tokenizer;
@@ -55,8 +56,24 @@ impl MorphToken {
 
 /// 形態素解析器
 pub struct Analyzer {
-    tokenizer: Mutex<Tokenizer>,
+    tokenizer: Mutex<TokenizerState>,
 }
+
+/// Mutex で守る tokenizer 本体 + 使い回す lattice。
+///
+/// `Tokenizer::tokenize` は呼ぶたびに `Lattice` を新規確保する (短文 1 回で約 14 KiB、
+/// 解析 1 回の確保量の最大項)。 tokenizer はもともと Mutex で直列化しているので、
+/// lattice も同じ lock の下に置いて `tokenize_with_lattice` で使い回す。
+struct TokenizerState {
+    tokenizer: Tokenizer,
+    lattice: Lattice,
+}
+
+/// これより長い入力を解析した後は lattice を捨てる (byte 数)。
+///
+/// lattice の容量は過去最長の入力に合わせて伸びたまま残るので、 巨大入力 1 回で
+/// 常駐メモリが増え続けないよう、 閾値超えの時だけ作り直す。
+const LATTICE_RETAIN_MAX_BYTES: usize = 64 * 1024;
 
 /// 埋め込み辞書の URI ★alpha.17。 feature flag (= `dict-ipadic` / `dict-unidic`) で
 /// 排他的に switch。 IPADIC と UniDic で details field の意味が違うので、
@@ -101,7 +118,10 @@ impl Analyzer {
         let segmenter = Segmenter::new(Mode::Normal, dictionary, None);
         let tokenizer = Tokenizer::new(segmenter);
         Ok(Self {
-            tokenizer: Mutex::new(tokenizer),
+            tokenizer: Mutex::new(TokenizerState {
+                tokenizer,
+                lattice: Lattice::default(),
+            }),
         })
     }
 
@@ -111,6 +131,57 @@ impl Analyzer {
     /// (surface のみ) として返す — 呼び出し側が常に何らかの結果を扱える保証。
     #[must_use]
     pub fn tokenize(&self, text: &str) -> Vec<MorphToken> {
+        self.tokenize_with(text, MorphToken::surface_only, |surface, details| {
+            let get_detail = |i: usize| detail_at(details, i).map(ToString::to_string);
+            MorphToken {
+                surface: surface.to_string(),
+                reading: reading_of(details),
+                pos: details.first().map(ToString::to_string),
+                pos_detail: get_detail(1),
+                pos_detail2: get_detail(2),
+                conjugation_type: get_detail(4),
+                conjugation_form: get_detail(5),
+                base_form: get_detail(FIELD_BASE_FORM),
+            }
+        })
+    }
+
+    /// crate 内部用の軽量 tokenize: surface / reading / 固有名詞判定だけを返す。
+    ///
+    /// [`Self::tokenize`] は 1 形態素ごとに品詞・活用・原形の `String` を 6 本確保するが、
+    /// 解析 pipeline (Lindera fallback / 人名 post-pass / accent 推定) が見るのは
+    /// 固有名詞・人名かどうかだけなので、 その 2 つを bool で持つ。
+    /// 失敗時の振る舞い (入力全体を surface-only 1 token) は [`Self::tokenize`] と同じ。
+    pub(crate) fn tokenize_light(&self, text: &str) -> Vec<LightMorph> {
+        self.tokenize_with(
+            text,
+            |t| LightMorph {
+                surface: t.to_string(),
+                reading: None,
+                is_proper_noun: false,
+                is_person_name: false,
+            },
+            |surface, details| {
+                let is_proper_noun =
+                    details.first() == Some(&"名詞") && detail_at(details, 1) == Some("固有名詞");
+                LightMorph {
+                    surface: surface.to_string(),
+                    reading: reading_of(details),
+                    is_proper_noun,
+                    is_person_name: is_proper_noun && detail_at(details, 2) == Some("人名"),
+                }
+            },
+        )
+    }
+
+    /// tokenize の共通土台。 lock 取得・lattice 使い回し・失敗時 fallback を持ち、
+    /// 各形態素を `map(surface, details)` で変換する。
+    fn tokenize_with<T>(
+        &self,
+        text: &str,
+        fallback: impl FnOnce(&str) -> T,
+        mut map: impl FnMut(&str, &[&str]) -> T,
+    ) -> Vec<T> {
         if text.is_empty() {
             return Vec::new();
         }
@@ -119,51 +190,67 @@ impl Analyzer {
         // 恒久 degrade (形態素解析なし) に固定されてしまう。 poison は別 thread の
         // panic 由来で、 `Tokenizer::tokenize` は `&self` (read-only、 内部可変は
         // Mutex で排他) なので、 lock を奪い返して継続するのが安全 (恒久 degrade 回避)。
-        let tokenizer = self.tokenizer.lock().unwrap_or_else(|poisoned| {
+        let mut guard = self.tokenizer.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("Tokenizer mutex poisoned; recovering lock and continuing");
             poisoned.into_inner()
         });
+        let state = &mut *guard;
 
-        match tokenizer.tokenize(text) {
+        let result = match state
+            .tokenizer
+            .tokenize_with_lattice(text, &mut state.lattice)
+        {
             Ok(mut tokens) => tokens
                 .iter_mut()
                 .map(|t| {
-                    let surface = t.surface.to_string();
+                    // surface は入力の借用 (Cow::Borrowed) なので clone は参照コピーのみ
+                    let surface = t.surface.clone();
                     let details = t.details();
-                    let get_detail = |i: usize| -> Option<String> {
-                        details
-                            .get(i)
-                            .filter(|v| **v != "*" && !v.is_empty())
-                            .map(ToString::to_string)
-                    };
-                    // ★alpha.17: UniDic は pron が長音符 「ー」 で長音を表すので
-                    // (例: 「学校=ガッコー」)、 表記読み (「ガッコウ」) に正規化する。
-                    // IPADIC では適用しない: 外来語 reading は正当に ー を含み
-                    // (カーテン 等)、 正規化すると カアテン に化ける (0.2.0 で修正、
-                    // 旧実装は無条件適用で IPADIC 外来語の長音が母音化けしていた)。
-                    #[cfg(all(feature = "dict-unidic", not(feature = "dict-ipadic")))]
-                    let reading =
-                        get_detail(FIELD_READING).map(|r| crate::kana::normalize_long_vowel(&r));
-                    #[cfg(all(feature = "dict-ipadic", not(feature = "dict-unidic")))]
-                    let reading = get_detail(FIELD_READING);
-                    MorphToken {
-                        surface,
-                        reading,
-                        pos: details.first().map(ToString::to_string),
-                        pos_detail: get_detail(1),
-                        pos_detail2: get_detail(2),
-                        conjugation_type: get_detail(4),
-                        conjugation_form: get_detail(5),
-                        base_form: get_detail(FIELD_BASE_FORM),
-                    }
+                    map(&surface, &details)
                 })
                 .collect(),
             Err(e) => {
                 tracing::warn!("tokenize error: {e}");
-                vec![MorphToken::surface_only(text)]
+                vec![fallback(text)]
             }
+        };
+        if text.len() > LATTICE_RETAIN_MAX_BYTES {
+            state.lattice = Lattice::default();
         }
+        result
     }
+}
+
+/// [`Analyzer::tokenize_light`] の 1 形態素。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LightMorph {
+    pub surface: String,
+    pub reading: Option<String>,
+    /// 品詞 = 名詞 / 固有名詞
+    pub is_proper_noun: bool,
+    /// 品詞 = 名詞 / 固有名詞 / 人名
+    pub is_person_name: bool,
+}
+
+/// details[i] を返す。 `*` と空文字は `None` に正規化する。
+fn detail_at<'d>(details: &[&'d str], i: usize) -> Option<&'d str> {
+    details
+        .get(i)
+        .copied()
+        .filter(|v| *v != "*" && !v.is_empty())
+}
+
+/// details から読み (カタカナ) を取り出す。
+fn reading_of(details: &[&str]) -> Option<String> {
+    // ★alpha.17: UniDic は pron が長音符 「ー」 で長音を表すので
+    // (例: 「学校=ガッコー」)、 表記読み (「ガッコウ」) に正規化する。
+    // IPADIC では適用しない: 外来語 reading は正当に ー を含み
+    // (カーテン 等)、 正規化すると カアテン に化ける (0.2.0 で修正、
+    // 旧実装は無条件適用で IPADIC 外来語の長音が母音化けしていた)。
+    #[cfg(all(feature = "dict-unidic", not(feature = "dict-ipadic")))]
+    return detail_at(details, FIELD_READING).map(crate::kana::normalize_long_vowel);
+    #[cfg(all(feature = "dict-ipadic", not(feature = "dict-unidic")))]
+    return detail_at(details, FIELD_READING).map(ToString::to_string);
 }
 
 impl std::fmt::Debug for Analyzer {

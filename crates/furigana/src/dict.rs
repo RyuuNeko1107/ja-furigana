@@ -453,11 +453,9 @@ impl Dict {
         // 先頭 2 文字が一致する連続区間 (tail が 1 字なら 1 字 surface のみ対象)。
         let range: &[String] = match (first, chars.next()) {
             (Some(c1), Some(c2)) => {
-                let mut two = String::with_capacity(c1.len_utf8() + c2.len_utf8());
-                two.push(c1);
-                two.push(c2);
-                let lo = bucket.partition_point(|s| s.as_str() < two.as_str());
-                let hi = lo + bucket[lo..].partition_point(|s| s.starts_with(two.as_str()));
+                let two = &tail[..c1.len_utf8() + c2.len_utf8()];
+                let lo = bucket.partition_point(|s| s.as_str() < two);
+                let hi = lo + bucket[lo..].partition_point(|s| s.starts_with(two));
                 &bucket[lo..hi]
             }
             _ => &[],

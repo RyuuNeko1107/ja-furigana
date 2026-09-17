@@ -50,7 +50,7 @@
 //!   bracket strip は Token 変換時に `parse_bracket_notation` が一括処理。
 
 use crate::analyzer::Analyzer;
-use crate::scoring::candidate::{Candidate, CandidateProvider, Score, ScoringContext};
+use crate::scoring::candidate::{CandidateProvider, RawCandidate, Score, ScoringContext};
 
 /// band-up 対象の判定: 「CJK 統合漢字範囲のみ」 で 々/〆/ヶ は除外する。
 ///
@@ -97,8 +97,8 @@ fn is_standalone_kana(c: char) -> bool {
 
 /// Lindera tokenize 結果を edge 配列で保持する fallback provider。
 ///
-/// construction 時に 1 度だけ tokenize、 以降 `candidates_at` は O(edge_count)
-/// で位置 lookup (= 通常 input なら数十 edges 程度、 amortized 軽量)。
+/// construction 時に 1 度だけ tokenize、 以降 `candidates_at` は start 昇順の edge 配列を
+/// 二分探索して位置 lookup (O(log edge_count))。
 #[derive(Debug, Clone, Default)]
 pub struct LinderaFallbackProvider {
     /// (byte_start, byte_end, reading, is_name) の 4-tuple。
@@ -117,7 +117,7 @@ impl LinderaFallbackProvider {
         if input.is_empty() {
             return Self::default();
         }
-        let tokens = analyzer.tokenize(input);
+        let tokens = analyzer.tokenize_light(input);
         let mut edges = Vec::with_capacity(tokens.len());
         let mut byte_pos = 0usize;
         for tok in tokens {
@@ -142,9 +142,7 @@ impl LinderaFallbackProvider {
             let end = byte_pos + surface_len;
             // reading: Lindera details[7] (= カタカナ)、 無ければ surface fallback
             // (= 記号 / 未知語、 reading = surface で 「読まない」 扱い)
-            let is_name = tok.pos.as_deref() == Some("名詞")
-                && tok.pos_detail.as_deref() == Some("固有名詞")
-                && tok.pos_detail2.as_deref() == Some("人名");
+            let is_name = tok.is_person_name;
             let reading = tok.reading.unwrap_or_else(|| tok.surface.clone());
             edges.push((byte_pos, end, reading, is_name));
             byte_pos = end;
@@ -157,6 +155,10 @@ impl LinderaFallbackProvider {
             return Self::default();
         }
         Self::push_kana_suffix_edges(input, &mut edges);
+        // `candidates_at` が start 位置で二分探索できるよう start 昇順に並べる。
+        // **安定** sort なので、 同じ start の edge 同士の順序 (= 候補の列挙順、
+        // Viterbi の同点 tie-break に効く) は push 順のまま保たれる。
+        edges.sort_by_key(|(start, _, _, _)| *start);
         Self { edges }
     }
 
@@ -267,12 +269,19 @@ impl LinderaFallbackProvider {
 }
 
 impl CandidateProvider for LinderaFallbackProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+    fn candidates_at<'b>(
+        &'b self,
+        ctx: &ScoringContext<'b>,
+        pos: usize,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) {
         let input = ctx.input;
-        let found = self
-            .edges
+        // edges は start 昇順 (new で安定 sort 済) = start == pos の edge は連続区間。
+        // 旧実装は全 edge を毎位置 filter していた (入力長に対して O(N²))。
+        let lo = self.edges.partition_point(|(start, _, _, _)| *start < pos);
+        let hi = lo + self.edges[lo..].partition_point(|(start, _, _, _)| *start == pos);
+        let found = self.edges[lo..hi]
             .iter()
-            .filter(|(start, _, _, _)| *start == pos)
             .map(|(start, end, reading, is_name)| {
                 let surface = &input[*start..*end];
                 let char_count = surface.chars().count();
@@ -289,8 +298,7 @@ impl CandidateProvider for LinderaFallbackProvider {
                 } else {
                     Score::lindera(length)
                 };
-                Candidate::new(surface.to_string(), reading.clone(), *start..*end, score)
-                    .with_name_flag(*is_name)
+                RawCandidate::new(reading.as_str(), *start..*end, score).with_name_flag(*is_name)
             });
         out.extend(found);
     }

@@ -122,13 +122,8 @@ fn flag_suffix_context_names(tokens: &mut [Token], analyzer: &Analyzer) {
         if t.range.end != next.range.start || !SUFFIXES.iter().any(|(s, _)| *s == next.surface) {
             continue;
         }
-        let morphs = analyzer.tokenize(&t.surface);
-        let is_name = matches!(
-            morphs.as_slice(),
-            [m] if m.pos.as_deref() == Some("名詞")
-                && m.pos_detail.as_deref() == Some("固有名詞")
-                && m.pos_detail2.as_deref() == Some("人名")
-        );
+        let morphs = analyzer.tokenize_light(&t.surface);
+        let is_name = matches!(morphs.as_slice(), [m] if m.is_person_name);
         if is_name {
             tokens[i].is_name = true;
         }

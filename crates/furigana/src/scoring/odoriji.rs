@@ -34,7 +34,9 @@
 
 use crate::kana::voice_first_kana;
 use crate::scoring::analyze::Token;
-use crate::scoring::candidate::{Candidate, CandidateProvider, Score, ScoringContext, BAND_KANJI};
+use crate::scoring::candidate::{
+    CandidateProvider, RawCandidate, Score, ScoringContext, BAND_KANJI,
+};
 
 /// 踊り字 (々) char。
 const ODORIJI_CHAR: char = '々';
@@ -57,7 +59,12 @@ impl OdorijiProvider {
 }
 
 impl CandidateProvider for OdorijiProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+    fn candidates_at<'b>(
+        &'b self,
+        ctx: &ScoringContext<'b>,
+        pos: usize,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) {
         let tail = &ctx.input[pos..];
         let Some(c) = tail.chars().next() else {
             return;
@@ -66,8 +73,7 @@ impl CandidateProvider for OdorijiProvider {
             return;
         }
         let len = c.len_utf8();
-        out.push(Candidate::new(
-            ODORIJI_CHAR.to_string(),
+        out.push(RawCandidate::new(
             ODORIJI_CHAR.to_string(), // placeholder、 post-pass で連濁適用
             pos..pos + len,
             Score::new(BAND_KANJI, 1, 0),

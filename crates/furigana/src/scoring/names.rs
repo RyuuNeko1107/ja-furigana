@@ -88,13 +88,9 @@ impl<'a> NameBoundaryPass<'a> {
         // IPADIC で 1 token + 固有名詞 (姓 / 名 / 地域等) に解析される場合のみ採用。
         // 普通名詞を除外するのは 「偶然隣接した漢字 2 字が一般語になる」 誤爆を避けるため
         // (一般語なら Viterbi が最初からその path を選べたはずで、 選ばなかった = 文脈が違う)。
-        let morphs = self.analyzer.tokenize(combined);
+        let morphs = self.analyzer.tokenize_light(combined);
         match morphs.as_slice() {
-            [m] if m.pos.as_deref() == Some("名詞")
-                && m.pos_detail.as_deref() == Some("固有名詞") =>
-            {
-                m.reading.clone()
-            }
+            [m] if m.is_proper_noun => m.reading.clone(),
             _ => None,
         }
     }

@@ -57,7 +57,7 @@ use crate::numbers::{
 };
 use crate::rules::{CountersData, DaysData, RulesData, ScalesData, SymbolsData, UnitsData};
 use crate::scoring::candidate::{
-    Candidate, CandidateProvider, Score, ScoringContext, BAND_SPECIAL,
+    CandidateProvider, RawCandidate, Score, ScoringContext, BAND_SPECIAL,
 };
 use patterns::{
     at_start, build_counter_regexes, build_scale_regex, build_si_unit_regex, DATE_KANJI_FULL_RE,
@@ -154,12 +154,17 @@ impl NumberCandidateProvider {
         std::sync::Arc::clone(&self.unit_symbols)
     }
 
-    fn make(&self, input: &str, pos: usize, m_end: usize, reading: String) -> Candidate {
+    fn make(
+        &self,
+        input: &str,
+        pos: usize,
+        m_end: usize,
+        reading: String,
+    ) -> RawCandidate<'static> {
         let surface = &input[pos..pos + m_end];
         let char_count = surface.chars().count();
         let length = u8::try_from(char_count).unwrap_or(u8::MAX);
-        Candidate::new(
-            surface.to_string(),
+        RawCandidate::new(
             reading,
             pos..pos + m_end,
             Score::new(BAND_SPECIAL, length, 0),
@@ -290,7 +295,7 @@ impl NumberCandidateProvider {
         pos: usize,
         rest: &str,
         first_char: char,
-        out: &mut Vec<Candidate>,
+        out: &mut Vec<RawCandidate<'_>>,
     ) {
         let Some(bucket) = self.phrase_index.get(&first_char) else {
             return;
@@ -303,7 +308,7 @@ impl NumberCandidateProvider {
     }
 
     /// section 1: 和式日付 (full → MD の優先順、 full が match したら MD は試さない)。
-    fn try_date(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn try_date(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(caps) = at_start(&DATE_KANJI_FULL_RE, rest) {
             let m_end = caps.get(0).unwrap().end();
             let y = caps.get(1).unwrap().as_str();
@@ -330,7 +335,7 @@ impl NumberCandidateProvider {
     }
 
     /// section 2: 和式時刻 (H時M分S秒 / H時M分 / H時)。
-    fn try_time_jp(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn try_time_jp(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(caps) = at_start(&TIME_JP_FULL_RE, rest) {
             let m_end = caps.get(0).unwrap().end();
             let h = caps.get(1).unwrap().as_str();
@@ -348,7 +353,7 @@ impl NumberCandidateProvider {
     }
 
     /// section 3: 時刻 HH:MM(:SS)。
-    fn try_time_colon(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn try_time_colon(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(caps) = at_start(&TIME_COLON_RE, rest) {
             let m_end = caps.get(0).unwrap().end();
             let h = caps.get(1).unwrap().as_str();
@@ -364,7 +369,7 @@ impl NumberCandidateProvider {
     }
 
     /// section 4: 数値 + 大数スケール (+ 末尾漢字 unit)。
-    fn try_scale(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn try_scale(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(re) = &self.scale_re else { return };
         if let Some(caps) = at_start(re, rest) {
             let m_end = caps.get(0).unwrap().end();
@@ -394,7 +399,7 @@ impl NumberCandidateProvider {
     }
 
     /// section 5: 数値 + SI 単位。
-    fn try_si_unit(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn try_si_unit(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(re) = &self.si_unit_re else { return };
         if let Some(caps) = at_start(re, rest) {
             let m_end = caps.get(0).unwrap().end();
@@ -414,7 +419,7 @@ impl NumberCandidateProvider {
     }
 
     /// section 6: 数値 + 単一助数詞 (+ optional 末尾再帰 「目」)。
-    fn try_counter(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn try_counter(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(re) = &self.counter_re else { return };
         if let Some(caps) = at_start(re, rest) {
             let m_end = caps.get(0).unwrap().end();
@@ -442,7 +447,13 @@ impl NumberCandidateProvider {
     ///   opt-in している時のみ採用 (= 「一日中」 の 「一日」 等の誤 counter 化を防ぐ)。
     ///   euphony は `read_counter` 内の `kansuji_to_arabic` + `euphonic_counter_read` が
     ///   担うので、 連濁 (三羽→さんば) / 促音 (六匹→ろっぴき) も自動で効く。
-    fn try_counter_kanji(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn try_counter_kanji(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
         let Some(re) = &self.counter_kanji_re else {
             return;
         };
@@ -472,7 +483,7 @@ impl NumberCandidateProvider {
 
     /// section 7: 記号 1 文字。 candidates_at から、 数値系を skip する非数値
     /// lead 経路と通常経路の双方から呼ぶ (= 記号判定は数値系の有無に依らず常に行う)。
-    fn emit_symbol(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn emit_symbol(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(ch) = rest.chars().next() else {
             return;
         };
@@ -524,7 +535,7 @@ impl NumberCandidateProvider {
     }
 
     /// section 8: 素の数字。
-    fn try_digit(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<Candidate>) {
+    fn try_digit(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(m) = at_start(&DIGIT_RE, rest) {
             let m_end = m.get(0).unwrap().end();
             let num = m.get(0).unwrap().as_str();
@@ -534,7 +545,12 @@ impl NumberCandidateProvider {
 }
 
 impl CandidateProvider for NumberCandidateProvider {
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>) {
+    fn candidates_at<'b>(
+        &'b self,
+        ctx: &ScoringContext<'b>,
+        pos: usize,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) {
         let input = ctx.input;
         let rest = &input[pos..];
         let Some(first_char) = rest.chars().next() else {

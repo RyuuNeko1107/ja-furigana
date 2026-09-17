@@ -105,7 +105,7 @@ impl<'a> Pipeline<'a> {
     fn with_providers<R>(
         &self,
         input: &str,
-        run: impl FnOnce(&ScoringContext, &[&dyn CandidateProvider]) -> R,
+        run: impl for<'p> FnOnce(&ScoringContext<'p>, &[&'p dyn CandidateProvider]) -> R,
     ) -> R {
         let protect = ProtectTokenProvider::new(input);
         let unit_symbols = self.number_provider.unit_symbols();

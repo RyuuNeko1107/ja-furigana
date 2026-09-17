@@ -11,6 +11,7 @@
 
 use crate::scoring::boundary::BoundaryAnalysis;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::Range;
 
@@ -213,10 +214,85 @@ impl Candidate {
     }
 
     /// 人名 flag を立てて返す (builder 風、 ADR-0007)。
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn with_name_flag(mut self, is_name: bool) -> Self {
         self.is_name = is_name;
         self
+    }
+}
+
+// ─── RawCandidate (内部の候補 edge) ──────────────────────────────────────────
+
+/// provider が Viterbi に渡す内部用の候補 edge。
+///
+/// 公開型 [`Candidate`] との違いは 2 点:
+///
+/// - `surface` を持たない (常に `input[range]` なので必要時に切り出せば足りる)
+/// - `reading` を借用 ([`Cow`]) で持つ (dict / Lindera edge の読みを複製しない)
+///
+/// 1 位置あたり数件〜数十件生成され、 path に採られるのはそのうち 1 件なので、
+/// 全候補に `String` を 2 本確保していた旧形は確保の大半が捨てられていた。
+/// 公開 API ([`AnalyzeResult`](crate::AnalyzeResult) の `candidates` / 採択 path) へ出す時だけ
+/// [`Self::into_candidate`] で [`Candidate`] にする。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawCandidate<'a> {
+    /// reading 文字列 (カタカナ等)
+    pub reading: Cow<'a, str>,
+    /// input text 上の byte range
+    pub range: Range<usize>,
+    /// score tuple
+    pub score: Score,
+    /// 人名 candidate flag ([`Candidate`] の同名 field と同じ)
+    pub is_name: bool,
+}
+
+impl<'a> RawCandidate<'a> {
+    #[must_use]
+    pub fn new(reading: impl Into<Cow<'a, str>>, range: Range<usize>, score: Score) -> Self {
+        Self {
+            reading: reading.into(),
+            range,
+            score,
+            is_name: false,
+        }
+    }
+
+    /// 人名 flag を立てて返す (builder 風、 ADR-0007)。
+    #[must_use]
+    pub fn with_name_flag(mut self, is_name: bool) -> Self {
+        self.is_name = is_name;
+        self
+    }
+
+    /// 公開型 [`Candidate`] へ変換する。 `surface` は `input[range]` から作る。
+    /// range が input の範囲外 / char 境界外なら空 surface にする
+    /// (Viterbi は範囲外 edge を採らないので、 到達するのは debug 集約経路のみ)。
+    #[must_use]
+    pub fn into_candidate(self, input: &str) -> Candidate {
+        Candidate {
+            surface: input
+                .get(self.range.clone())
+                .unwrap_or_default()
+                .to_string(),
+            reading: self.reading.into_owned(),
+            range: self.range,
+            score: self.score,
+            is_name: self.is_name,
+        }
+    }
+}
+
+/// test 用: 公開型から内部型へ (surface は捨てる)。
+#[cfg(test)]
+impl From<Candidate> for RawCandidate<'static> {
+    fn from(c: Candidate) -> Self {
+        Self {
+            reading: Cow::Owned(c.reading),
+            range: c.range,
+            score: c.score,
+            is_name: c.is_name,
+        }
     }
 }
 
@@ -235,17 +311,26 @@ pub trait CandidateProvider {
     ///
     /// **`out` は caller が使い回すバッファ** (= 呼び出し前に clear 済み)。 `Vec` を返す形だと
     /// byte 位置 × provider ごとに Vec 確保が走るため、 push-into 形にしている。
-    fn candidates_at(&self, ctx: &ScoringContext, pos: usize, out: &mut Vec<Candidate>);
+    ///
+    /// 候補の `reading` は provider 自身 (`&'a self`) か入力 (`ctx.input`) から借用してよい。
+    fn candidates_at<'a>(
+        &'a self,
+        ctx: &ScoringContext<'a>,
+        pos: usize,
+        out: &mut Vec<RawCandidate<'a>>,
+    );
 
     /// test 用: 1 位置の候補を `Vec` で受け取る薄い helper。
     ///
     /// production 経路は [`Self::candidates_at`] にバッファを渡して alloc を避けるが、
     /// 単体 test は 1 位置の結果を直接 assert したいので、その場合だけこちらを使う。
     #[cfg(test)]
-    fn candidates_vec(&self, ctx: &ScoringContext, pos: usize) -> Vec<Candidate> {
+    fn candidates_vec<'a>(&'a self, ctx: &ScoringContext<'a>, pos: usize) -> Vec<Candidate> {
         let mut out = Vec::new();
         self.candidates_at(ctx, pos, &mut out);
-        out
+        out.into_iter()
+            .map(|c| c.into_candidate(ctx.input))
+            .collect()
     }
 }
 
