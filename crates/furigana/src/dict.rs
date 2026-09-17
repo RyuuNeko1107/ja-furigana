@@ -397,7 +397,7 @@ impl Dict {
 
     /// `rich` の prefix index を返す (lazy build)。
     ///
-    /// surface 先頭 char → その char で始まる surface 群。 [`Self::rich_starting_with`]
+    /// surface 先頭 char → その char で始まる surface 群。 [`Self::rich_matching_prefix`]
     /// が使う内部 helper。
     fn rich_index(&self) -> &HashMap<char, Vec<String>> {
         self.rich_index.get_or_init(|| {
@@ -421,20 +421,51 @@ impl Dict {
         })
     }
 
-    /// **先頭 char `c` で始まる `rich` entry のみ** を iterate する (= prefix scan)。
+    /// `tail` の **接頭辞になりうる rich entry だけ** を列挙する。
     ///
-    /// `DictBridgeProvider` が各 byte 位置で呼ぶ hot path。 全 entry の linear scan
-    /// (O(M)) ではなく index 引きした小さな bucket だけを返すので O(k)。
-    /// 呼び出し側は更に `surface` 全体の prefix 一致を確認すること (index は先頭
-    /// char しか保証しない)。 列挙順は **surface 昇順で決定的** (`rich_index` が
-    /// bucket を sort 済、 = HashMap 反復順に依存しない)。 tie-break は scoring engine。
+    /// bucket は surface 昇順 sort 済みなので、 「先頭 2 文字が一致する surface 群」 は
+    /// 連続区間になる。 `partition_point` 2 回でその区間を取り、 1 字 surface
+    /// (= 先頭 char そのもの。 昇順では区間より前に来る) を前置して返す。
     ///
-    /// 内部 (DictBridgeProvider) 専用、 公開 API には載せない (= `pub(crate)`)。
-    pub(crate) fn rich_starting_with(&self, c: char) -> impl Iterator<Item = (&str, &Entry)> {
-        self.rich_index()
-            .get(&c)
-            .into_iter()
-            .flatten()
+    /// これにより 「御」 (bucket 713 件) のような巨大 bucket でも、 実際に 2 文字目まで
+    /// 一致する数件しか走査しない。 列挙順は surface 昇順なので
+    /// tie-break / alternatives 順序の determinism 契約は変わらない。
+    pub(crate) fn rich_matching_prefix(&self, tail: &str) -> impl Iterator<Item = (&str, &Entry)> {
+        let mut chars = tail.chars();
+        let first = chars.next();
+        let bucket: &[String] = first
+            .and_then(|c| self.rich_index().get(&c))
+            .map_or(&[], Vec::as_slice);
+
+        // 1 字 surface (= 先頭 char 単体) は昇順 bucket の先頭側に来る。
+        let single: &[String] = match first {
+            Some(c) => {
+                let fc = c.len_utf8();
+                if bucket.first().is_some_and(|s| s.len() == fc) {
+                    &bucket[..1]
+                } else {
+                    &[]
+                }
+            }
+            None => &[],
+        };
+
+        // 先頭 2 文字が一致する連続区間 (tail が 1 字なら 1 字 surface のみ対象)。
+        let range: &[String] = match (first, chars.next()) {
+            (Some(c1), Some(c2)) => {
+                let mut two = String::with_capacity(c1.len_utf8() + c2.len_utf8());
+                two.push(c1);
+                two.push(c2);
+                let lo = bucket.partition_point(|s| s.as_str() < two.as_str());
+                let hi = lo + bucket[lo..].partition_point(|s| s.starts_with(two.as_str()));
+                &bucket[lo..hi]
+            }
+            _ => &[],
+        };
+
+        single
+            .iter()
+            .chain(range.iter())
             .filter_map(move |s| self.rich.get(s).map(|e| (s.as_str(), e)))
     }
 
@@ -975,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn rich_starting_with_enumeration_is_deterministic_sorted() {
+    fn rich_matching_prefix_enumeration_is_deterministic_sorted() {
         // 同一先頭 char の rich entry 群が surface 昇順で列挙されること
         // (= HashMap 反復順に依存しない決定的順序)。これにより同 score 候補の
         // tie-break / analyze() alternatives 順序が run 間で揺れない。
@@ -984,14 +1015,16 @@ mod tests {
         for s in ["生命体", "生", "生命", "生死", "生物"] {
             d.insert(s.to_string(), "ダミー".to_string());
         }
-        let got: Vec<&str> = d.rich_starting_with('生').map(|(s, _)| s).collect();
+        let got: Vec<&str> = d.rich_matching_prefix("生命体").map(|(s, _)| s).collect();
         let mut want = got.clone();
         want.sort_unstable();
         assert_eq!(
             got, want,
             "列挙順が surface 昇順 (決定的) であること: {got:?}"
         );
-        assert_eq!(got.len(), 5);
+        // tail の接頭辞になりうる entry だけ (生 / 生命 / 生命体)。
+        // 生死 / 生物 は 2 文字目が違うので走査対象外 = bucket 全件を舐めない。
+        assert_eq!(got, vec!["生", "生命", "生命体"]);
     }
 
     #[test]

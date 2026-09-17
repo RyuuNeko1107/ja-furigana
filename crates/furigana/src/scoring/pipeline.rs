@@ -108,7 +108,7 @@ impl<'a> Pipeline<'a> {
         run: impl FnOnce(&ScoringContext, &[&dyn CandidateProvider]) -> R,
     ) -> R {
         let protect = ProtectTokenProvider::new(input);
-        let unit_symbols = std::sync::Arc::new(self.number_provider.unit_symbols());
+        let unit_symbols = self.number_provider.unit_symbols();
         let alphabet = AlphabetPassthroughProvider::with_units(
             input,
             Arc::clone(self.loanwords),

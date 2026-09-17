@@ -92,6 +92,9 @@ pub struct NumberCandidateProvider {
     scale_re: Option<Regex>,
     /// `(NUM)(si_unit)` pattern。 units 空なら `None`。
     si_unit_re: Option<Regex>,
+    /// SI 単位記号 (小文字化済) の集合。 構築時に 1 度だけ作り、 解析毎の
+    /// 再構築 (= units 全 entry の `to_ascii_lowercase` + `HashSet` alloc) を避ける。
+    unit_symbols: std::sync::Arc<std::collections::HashSet<String>>,
 }
 
 impl NumberCandidateProvider {
@@ -121,6 +124,13 @@ impl NumberCandidateProvider {
             bucket.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
         }
 
+        let unit_symbols: std::collections::HashSet<String> = rules
+            .units
+            .entries
+            .keys()
+            .map(|k| k.to_ascii_lowercase())
+            .collect();
+
         Self {
             counters: rules.counters.clone(),
             scales: rules.scales.clone(),
@@ -132,6 +142,7 @@ impl NumberCandidateProvider {
             counter_kanji_re,
             scale_re,
             si_unit_re,
+            unit_symbols: std::sync::Arc::new(unit_symbols),
         }
     }
 
@@ -139,12 +150,8 @@ impl NumberCandidateProvider {
     /// SI 単位記号の集合 (小文字化済)。 英数 passthrough 側が
     /// 「数字 + 単位」 span を skip するために使う。
     #[must_use]
-    pub fn unit_symbols(&self) -> std::collections::HashSet<String> {
-        self.units
-            .entries
-            .keys()
-            .map(|k| k.to_ascii_lowercase())
-            .collect()
+    pub fn unit_symbols(&self) -> std::sync::Arc<std::collections::HashSet<String>> {
+        std::sync::Arc::clone(&self.unit_symbols)
     }
 
     fn make(&self, input: &str, pos: usize, m_end: usize, reading: String) -> Candidate {

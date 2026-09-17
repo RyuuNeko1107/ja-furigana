@@ -21,9 +21,11 @@ use crate::scoring::matcher::{
 ///
 /// ## 計算量
 ///
-/// `candidates_at(pos)` は先頭 char bucket ([`Dict::rich_starting_with`] /
-/// [`Dict::kanji_starting_with`]) だけを引くので O(E_char)
-/// (= その char で始まる entry 数)。 0.1.5 で全件 linear scan (O(N×M)) から置換済。
+/// `candidates_at(pos)` は index 引きのみ ([`Dict::rich_matching_prefix`] /
+/// [`Dict::kanji_starting_with`])。 0.1.5 で全件 linear scan (O(N×M)) を先頭 char
+/// bucket 引き O(E_char) に置換し、 さらに先頭 2 文字での区間絞り込みを入れたので
+/// 実走査は 「その 2 文字で始まる entry 数」 まで縮む (= 巨大 bucket の 御 713 件 /
+/// 大 358 件 を毎位置舐めない)。
 pub struct DictBridgeProvider<'a> {
     dict: &'a Dict,
 }
@@ -49,18 +51,11 @@ impl<'a> DictBridgeProvider<'a> {
     /// entries (`rich`) を emit。 戻り値 = **1 字 surface (= 先頭 char) を emit したか**
     /// (= 後段 kanji / unihan phase の dedup 判定用)。
     ///
-    /// 先頭 char bucket だけを引く ([`Dict::rich_starting_with`])。 旧実装は全 ~44k
-    /// entry を毎位置 linear scan していた (O(N×M))。
-    fn emit_entries(
-        &self,
-        input: &str,
-        pos: usize,
-        tail: &str,
-        first_char: char,
-        out: &mut Vec<Candidate>,
-    ) -> bool {
+    /// `tail` の接頭辞になりうる entry だけを引く ([`Dict::rich_matching_prefix`])。
+    /// 旧実装は全 ~44k entry を毎位置 linear scan していた (O(N×M))。
+    fn emit_entries(&self, input: &str, pos: usize, tail: &str, out: &mut Vec<Candidate>) -> bool {
         let mut char_emitted = false;
-        for (surface, entry) in self.dict.rich_starting_with(first_char) {
+        for (surface, entry) in self.dict.rich_matching_prefix(tail) {
             if !tail.starts_with(surface) {
                 continue;
             }
@@ -165,7 +160,7 @@ impl<'a> CandidateProvider for DictBridgeProvider<'a> {
         // priority: entries (rich) > kanji block > unihan、 先頭 char surface 1 つ分は
         // 上位 phase が emit したら下位は skip (= 旧 `emitted` HashSet の dedup 等価、
         // ただし query 対象は常に先頭 1 字 surface なので bool で十分)。
-        let mut char_emitted = self.emit_entries(input, pos, tail, first_char, &mut out);
+        let mut char_emitted = self.emit_entries(input, pos, tail, &mut out);
         if !char_emitted {
             char_emitted =
                 self.emit_kanji_blocks(input, pos, tail, first_char, first_len, &mut out);
