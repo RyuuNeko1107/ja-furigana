@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-17
+
 ### Performance
 
 - **辞書 lookup の hot path を再度高速化 (実文で 1.4〜1.8 倍速)**。
