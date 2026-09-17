@@ -22,16 +22,25 @@ jobs:
   # 落とさず (continue-on-error)、レポートを artifact 化してスコア低下を追う。
   # 2026-09-11: 単一 job だと 330 分の timeout に毎晩到達して cancel され、
   # レポートが 1 度も残らなくなっていた (= トレンド計測が死んでいた)。
-  # cargo-mutants の --shard で 4 分割し、 各 shard を並列 job にする。
+  # cargo-mutants の --shard で分割し、 各 shard を並列 job にする。
+  #
+  # 2026-09-17: 4 分割でも毎晩どれか 1 shard が cancel され続けていた。 実測すると
+  # 特定 shard が重いのではなく **全 shard が timeout (150 分) 直下に密集** していた:
+  #   9/15 → shard 0 が 150 分で cancel、 残りも 139.5 / 145 / 147.6 分
+  #   9/16 → shard 1 が 150 分で cancel、 shard 3 も 148 分
+  # = mutation 全体で約 580 分あり、 4 分割では 1 shard 約 145 分と上限に張り付くため、
+  # runner の速度差でその日たまたま遅かった shard が落ちる構造だった。
+  # 8 分割で 1 shard 約 72 分に下げ、 timeout も 180 に引き上げて余裕を作る
+  # (lib の成長で mutant 数は今後も増えるため、 2 倍以上の headroom を取る)。
   full-mutation:
-    name: Full mutation (trend) shard ${{ matrix.shard }}/4
+    name: Full mutation (trend) shard ${{ matrix.shard }}/8
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 150
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v6
 
@@ -52,7 +61,7 @@ jobs:
         run: |
           cargo mutants --no-shuffle -j 2 --timeout 120 \
             --package ja-furigana \
-            --shard ${{ matrix.shard }}/4 \
+            --shard ${{ matrix.shard }}/8 \
             || true   # surviving mutant は backlog 扱い。レポートを残して継続。
 
       - name: Upload full mutation report
