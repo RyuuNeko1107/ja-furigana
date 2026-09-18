@@ -161,13 +161,40 @@ impl NumberCandidateProvider {
         m_end: usize,
         reading: String,
     ) -> RawCandidate<'static> {
+        self.make_with_hits(input, pos, m_end, reading, 0)
+    }
+
+    /// 助数詞 / 日付 / 時刻 / 単位 のように **rule が形を当てた** 候補。
+    ///
+    /// `match_hits = 1` を付けて、 band と edge 数が並ぶ時に勝てるようにする。
+    /// 「頭3つね」 は Lindera が 「つね」 を 1 語にするため 3つ + ね と 3 + つね が
+    /// どちらも 2 edge / 最弱 band 50 で並び、 hits が無いと列挙順で さんつね になる。
+    /// 素の数字 (try_digit) と記号は 0 のまま (= 形を当てていない)。
+    fn make_hit(
+        &self,
+        input: &str,
+        pos: usize,
+        m_end: usize,
+        reading: String,
+    ) -> RawCandidate<'static> {
+        self.make_with_hits(input, pos, m_end, reading, 1)
+    }
+
+    fn make_with_hits(
+        &self,
+        input: &str,
+        pos: usize,
+        m_end: usize,
+        reading: String,
+        hits: u8,
+    ) -> RawCandidate<'static> {
         let surface = &input[pos..pos + m_end];
         let char_count = surface.chars().count();
         let length = u8::try_from(char_count).unwrap_or(u8::MAX);
         RawCandidate::new(
             reading,
             pos..pos + m_end,
-            Score::new(BAND_SPECIAL, length, 0),
+            Score::new(BAND_SPECIAL, length, hits),
         )
     }
 
@@ -436,7 +463,19 @@ impl NumberCandidateProvider {
                 base
             };
             let reading = self.read_counter(num, counter);
-            out.push(self.make(input, pos, m_end, reading));
+            // かなの助数詞 (2つ / 3つ) だけ match_hits を付ける。
+            // Lindera が 「つね」 「つまで」 を 1 語にすると 3つ + ね と 3 + つね が
+            // どちらも 2 edge / 最弱 band 50 で並び、 hits が無いと列挙順で さんつね になる。
+            // 漢字の助数詞 (分 / 位 / 匹 / 月) に付けると 腹八分目 = はっぷんめ /
+            // 3時間位 = さんじかんい のように dict entry を押しのけるので、 かなに限る
+            // (★2026-09-18 corpus で検出)。
+            let kana_counter = counter.chars().all(crate::kana::is_hiragana_char);
+            let cand = if kana_counter {
+                self.make_hit(input, pos, m_end, reading)
+            } else {
+                self.make(input, pos, m_end, reading)
+            };
+            out.push(cand);
         }
     }
 
