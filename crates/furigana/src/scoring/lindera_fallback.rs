@@ -268,10 +268,21 @@ impl LinderaFallbackProvider {
             // tail の 2 文字目以降で足りる (「守り|の」 の の、 「含羞む|で」 の で)。
             for (offset, ch) in surface[tail_start..].char_indices() {
                 // tail の先頭は原則 skip (送り仮名を切ると 「35点目指そう」 が
-                // 「35点目 + 指 + そう」 に割れるため)。 ただし **句読点・終端記号**は
-                // 助数詞の材料にならないので先頭でも出す
-                // (「50%。」 で 。 の edge が無く 「%」 が読まれなかった)。
-                if offset == 0 && !is_punctuation(ch) {
+                // 「35点目 + 指 + そう」 に割れるため)。 例外は 2 つ:
+                //
+                // 1. **句読点・終端記号** (助数詞の材料にならない。 「50%。」 で 。 の
+                //    edge が無く 「%」 が読まれなかった)
+                // 2. **助詞 1 文字だけの tail** (IPADIC が 「目と」 「円か」 を 1 語に持つため
+                //    1つ目 + と / 1億円 + か の path が組めず いちつもく / いちおくまど に
+                //    なっていた。 助詞は dict entry の読みに含まれないので、 送り仮名を
+                //    切った時の 「藍染め = あいぞめめ」 型の重複は起きない)
+                let single_particle_tail = surface[tail_start..].chars().count() == 1
+                    && matches!(
+                        ch,
+                        // 'の' は除く: 「100万分の1」 の 分の (分数) を壊す
+                        'は' | 'が' | 'を' | 'に' | 'と' | 'も' | 'で' | 'や' | 'か'
+                    );
+                if offset == 0 && !is_punctuation(ch) && !single_particle_tail {
                     continue;
                 }
                 let sub_start = start + tail_start + offset;
