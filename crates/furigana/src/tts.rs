@@ -143,74 +143,19 @@ pub fn filter_tokens_for_tts(tokens: &mut Vec<crate::ReadingToken>, opts: &TtsOp
     if !opts.silence_symbols {
         return;
     }
-    // 1. 装飾記号だけで出来た token を落とす。
-    let dropped: Vec<bool> = tokens
-        .iter()
-        .map(|t| !t.surface.is_empty() && t.surface.chars().all(is_decorative_symbol))
-        .collect();
-
-    // 2. 装飾 token に挟まれた 1 文字の英字は顔文字パーツ (`\(^o^)/` の o、
-    //    `d(^-^)` の d)。 単独では語になり得ないので一緒に落とす。
-    //    (★2026-09-11: 実データの顔文字で 「テンクウジョウ o」 が残っていた)
-    let kaomoji_letter: Vec<bool> = (0..tokens.len())
-        .map(|i| {
-            if dropped[i] {
-                return false;
-            }
-            let t = &tokens[i];
-            // 目や口に使われるのは 1〜2 文字の英字 (o / d / oo / ^^ の o)。
-            let n = t.surface.chars().count();
-            let short_letters =
-                (1..=2).contains(&n) && t.surface.chars().all(|c| c.is_ascii_alphabetic());
-            if !short_letters {
-                return false;
-            }
-            // 文頭 / 文末も 「装飾に挟まれている」 と見なす (`d(^-^)` の d)。
-            // ただし **少なくとも片側は実在の装飾 token** であることを要求する。
-            // そうしないと 「a」 「w」 だけの発言が丸ごと空になってしまう。
-            let prev_real = i > 0 && dropped[i - 1];
-            let next_real = i + 1 < tokens.len() && dropped[i + 1];
-            let prev_ok = i == 0 || dropped[i - 1];
-            let next_ok = i + 1 == tokens.len() || dropped[i + 1];
-            prev_ok && next_ok && (prev_real || next_real)
-        })
-        .collect();
-
-    // 2.5. チャットの笑いの 「w」 (w / ww / ｗｗｗ)。 日本語の直後に付く w の連なりは
-    //      「ダブリュー」 と読むべき語ではないので落とす。 英字語の続き (LOLww) や、
-    //      直前が無い / 空白の w は落とさない (発言が丸ごと空になるのを避ける)。
-    //      (★2026-09-15 精度評価: 素の VOICEVOX は笑いの w を 98% で 「ダブリュー」 と読む)
-    let laugh: Vec<bool> = (0..tokens.len())
-        .map(|i| {
-            let t = &tokens[i];
-            if t.surface.is_empty()
-                || !t
-                    .surface
-                    .chars()
-                    .all(|c| matches!(c, 'w' | 'W' | 'ｗ' | 'Ｗ'))
-            {
-                return false;
-            }
-            i > 0
-                && tokens[i - 1].surface.chars().last().is_some_and(|c| {
-                    !c.is_whitespace()
-                        && !c.is_ascii_alphanumeric()
-                        && !matches!(c, 'Ａ'..='Ｚ' | 'ａ'..='ｚ' | '０'..='９')
-                })
-        })
-        .collect();
-
+    let surfaces: Vec<&str> = tokens.iter().map(|t| t.surface.as_str()).collect();
+    let drop = silence_flags(&surfaces);
     let mut idx = 0;
     tokens.retain(|_| {
-        let keep = !dropped[idx] && !kaomoji_letter[idx] && !laugh[idx];
+        let keep = !drop[idx];
         idx += 1;
         keep
     });
 
-    // 3. 残った token のうち **未変換 passthrough** (reading == surface) は、
-    //    装飾記号と読み上げ対象が 1 token に混ざっていることがある
-    //    (`)━━!!` など)。 装飾部分だけ reading から取り除く。
-    //    句読点は pause 情報なので is_decorative_symbol が false を返し残る。
+    // 残った token のうち **未変換 passthrough** (reading == surface) は、
+    // 装飾記号と読み上げ対象が 1 token に混ざっていることがある
+    // (`)━━!!` など)。 装飾部分だけを reading から取り除く。
+    // 句読点は pause 情報なので is_decorative_symbol が false を返し残る。
     for t in tokens.iter_mut() {
         let Some(reading) = t.reading.as_ref() else {
             continue;
@@ -224,6 +169,65 @@ pub fn filter_tokens_for_tts(tokens: &mut Vec<crate::ReadingToken>, opts: &TtsOp
             );
         }
     }
+}
+
+/// surface 列 → 「TTS で落とすか」 の flag 列。
+///
+/// [`filter_tokens_for_tts`] の判定本体。 **`ReadingToken` を持たない caller**
+/// (= `analyze` の token から自前で組み立てる HTTP wrapper 等) が同じルールを
+/// 使えるよう公開している。 判定は **surface** に対して行う
+/// (読みの段階では `・` が既に 「なかぐろ」 になっていて区別できない)。
+///
+/// 1. 装飾記号だけで出来た token
+/// 2. 装飾 token に挟まれた 1〜2 文字の英字 (`\(^o^)/` の o)
+/// 3. 日本語の直後に付く笑いの `w` の連なり
+#[must_use]
+pub fn silence_flags(surfaces: &[&str]) -> Vec<bool> {
+    let dropped: Vec<bool> = surfaces
+        .iter()
+        .map(|s| !s.is_empty() && s.chars().all(is_decorative_symbol))
+        .collect();
+
+    let kaomoji_letter: Vec<bool> = (0..surfaces.len())
+        .map(|i| {
+            if dropped[i] {
+                return false;
+            }
+            let s = surfaces[i];
+            // 目や口に使われるのは 1〜2 文字の英字 (o / d / oo / ^^ の o)。
+            let n = s.chars().count();
+            if !((1..=2).contains(&n) && s.chars().all(|c| c.is_ascii_alphabetic())) {
+                return false;
+            }
+            // 文頭 / 文末も 「装飾に挟まれている」 と見なすが、
+            // **少なくとも片側は実在の装飾 token** であることを要求する
+            // (さもないと 「a」 「w」 だけの発言が丸ごと空になる)。
+            let prev_real = i > 0 && dropped[i - 1];
+            let next_real = i + 1 < surfaces.len() && dropped[i + 1];
+            let prev_ok = i == 0 || dropped[i - 1];
+            let next_ok = i + 1 == surfaces.len() || dropped[i + 1];
+            prev_ok && next_ok && (prev_real || next_real)
+        })
+        .collect();
+
+    let laugh: Vec<bool> = (0..surfaces.len())
+        .map(|i| {
+            let s = surfaces[i];
+            if s.is_empty() || !s.chars().all(|c| matches!(c, 'w' | 'W' | 'ｗ' | 'Ｗ')) {
+                return false;
+            }
+            i > 0
+                && surfaces[i - 1].chars().last().is_some_and(|c| {
+                    !c.is_whitespace()
+                        && !c.is_ascii_alphanumeric()
+                        && !matches!(c, 'Ａ'..='Ｚ' | 'ａ'..='ｚ' | '０'..='９')
+                })
+        })
+        .collect();
+
+    (0..surfaces.len())
+        .map(|i| dropped[i] || kaomoji_letter[i] || laugh[i])
+        .collect()
 }
 
 /// TTS 向けテキスト正規化

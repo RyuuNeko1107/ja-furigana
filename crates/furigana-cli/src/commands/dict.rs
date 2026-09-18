@@ -224,11 +224,18 @@ fn read_cli_dict(path: &Path) -> Result<BTreeMap<String, String>> {
     Ok(parsed.entries)
 }
 
-/// 整形済みの `cli-added.toml` を書き出す
+/// 整形済みの `cli-added.toml` を書き出す。
+///
+/// `[meta] schema_version` が無い dict file は loader が legacy 扱いで reject するため
+/// (= この 1 file で辞書全体が load できなくなる) 必ず付ける。
 fn write_cli_dict(path: &Path, entries: &BTreeMap<String, String>) -> Result<()> {
     let mut out = String::from(
         "# `furigana dict add/remove` で更新される CLI 管理エントリ\n\
          # surface = reading の TOML inline map\n\
+         \n\
+         [meta]\n\
+         schema_version = \"2\"\n\
+         role = \"jukugo\"\n\
          \n\
          [entries]\n",
     );
@@ -286,6 +293,31 @@ mod tests {
         assert!(validate_user_input("x", "a\u{0}b").is_err());
         assert!(validate_user_input("x", "a\u{7}b").is_err());
         assert!(validate_user_input("x", "a\u{7f}b").is_err());
+    }
+
+    /// `[meta] schema_version` が無いと loader が legacy 扱いで弾くので、 書き出しに必ず含める
+    #[test]
+    fn write_cli_dict_includes_schema_version() {
+        let dir = std::env::temp_dir().join(format!("furigana-cli-dict-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CLI_DICT_FILENAME);
+        let mut entries = BTreeMap::new();
+        entries.insert("峠道".to_string(), "とうげみち".to_string());
+        write_cli_dict(&path, &entries).unwrap();
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(body.contains("schema_version = \"2\""), "{body}");
+        furigana::loader::validate_schema_version(&body, "cli-added.toml").unwrap();
+        // 読み直して書き直しても entries は保たれる (meta が混ざらない)
+        assert_eq!(
+            read_cli_dict(&path)
+                .unwrap()
+                .get("峠道")
+                .map(String::as_str),
+            Some("とうげみち")
+        );
+        write_cli_dict(&path, &read_cli_dict(&path).unwrap()).unwrap();
+        assert_eq!(read_cli_dict(&path).unwrap().len(), 1);
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
