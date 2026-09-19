@@ -381,6 +381,23 @@ pub trait CandidateProvider {
         out: &mut Vec<RawCandidate<'a>>,
     );
 
+    /// **行き止まり** (= `pos` から始まる候補が 1 つも無いのに、 dict / 数字 / 保護 token
+    /// 由来の edge が `pos` で終わっている) でだけ呼ばれる補助候補。
+    ///
+    /// 形態素 layer が 「漢字 + かな」 を 1 token にすると (断捨|離し / 介|さ)、 entry の
+    /// 直後にかなの edge が無く、 **entry を通る path が DP 上そもそも組めない**。
+    /// この hook で token の残り (かなだけの時) を edge として補う。 通常位置では呼ばれない
+    /// ので、 送り仮名を切って助数詞に食わせる事故 (35点目|指|そう) は起きない。
+    ///
+    /// 既定は何もしない。
+    fn dead_end_candidates_at<'a>(
+        &'a self,
+        _ctx: &ScoringContext<'a>,
+        _pos: usize,
+        _out: &mut Vec<RawCandidate<'a>>,
+    ) {
+    }
+
     /// test 用: 1 位置の候補を `Vec` で受け取る薄い helper。
     ///
     /// production 経路は [`Self::candidates_at`] にバッファを渡して alloc を避けるが、

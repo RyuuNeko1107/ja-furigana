@@ -18,7 +18,7 @@
 //! - 同 path score の場合は **第一発見** が勝つ (TOML 出現順 / provider 順依存)
 
 use crate::scoring::candidate::{
-    Candidate, CandidateProvider, RawCandidate, Score, ScoringContext, Solver,
+    Candidate, CandidateProvider, RawCandidate, Score, ScoringContext, Solver, BAND_DICT_EXACT,
 };
 use std::cmp::Ordering;
 
@@ -135,6 +135,36 @@ pub fn solve_path<'a>(
         all_candidates.clear();
         for provider in providers {
             provider.candidates_at(ctx, pos, &mut all_candidates);
+        }
+
+        // 行き止まり: 候補ゼロなのに dict entry (band 1000 以上) がここで終わっている
+        // = 形態素 token の途中で entry が終わった。 token の残りを形態素 layer に補わせる
+        // (ADR-0011 の dead-end 問題の band engine 側の答え)。
+        // 数字 provider (950) は対象外: 助数詞の後ろの送り仮名を切ると 5回戦えば /
+        // 三段落ち / 15万分の が壊れる (★2026-09-18 の gap filler と同じ退行)。
+        if all_candidates.is_empty()
+            && parent[pos]
+                .as_ref()
+                .is_some_and(|(_, c)| c.score.band >= BAND_DICT_EXACT)
+        {
+            for provider in providers {
+                provider.dead_end_candidates_at(ctx, pos, &mut all_candidates);
+            }
+            // entry の読みが送り仮名を既に含む形 (天の助 = てんのすけ / 正拳突き = せいけんづき /
+            // 三段落 = さんだんおち) では、 残りの先頭かなを足すと読みが重複する
+            // (てんのすけけ)。 読みの末尾と残りの先頭が同じかなならこの位置は補わない。
+            if let Some((_, prev)) = parent[pos].as_ref() {
+                let last = crate::kana::kata_to_hira(prev.reading.as_ref())
+                    .chars()
+                    .next_back();
+                if let Some(last) = last {
+                    all_candidates.retain(|c| {
+                        let first = ctx.input[c.range.clone()].chars().next();
+                        first.map(|f| crate::kana::kata_to_hira(&f.to_string()))
+                            != Some(last.to_string())
+                    });
+                }
+            }
         }
 
         for cand in all_candidates.drain(..) {
@@ -516,5 +546,102 @@ mod tests {
         let path = solve_path(&ctx("猫"), &[&OobProvider, &chars]);
         assert_eq!(path.len(), 1);
         assert_eq!(path[0].surface, "猫");
+    }
+
+    /// 行き止まり補完は 「dict entry (band 1000) がここで終わり、 候補が無い」 位置でだけ
+    /// 呼ばれる。 dummy の morph provider は 「離し」 を 1 edge で持ち、 行き止まり hook で
+    /// 「し」 を出す。 entry 「断捨離」 を通る path が組めること。
+    struct DeadEndMorph;
+    impl CandidateProvider for DeadEndMorph {
+        fn candidates_at<'a>(
+            &'a self,
+            ctx: &ScoringContext<'a>,
+            pos: usize,
+            out: &mut Vec<RawCandidate<'a>>,
+        ) {
+            for (surface, reading) in [
+                ("断", "ダン"),
+                ("捨", "シャ"),
+                ("離し", "ハナシ"),
+                ("て", "テ"),
+            ] {
+                if ctx.input[pos..].starts_with(surface) {
+                    let end = pos + surface.len();
+                    out.push(RawCandidate::new(reading, pos..end, Score::lindera(1)));
+                }
+            }
+        }
+        fn dead_end_candidates_at<'a>(
+            &'a self,
+            ctx: &ScoringContext<'a>,
+            pos: usize,
+            out: &mut Vec<RawCandidate<'a>>,
+        ) {
+            if ctx.input[pos..].starts_with("し") {
+                out.push(RawCandidate::new(
+                    "シ",
+                    pos..pos + "し".len(),
+                    Score::lindera(1),
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn solve_path_fills_dead_end_after_dict_entry() {
+        let dict = DictProvider {
+            entries: vec![("断捨離".into(), "ダンシャリ".into(), Score::dict_exact(3))],
+        };
+        let path = solve_path(&ctx("断捨離して"), &[&dict, &DeadEndMorph]);
+        let surfaces: Vec<&str> = path.iter().map(|c| c.surface.as_str()).collect();
+        assert_eq!(
+            surfaces,
+            vec!["断捨離", "し", "て"],
+            "entry の直後を hook が補う"
+        );
+    }
+
+    /// entry の読みが残りの先頭かなで終わる (= 送り仮名を読みに含む entry) 時は補わない。
+    /// (故障モデル: この gate を外すと 「てんのすけ」 + 「け」 = てんのすけけ になる)
+    #[test]
+    fn solve_path_dead_end_skips_duplicated_okurigana() {
+        struct Morph;
+        impl CandidateProvider for Morph {
+            fn candidates_at<'a>(
+                &'a self,
+                ctx: &ScoringContext<'a>,
+                pos: usize,
+                out: &mut Vec<RawCandidate<'a>>,
+            ) {
+                for (surface, reading) in [("天", "テン"), ("の", "ノ"), ("助け", "タスケ")]
+                {
+                    if ctx.input[pos..].starts_with(surface) {
+                        let end = pos + surface.len();
+                        out.push(RawCandidate::new(reading, pos..end, Score::lindera(1)));
+                    }
+                }
+            }
+            fn dead_end_candidates_at<'a>(
+                &'a self,
+                ctx: &ScoringContext<'a>,
+                pos: usize,
+                out: &mut Vec<RawCandidate<'a>>,
+            ) {
+                if ctx.input[pos..].starts_with("け") {
+                    out.push(RawCandidate::new(
+                        "ケ",
+                        pos..pos + "け".len(),
+                        Score::lindera(1),
+                    ));
+                }
+            }
+        }
+        // entry 「天の助」 = てんのすけ (読みが 助け の け を含む形)
+        let dict = DictProvider {
+            entries: vec![("天の助".into(), "テンノスケ".into(), Score::dict_exact(3))],
+        };
+        let path = solve_path(&ctx("天の助け"), &[&dict, &Morph]);
+        let reading: String = path.iter().map(|c| c.reading.as_str()).collect();
+        assert_eq!(reading, "テンノタスケ", "け を重ねない: {path:?}");
     }
 }

@@ -130,6 +130,8 @@ pub struct LinderaFallbackProvider {
     /// reading は カタカナ (Lindera 由来) または surface fallback。
     /// kind は品詞由来の付帯情報 ([`EdgeKind`])。
     edges: Vec<(usize, usize, String, EdgeKind)>,
+    /// 形態素 token の (start, end) (start 昇順)。 行き止まり補完で 「pos を含む token」 を引く。
+    tokens: Vec<(usize, usize)>,
 }
 
 impl LinderaFallbackProvider {
@@ -197,12 +199,13 @@ impl LinderaFallbackProvider {
         {
             return Self::default();
         }
+        let tokens: Vec<(usize, usize)> = edges.iter().map(|(s, e, _, _)| (*s, *e)).collect();
         Self::push_kana_suffix_edges(input, &mut edges);
         // `candidates_at` が start 位置で二分探索できるよう start 昇順に並べる。
         // **安定** sort なので、 同じ start の edge 同士の順序 (= 候補の列挙順、
         // Viterbi の同点 tie-break に効く) は push 順のまま保たれる。
         edges.sort_by_key(|(start, _, _, _)| *start);
-        Self { edges }
+        Self { edges, tokens }
     }
 
     /// 空 provider (test 用、 input なしで安全に new する)。
@@ -328,6 +331,37 @@ impl LinderaFallbackProvider {
 }
 
 impl CandidateProvider for LinderaFallbackProvider {
+    /// 行き止まり補完: `pos` を **途中に含む** 形態素 token の残り `input[pos..end]` が
+    /// かな (+ 句読点) だけなら、 それを 1 本の edge として足す。
+    ///
+    /// [`Self::push_kana_suffix_edges`] は tail の先頭を原則 skip する (35点目|指|そう 対策)。
+    /// ここは engine が 「authored edge がここで終わり、 候補が無い」 と確認した位置でしか
+    /// 呼ばれないので、 tail 先頭 (断捨離|し / 介|さ / お腹|いっぱい) も足してよい。
+    /// 漢字を含む残りは足さない (読みを機械的に切れない)。
+    fn dead_end_candidates_at<'b>(
+        &'b self,
+        ctx: &ScoringContext<'b>,
+        pos: usize,
+        out: &mut Vec<RawCandidate<'b>>,
+    ) {
+        let input = ctx.input;
+        let i = self.tokens.partition_point(|(start, _)| *start < pos);
+        let Some(&(start, end)) = i.checked_sub(1).and_then(|i| self.tokens.get(i)) else {
+            return;
+        };
+        if !(start < pos && pos < end) {
+            return;
+        }
+        let Some(rest) = input.get(pos..end) else {
+            return;
+        };
+        if rest.is_empty() || !rest.chars().all(is_standalone_kana) {
+            return;
+        }
+        let length = u8::try_from(rest.chars().count()).unwrap_or(u8::MAX);
+        out.push(RawCandidate::new(rest, pos..end, Score::lindera(length)));
+    }
+
     fn candidates_at<'b>(
         &'b self,
         ctx: &ScoringContext<'b>,
@@ -616,5 +650,46 @@ mod tests {
         for c in p.candidates_vec(&ctx(input), pos) {
             assert_ne!(c.score.band, BAND_KANJI, "{input}: {c:?}");
         }
+    }
+
+    /// 行き止まり補完: 「断捨離して」 は Lindera が 離し を 1 token にするので、
+    /// 通常の suffix edge では し の位置に edge が無い (tail 先頭は skip)。
+    /// `dead_end_candidates_at` は token の残り し を足す。
+    #[test]
+    fn dead_end_fills_kana_rest_of_mixed_token() {
+        let a = analyzer();
+        let input = "断捨離して";
+        let p = LinderaFallbackProvider::new(&a, input);
+        let pos = "断捨離".len();
+        let boundary = Box::leak(Box::new(BoundaryAnalysis::empty()));
+        let ctx = ScoringContext::new(input, boundary);
+        let mut out = Vec::new();
+        p.dead_end_candidates_at(&ctx, pos, &mut out);
+        let surfaces: Vec<&str> = out.iter().map(|c| &ctx.input[c.range.clone()]).collect();
+        assert!(
+            surfaces.contains(&"し"),
+            "残り 「し」 が補われる: {surfaces:?}"
+        );
+        for c in &out {
+            assert_eq!(c.score.band, 50, "補完 edge は Lindera と同じ band 50");
+        }
+    }
+
+    /// 残りに漢字が混じる位置 / token 境界そのもの では補わない。
+    #[test]
+    fn dead_end_does_not_fill_kanji_or_token_boundary() {
+        let a = analyzer();
+        let input = "断捨離して";
+        let p = LinderaFallbackProvider::new(&a, input);
+        let boundary = Box::leak(Box::new(BoundaryAnalysis::empty()));
+        let ctx = ScoringContext::new(input, boundary);
+        // token 境界 (= 0) では何も出さない
+        let mut out = Vec::new();
+        p.dead_end_candidates_at(&ctx, 0, &mut out);
+        assert!(out.is_empty(), "token 先頭は通常 edge の担当: {out:?}");
+        // 「捨」 の位置: 残り 「捨離し」 は漢字を含むので出さない
+        let mut out = Vec::new();
+        p.dead_end_candidates_at(&ctx, "断".len(), &mut out);
+        assert!(out.is_empty(), "漢字を含む残りは補わない: {out:?}");
     }
 }
