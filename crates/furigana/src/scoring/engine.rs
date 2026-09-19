@@ -49,6 +49,11 @@ pub struct PathScore {
     pub edge_count: u32,
     /// edge の `match_hits` 累積
     pub total_match_hits: u32,
+    /// 行き止まり補完 edge の数 (少ないほど良い)。 上 3 軸が並んだ時、 形態素境界と
+    /// 一致する区切りを優先する (何食 + べる が 何 + 食べる を、 性能上 + げ が
+    /// 性能 + 上げ を食わないように)。 補完 edge が要る path は edge 数か match_hits で
+    /// 明確に勝つ時だけ採る (断捨離 + し + て 3 edge vs 断 + 捨 + 離し + て 4 edge)。
+    pub synthetic_edges: u32,
 }
 
 impl PathScore {
@@ -58,15 +63,24 @@ impl PathScore {
         weakest_band: u16::MAX,
         edge_count: 0,
         total_match_hits: 0,
+        synthetic_edges: 0,
     };
 
     /// この path に edge `score` を追加した新 PathScore を返す。
     #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn add_edge(self, score: &Score) -> Self {
+        self.add_edge_kind(score, false)
+    }
+
+    /// `synthetic` = 行き止まり補完 edge かどうか。
+    #[must_use]
+    pub fn add_edge_kind(self, score: &Score, synthetic: bool) -> Self {
         Self {
             weakest_band: self.weakest_band.min(score.band),
             edge_count: self.edge_count + 1,
             total_match_hits: self.total_match_hits + u32::from(score.match_hits),
+            synthetic_edges: self.synthetic_edges + u32::from(synthetic),
         }
     }
 }
@@ -78,6 +92,8 @@ impl Ord for PathScore {
             // edge_count: 小 = better、 比較は逆方向
             .then(other.edge_count.cmp(&self.edge_count))
             .then(self.total_match_hits.cmp(&other.total_match_hits))
+            // synthetic_edges: 少 = better、 比較は逆方向
+            .then(other.synthetic_edges.cmp(&self.synthetic_edges))
     }
 }
 
@@ -150,6 +166,9 @@ pub fn solve_path<'a>(
             for provider in providers {
                 provider.dead_end_candidates_at(ctx, pos, &mut all_candidates);
             }
+            for c in &mut all_candidates {
+                c.synthetic = true;
+            }
             // entry の読みが送り仮名を既に含む形 (天の助 = てんのすけ / 正拳突き = せいけんづき /
             // 三段落 = さんだんおち) では、 残りの先頭かなを足すと読みが重複する
             // (てんのすけけ)。 読みの末尾と残りの先頭が同じかなならこの位置は補わない。
@@ -177,7 +196,7 @@ pub fn solve_path<'a>(
                 continue; // overflow / 0-length / 後退は skip
             }
 
-            let new_score = current_score.add_edge(&cand.score);
+            let new_score = current_score.add_edge_kind(&cand.score, cand.synthetic);
 
             // dp[next_pos] と比較、 better なら更新
             let better = match dp[next_pos] {
@@ -643,5 +662,21 @@ mod tests {
         let path = solve_path(&ctx("天の助け"), &[&dict, &Morph]);
         let reading: String = path.iter().map(|c| c.reading.as_str()).collect();
         assert_eq!(reading, "テンノタスケ", "け を重ねない: {path:?}");
+    }
+
+    /// 行き止まり補完 edge を含む path は、 edge 数と match_hits が並んだら負ける
+    /// (= 形態素境界と一致する区切りを優先: 何食 + べる より 何 + 食べる)。
+    #[test]
+    fn path_score_prefers_fewer_synthetic_edges_on_tie() {
+        let with_syn = PathScore::ZERO
+            .add_edge(&Score::dict_exact(2))
+            .add_edge_kind(&Score::lindera(2), true);
+        let without = PathScore::ZERO
+            .add_edge(&Score::kanji(1))
+            .add_edge(&Score::lindera(3));
+        // weakest 50 / edge 2 / hits 0 で並び、 synthetic_edges 1 vs 0 で後者が勝つ
+        assert_eq!(with_syn.weakest_band, without.weakest_band);
+        assert_eq!(with_syn.edge_count, without.edge_count);
+        assert!(without > with_syn);
     }
 }

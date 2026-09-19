@@ -277,6 +277,10 @@ pub(crate) struct RawCandidate<'a> {
     pub score: Score,
     /// 人名 candidate flag ([`Candidate`] の同名 field と同じ)
     pub is_name: bool,
+    /// 行き止まり補完 ([`CandidateProvider::dead_end_candidates_at`]) 由来の edge。
+    /// path 比較では 「同点なら補完 edge の少ない path」 を選ぶ (= 形態素境界と一致する
+    /// 区切りを優先。 何食 + べる が 何 + 食べる を食わないように)。
+    pub synthetic: bool,
 }
 
 /// IPADIC 単語の連接情報 (コスト lattice engine 用)。
@@ -300,6 +304,7 @@ impl<'a> RawCandidate<'a> {
             is_name: false,
             edge: None,
             keep_reading: false,
+            synthetic: false,
         }
     }
 
