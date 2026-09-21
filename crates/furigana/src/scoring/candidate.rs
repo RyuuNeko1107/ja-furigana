@@ -358,6 +358,7 @@ impl From<Candidate> for RawCandidate<'static> {
             is_name: c.is_name,
             edge: None,
             keep_reading: false,
+            synthetic: false,
         }
     }
 }

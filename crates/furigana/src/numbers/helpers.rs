@@ -59,6 +59,20 @@ pub(crate) fn kansuji_to_arabic(s: &str) -> Option<String> {
         return Some(out);
     }
 
+    // 2026-09-21: 単位も 〇 も無い桁だけの列 (六九 / 二五七) は法律・判例の条番号で頻出する
+    // positional 表記 (第六九条 = 69 条)。 additive で解くと最後の桁だけ残って
+    // 「きゅうじょう」 と先頭が落ちるので、 桁を連結する。 ただし 2 桁で連続する
+    // 二三 / 四五 / 七八 のような概数 (にさんにち = 2, 3 日) は positional に取らず従来通り。
+    if !has_unit && chars.len() >= 2 {
+        let digits: Option<Vec<u8>> = chars.iter().map(|&c| digit_of_kansuji(c)).collect();
+        if let Some(ds) = digits {
+            let approx = ds.len() == 2 && ds[1] == ds[0] + 1;
+            if !approx {
+                return Some(ds.iter().map(|&d| char::from(b'0' + d)).collect());
+            }
+        }
+    }
+
     // additive: current=単位直前の桁、 section=万未満の累積、 total=万以上の累積。
     let mut total: u64 = 0;
     let mut section: u64 = 0;
@@ -206,6 +220,19 @@ mod tests {
         // 単位のみ (直前桁無し → 暗黙の 1) も解く (group==0 分岐)。
         assert_eq!(kansuji_to_arabic("万").as_deref(), Some("10000"));
         assert_eq!(kansuji_to_arabic("億").as_deref(), Some("100000000"));
+    }
+
+    #[test]
+    fn kansuji_to_arabic_positional_without_zero() {
+        // 単位無し・〇 無しの桁列は positional (条番号 第六九条 / 第二五七条)。
+        assert_eq!(kansuji_to_arabic("六九").as_deref(), Some("69"));
+        assert_eq!(kansuji_to_arabic("二五七").as_deref(), Some("257"));
+        assert_eq!(kansuji_to_arabic("七四").as_deref(), Some("74"));
+        // 連続 2 桁の概数 (二三日 / 四五人) は positional にしない (従来 additive = 末尾桁)。
+        assert_eq!(kansuji_to_arabic("二三").as_deref(), Some("3"));
+        assert_eq!(kansuji_to_arabic("四五").as_deref(), Some("5"));
+        // 単位付きは従来通り
+        assert_eq!(kansuji_to_arabic("六十九").as_deref(), Some("69"));
     }
 
     #[test]
