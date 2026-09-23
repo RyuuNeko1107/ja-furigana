@@ -176,6 +176,9 @@ impl Analyzer {
                 is_person_name: false,
                 is_ichidan_verb: false,
                 attaches_to_verb: false,
+                is_noun_suffix: false,
+                is_particle: false,
+                is_prefix: false,
             },
             |surface, details| {
                 let is_proper_noun =
@@ -198,6 +201,10 @@ impl Analyzer {
                         (Some("動詞"), _) => true,
                         _ => false,
                     },
+                    is_noun_suffix: details.first() == Some(&"名詞")
+                        && detail_at(details, 1) == Some("接尾"),
+                    is_particle: details.first() == Some(&"助詞"),
+                    is_prefix: details.first() == Some(&"接頭詞"),
                 }
             },
         )
@@ -263,6 +270,12 @@ pub(crate) struct LightMorph {
     pub is_ichidan_verb: bool,
     /// 動詞に後接する語 (助動詞 / 接続助詞 / 非自立動詞)
     pub attaches_to_verb: bool,
+    /// 品詞 = 名詞 / 接尾 (IPADIC は 疲れ=ヅカレ / 使い=ヅカイ 等の連濁形を接尾として持つ)
+    pub is_noun_suffix: bool,
+    /// 品詞 = 助詞
+    pub is_particle: bool,
+    /// 品詞 = 接頭詞 (お / ご)
+    pub is_prefix: bool,
 }
 
 /// details[i] を返す。 `*` と空文字は `None` に正規化する。

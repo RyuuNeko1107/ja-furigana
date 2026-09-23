@@ -153,7 +153,23 @@ impl LinderaFallbackProvider {
             .map(|t| t.attaches_to_verb)
             .chain(std::iter::once(false))
             .collect();
-        for (tok, next_attaches) in tokens.into_iter().zip(attaches_next) {
+        // 直後が 「に + 移動の動詞」 (食いに行く / 刺しにきてる) = 動詞の連用形で、 接尾の連濁形ではない
+        let next_ni_motion: Vec<bool> = (0..tokens.len())
+            .map(|i| {
+                tokens
+                    .get(i + 1)
+                    .is_some_and(|t| t.is_particle && t.surface == "に")
+                    && tokens.get(i + 2).is_some_and(|t| {
+                        t.surface.starts_with(['行', 'い', '来', 'き', 'く', 'こ'])
+                    })
+            })
+            .collect();
+        // 直前の語が連濁を起こさない境界か (文頭 / 空白・記号 / 助詞 / 接頭詞 お・ご /
+        // ひらがなで終わる未知語 = 「ぺこらの」 「ぺこちゃんお」 のような読み無し token)
+        let mut prev_is_boundary = true;
+        for ((tok, next_attaches), ni_motion) in
+            tokens.into_iter().zip(attaches_next).zip(next_ni_motion)
+        {
             let surface_len = tok.surface.len();
             // Lindera は空白 / 改行 / 制御文字を token から落とすことがある
             // (例: input に `\n` / `( ・∇・)` の半角 space)。 落ちると byte_pos が
@@ -171,6 +187,7 @@ impl LinderaFallbackProvider {
                     return Self::default();
                 }
                 byte_pos = gap_end;
+                prev_is_boundary = true;
             }
             let end = byte_pos + surface_len;
             // reading: Lindera details[7] (= カタカナ)、 無ければ surface fallback
@@ -188,7 +205,27 @@ impl LinderaFallbackProvider {
                         is_real_cjk_ideograph(c) || matches!(c, 'お' | 'ご' | '御')
                     }),
             };
-            let reading = tok.reading.unwrap_or_else(|| tok.surface.clone());
+            let this_is_boundary = tok.is_particle
+                || (tok.is_prefix && matches!(tok.surface.as_str(), "お" | "ご" | "御"))
+                || tok.surface.chars().all(is_rendaku_boundary_symbol)
+                || (tok.reading.is_none()
+                    && tok.surface.chars().next_back().is_some_and(|c| {
+                        crate::kana::is_hiragana_char(c)
+                            && !matches!(c, 'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ' | 'っ')
+                    }));
+            let mut reading = tok.reading.unwrap_or_else(|| tok.surface.clone());
+            // IPADIC は 疲れ=ヅカレ / 使い=ヅカイ / 書き=ガキ 等の連濁形を 名詞-接尾 として持ち、
+            // 文頭や助詞の直後 (書きはムリ / ぺこらの勝ち / お疲れ) にも付けてしまう。
+            // 連濁は前に語がある時だけ起きるので、 境界の直後と 「に + 移動動詞」 の前では清音に戻す
+            if tok.is_noun_suffix
+                && (prev_is_boundary || ni_motion)
+                && is_okurigana_form(&tok.surface)
+            {
+                if let Some(plain) = devoice_first_kana(&reading) {
+                    reading = plain;
+                }
+            }
+            prev_is_boundary = this_is_boundary;
             edges.push((byte_pos, end, reading, kind));
             byte_pos = end;
         }
@@ -405,6 +442,87 @@ impl CandidateProvider for LinderaFallbackProvider {
     }
 }
 
+/// 漢字 1 字以上 + 送り仮名 (ひらがな) の形か (疲れ / 使い / 書き)。 1 字漢字の接尾
+/// (代 / 度 / 部) は元から濁音の語があるので対象外にする。
+fn is_okurigana_form(surface: &str) -> bool {
+    let mut chars = surface.chars();
+    chars.next().is_some_and(is_real_cjk_ideograph)
+        && surface.chars().next_back().is_some_and(crate::kana::is_hiragana_char)
+        // 通り / 越し / 帰り / 攻め / 沿い / 伝い は名詞の後ろで濁るのが普通 (時間通りに行く / 年越しに / 仕事帰りに)、
+        // 出し は元の読みが濁音 (出す = だす)
+        && !matches!(surface, "通り" | "越し" | "帰り" | "攻め" | "沿い" | "伝い" | "出し")
+}
+
+/// 連濁の境界になる記号 (句読点 / 括弧 / 空白 / 絵文字の区切り)。 `%` や数字の後ろは
+/// 20%引き = ビキ のように濁るので含めない
+fn is_rendaku_boundary_symbol(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '。' | '、'
+                | '，'
+                | '．'
+                | '・'
+                | '…'
+                | '！'
+                | '？'
+                | '!'
+                | '?'
+                | '「'
+                | '」'
+                | '『'
+                | '』'
+                | '（'
+                | '）'
+                | '('
+                | ')'
+                | '【'
+                | '】'
+                | '['
+                | ']'
+                | '~'
+                | '〜'
+                | ':'
+                | '：'
+                | ';'
+                | '；'
+                | '_'
+                | '*'
+                | '゚'
+                | '.'
+                | ','
+        )
+}
+
+/// カタカナ読みの先頭の濁音を清音に戻す (ヅカレ → ツカレ)。 濁音で始まらなければ `None`。
+fn devoice_first_kana(reading: &str) -> Option<String> {
+    let mut chars = reading.chars();
+    let plain = match chars.next()? {
+        'ガ' => 'カ',
+        'ギ' => 'キ',
+        'グ' => 'ク',
+        'ゲ' => 'ケ',
+        'ゴ' => 'コ',
+        'ザ' => 'サ',
+        'ジ' => 'シ',
+        'ズ' => 'ス',
+        'ゼ' => 'セ',
+        'ゾ' => 'ソ',
+        'ダ' => 'タ',
+        'ヂ' => 'チ',
+        'ヅ' => 'ツ',
+        'デ' => 'テ',
+        'ド' => 'ト',
+        'バ' => 'ハ',
+        'ビ' => 'ヒ',
+        'ブ' => 'フ',
+        'ベ' => 'ヘ',
+        'ボ' => 'ホ',
+        _ => return None,
+    };
+    Some(std::iter::once(plain).chain(chars).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +536,66 @@ mod tests {
 
     fn analyzer() -> Analyzer {
         Analyzer::new().expect("Analyzer init")
+    }
+
+    /// Lindera edge のうち surface が一致するものの読み。
+    fn edge_reading(a: &Analyzer, input: &str, surface: &str) -> String {
+        let p = LinderaFallbackProvider::new(a, input);
+        p.edges
+            .iter()
+            .find(|(s, e, _, _)| &input[*s..*e] == surface)
+            .map(|(_, _, r, _)| r.clone())
+            .unwrap_or_else(|| panic!("{surface} の edge が無い: {input}"))
+    }
+
+    /// IPADIC の 名詞-接尾 (疲れ=ヅカレ / 書き=ガキ / 勝ち=ガチ) は、 連濁が起きない位置
+    /// (文頭 / 助詞・接頭詞 お の直後 / ひらがなで終わる未知語の直後 / 記号の直後) では清音に戻す。
+    #[test]
+    fn noun_suffix_rendaku_is_devoiced_after_boundary() {
+        let a = analyzer();
+        assert_eq!(edge_reading(&a, "書きはムリ", "書き"), "カキ");
+        assert_eq!(edge_reading(&a, "積みの速さ", "積み"), "ツミ");
+        assert_eq!(edge_reading(&a, "ぺこらの勝ちだ", "勝ち"), "カチ");
+        assert_eq!(edge_reading(&a, "ぺこちゃんお疲れ様", "疲れ"), "ツカレ");
+        assert_eq!(edge_reading(&a, ":_勝ち猫:", "勝ち"), "カチ");
+    }
+
+    /// 「X食いに行く / 刺しにきてる」 は動詞の連用形 (目的) なので清音。
+    #[test]
+    fn noun_suffix_rendaku_is_devoiced_before_ni_motion_verb() {
+        let a = analyzer();
+        assert_eq!(edge_reading(&a, "ラーメン食いに行こう", "食い"), "クイ");
+        assert_eq!(edge_reading(&a, "トドメ刺しにきてる", "刺し"), "サシ");
+    }
+
+    /// 名詞の後ろの連濁 (魔物使い / 野菜嫌い) と、 名詞の後ろで濁るのが普通の語
+    /// (時間通りに行く / 年越しに) ・ % の後ろ (20%引き) は濁ったまま。
+    #[test]
+    fn noun_suffix_rendaku_is_kept_after_noun() {
+        let a = analyzer();
+        assert_eq!(edge_reading(&a, "魔物使い", "使い"), "ヅカイ");
+        assert_eq!(edge_reading(&a, "野菜嫌い", "嫌い"), "ギライ");
+        assert_eq!(edge_reading(&a, "時間通りに行く", "通り"), "ドオリ");
+        assert_eq!(edge_reading(&a, "20年越しに", "越し"), "ゴシ");
+        assert_eq!(edge_reading(&a, "20%引きで", "引き"), "ビキ");
+    }
+
+    #[test]
+    fn devoice_first_kana_only_touches_voiced_head() {
+        assert_eq!(devoice_first_kana("ヅカレ").as_deref(), Some("ツカレ"));
+        assert_eq!(devoice_first_kana("ビキ").as_deref(), Some("ヒキ"));
+        assert_eq!(devoice_first_kana("ツカレ"), None);
+        assert_eq!(devoice_first_kana("ハダカ"), None);
+        assert_eq!(devoice_first_kana(""), None);
+    }
+
+    #[test]
+    fn okurigana_form_excludes_single_kanji_and_listed_words() {
+        assert!(is_okurigana_form("疲れ"));
+        assert!(!is_okurigana_form("代"));
+        assert!(!is_okurigana_form("通り"));
+        assert!(!is_okurigana_form("出し"));
+        assert!(!is_okurigana_form("ツカレ"));
     }
 
     /// かな token の途中から始まる edge が生えること。
