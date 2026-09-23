@@ -1193,7 +1193,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "ja-furigana"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "aho-corasick",
  "criterion",
@@ -1210,14 +1210,14 @@ dependencies = [
 
 [[package]]
 name = "ja-furigana-aquestalk"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "ja-furigana",
 ]
 
 [[package]]
 name = "ja-furigana-cli"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "anyhow",
  "axum",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "ja-furigana-voicevox"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "ja-furigana",
 ]
