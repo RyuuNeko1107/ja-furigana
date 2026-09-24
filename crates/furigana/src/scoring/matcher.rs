@@ -345,6 +345,19 @@ pub fn next2_logical_token(input: &str, start: usize) -> &str {
 /// (= ひらがな 1 文字、 「方」 漢字で切れる)。 行末 (= end が input.len()) でも動作。
 #[must_use]
 pub fn prev_logical_token(input: &str, end: usize) -> &str {
+    // 英数字の直後の空白 (「Python 版」 「32bit 版」 「1000 分の」) は読み飛ばして英数字の run を前文脈にする。
+    // 漢字 / かなの後の空白は句の区切りなので飛ばさない (「全部 白」 を 漢字 + 白 と見ると音読み規則が誤爆する)
+    let trimmed = input[..end].trim_end_matches([' ', '\u{3000}']);
+    let end = if trimmed.len() < end
+        && trimmed
+            .chars()
+            .next_back()
+            .is_some_and(|c| classify_char(c) == Some(CharType::Alphanumeric))
+    {
+        trimmed.len()
+    } else {
+        end
+    };
     let head = &input[..end];
     let mut last_class: Option<CharType> = None;
     let mut start = end;
