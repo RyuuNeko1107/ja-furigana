@@ -255,6 +255,39 @@ pub fn solve_path<'a>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn dict_chars_breaks_full_tie_toward_entry_before_kana() {
+        // 最弱 band / edge 数 / match_hits / 補完 edge が完全に並ぶ 2 path: 辞書 entry (直後がかな) を含む方が勝つ
+        let with_entry = PathScore::ZERO
+            .add_edge_full(&Score::dict_exact(3), false, true)
+            .add_edge_full(&Score::new(50, 1, 0), false, false);
+        let without = PathScore::ZERO
+            .add_edge_full(&Score::new(150, 2, 0), false, false)
+            .add_edge_full(&Score::new(50, 2, 0), false, false);
+        assert_eq!(with_entry.weakest_band, without.weakest_band);
+        assert_eq!(with_entry.edge_count, without.edge_count);
+        assert!(with_entry > without);
+    }
+
+    #[test]
+    fn dict_chars_ignores_entries_not_before_kana() {
+        // 直後がかなでない entry (大好 + 物) は数えない = 従来どおり並ぶ
+        let a = PathScore::ZERO.add_edge_full(&Score::dict_exact(2), false, false);
+        let b = PathScore::ZERO.add_edge_full(&Score::dict_exact(2), false, false);
+        assert_eq!(a.dict_chars, 0);
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+    }
+
+    #[test]
+    fn dict_chars_is_last_axis() {
+        // edge 数で勝つ path は dict_chars が少なくても勝つ
+        let fewer_edges = PathScore::ZERO.add_edge_full(&Score::new(150, 3, 0), false, false);
+        let more_edges_with_dict = PathScore::ZERO
+            .add_edge_full(&Score::dict_exact(2), false, true)
+            .add_edge_full(&Score::new(150, 1, 0), false, false);
+        assert!(fewer_edges > more_edges_with_dict);
+    }
     use super::*;
     use crate::scoring::boundary::BoundaryAnalysis;
     use crate::scoring::candidate::{Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI};
