@@ -402,7 +402,15 @@ impl NumberCandidateProvider {
             let m_end = caps.get(0).unwrap().end();
             let num = caps.get(1).unwrap().as_str();
             let scale = caps.get(2).unwrap().as_str();
-            let trailing_unit = caps.get(3).map(|m| m.as_str());
+            let mut m_end = m_end;
+            let mut trailing_unit = caps.get(3).map(|m| m.as_str());
+            // 末尾の助数詞が動詞の語幹を兼ねる時 (1000万行くな 等) は、 助数詞を外した span で出す
+            if let Some(u) = trailing_unit {
+                if self.counter_blocked(u, &rest[m_end..]) {
+                    m_end = caps.get(3).unwrap().start();
+                    trailing_unit = None;
+                }
+            }
             let mut reading = scale_reading(num, scale, &self.scales);
             if let Some(u) = trailing_unit {
                 if let Some(unit_kana) = self.units.lookup(u) {
@@ -445,6 +453,14 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// 助数詞 `counter` の `not_before` に直後の文字列 `after` が当たるか
+    fn counter_blocked(&self, counter: &str, after: &str) -> bool {
+        self.counters
+            .counter
+            .get(counter)
+            .is_some_and(|r| r.not_before.iter().any(|p| after.starts_with(p.as_str())))
+    }
+
     /// section 6: 数値 + 単一助数詞 (+ optional 末尾再帰 「目」)。
     fn try_counter(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(re) = &self.counter_re else { return };
@@ -455,6 +471,10 @@ impl NumberCandidateProvider {
             // group 3 = optional 末尾再帰助数詞 (= 「目」)。 match したら
             // 「個」 + 「目」 = 「個目」 を read_counter に渡し、 euphonic_counter_read
             // の strip_suffix('目') 再帰で 「ニコメ」 等を得る。
+            // 助数詞の字が動詞の語幹を兼ねる時 (行 + って 等) は候補を出さない
+            if caps.get(3).is_none() && self.counter_blocked(base, &rest[m_end..]) {
+                return;
+            }
             let combined;
             let counter = if let Some(rec) = caps.get(3) {
                 combined = format!("{base}{}", rec.as_str());
@@ -510,7 +530,7 @@ impl NumberCandidateProvider {
                     .counter
                     .get(base)
                     .is_some_and(|r| r.kanji_numeral);
-                if !opted_in {
+                if !opted_in || self.counter_blocked(base, &rest[m_end..]) {
                     return;
                 }
                 base.to_string()

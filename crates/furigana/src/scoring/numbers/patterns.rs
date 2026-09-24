@@ -151,10 +151,10 @@ pub(super) fn build_scale_regex(
     {
         trailing_set.insert(u.clone());
     }
-    for c in counters
+    for (c, _) in counters
         .counter
-        .keys()
-        .filter(|s| is_single_non_ascii_kanji(s))
+        .iter()
+        .filter(|(s, r)| is_single_non_ascii_kanji(s) && r.scale_trailing)
     {
         trailing_set.insert(c.clone());
     }

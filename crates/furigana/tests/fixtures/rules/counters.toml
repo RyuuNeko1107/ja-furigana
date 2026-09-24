@@ -265,3 +265,13 @@ sokuonize = true
 [counter."目"]
 mode = "recursive"
 suffix = "メ"
+
+# 動詞の語幹を兼ねる助数詞: 直後が っ/く/け なら counter 候補を出さない (行って / 行く / 行ける)
+[counter."行"]
+default = "ギョウ"
+not_before = ["っ", "く", "け"]
+
+# 大数の後ろには付けない助数詞 (scale_trailing = false)
+[counter."段"]
+default = "ダン"
+scale_trailing = false

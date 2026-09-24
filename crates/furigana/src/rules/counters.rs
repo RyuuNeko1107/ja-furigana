@@ -56,7 +56,8 @@ impl CountersData {
 }
 
 /// 助数詞 1 件の振る舞い
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
+#[non_exhaustive]
 pub struct CounterRule {
     /// デフォルト suffix (例: 本→「ホン」)。
     /// `mode = "recursive"` の場合は不要 (None 可)。
@@ -95,6 +96,41 @@ pub struct CounterRule {
     /// counter 用法が支配的で非 counter 文脈との衝突が無い助数詞 (匹/羽/頭/杯 等) のみ opt-in する。
     #[serde(default)]
     pub kanji_numeral: bool,
+
+    /// **直後がこの文字列で始まる時は counter 候補を出さない** (default 空)。
+    ///
+    /// 助数詞の字が動詞の語幹も兼ねる時の衝突よけ。 例: 行 = `["っ", "く", "け"]` で
+    /// 「4000行って / 1000万行くな / 300万行ける」 を 行く の活用として読ませる
+    /// (「3行で / 2行目 / 1行から」 の助数詞用法はそのまま)。
+    #[serde(default)]
+    pub not_before: Vec<String>,
+
+    /// **大数の後ろ (1000万本 / 3億円) に付く助数詞として扱うか** (default true)。
+    ///
+    /// false にすると 「N万X」 の X としては拾わない (flat 形式 `simple` の助数詞と同じ扱い)。
+    /// 行 のように 「1000万行かん / 100万行こう」 と動詞が続くのが普通の字で使う。
+    #[serde(default = "default_true")]
+    pub scale_trailing: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for CounterRule {
+    fn default() -> Self {
+        Self {
+            default: None,
+            rules: Vec::new(),
+            specials: HashMap::new(),
+            replacements: Vec::new(),
+            mode: None,
+            suffix: None,
+            kanji_numeral: false,
+            not_before: Vec::new(),
+            scale_trailing: true,
+        }
+    }
 }
 
 /// 数値カナの末尾置換ルール

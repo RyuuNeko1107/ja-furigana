@@ -574,3 +574,66 @@ fn minus_after_kanji_is_still_sign() {
     let c = find(&cands, "-").expect("minus candidate after kanji");
     assert_eq!(c.reading, "マイナス");
 }
+
+// ─── not_before (助数詞の字が動詞の語幹を兼ねる、 ★2026-09-24) ─────────────
+
+#[test]
+fn not_before_blocks_counter_when_verb_okurigana_follows() {
+    // 「4000行って」 は 行く の活用。 行 の not_before (っ) に当たるので counter 候補を出さない
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("4000行って"), 0);
+    assert!(find(&cands, "4000行").is_none(), "{cands:?}");
+    assert!(find(&cands, "4000").is_some());
+}
+
+#[test]
+fn not_before_keeps_counter_for_other_following_chars() {
+    // 「3行で」 「2行目」 は助数詞のまま
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("3行で"), 0);
+    assert_eq!(
+        find(&cands, "3行").expect("3行 candidate").reading,
+        "サンギョウ"
+    );
+    let cands = p.candidates_vec(&ctx("2行目"), 0);
+    assert!(find(&cands, "2行目").is_some(), "{cands:?}");
+}
+
+#[test]
+fn not_before_at_end_of_input_keeps_counter() {
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("4行"), 0);
+    assert!(find(&cands, "4行").is_some());
+}
+
+#[test]
+fn not_before_on_scale_trailing_counter_drops_only_the_counter() {
+    // 「1000万行くな」 は 万 までを数として読み、 行 は外す
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("1000万行くな"), 0);
+    assert!(find(&cands, "1000万行").is_none(), "{cands:?}");
+    assert_eq!(
+        find(&cands, "1000万").expect("1000万 candidate").reading,
+        "センマン"
+    );
+}
+
+#[test]
+fn scale_trailing_false_keeps_counter_off_scale() {
+    // scale_trailing = false の助数詞は 「100万段」 の末尾に付かない。 数字だけの 「3段」 は助数詞のまま
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("100万段"), 0);
+    assert!(find(&cands, "100万段").is_none(), "{cands:?}");
+    assert!(find(&cands, "100万").is_some());
+    let cands = p.candidates_vec(&ctx("3段"), 0);
+    assert_eq!(
+        find(&cands, "3段").expect("3段 candidate").reading,
+        "サンダン"
+    );
+}
+
+#[test]
+fn counter_rule_default_keeps_scale_trailing_on() {
+    assert!(crate::rules::CounterRule::default().scale_trailing);
+    assert!(crate::rules::CounterRule::default().not_before.is_empty());
+}
