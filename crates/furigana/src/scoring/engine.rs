@@ -59,6 +59,9 @@ pub struct PathScore {
     /// band / edge 数で並び、 列挙順で Lindera 側の分割が勝っていた (足早いしな / 応援歌いいね /
     /// 労わって / 高えな)。 並んだ時は辞書が覆う方を採る
     pub dict_chars: u32,
+    /// 辞書 entry 以外の漢字 1 字 edge の数 (少ないほど良い)。 dict_chars の手前の軸。 直後かなの entry が
+    /// 別の entry を割って漢字 1 字を孤立させる型 (鶏肉入って = 鶏 + 肉入って) を dict_chars で拾わないため
+    pub lone_kanji: u32,
 }
 
 impl PathScore {
@@ -70,6 +73,7 @@ impl PathScore {
         total_match_hits: 0,
         synthetic_edges: 0,
         dict_chars: 0,
+        lone_kanji: 0,
     };
 
     /// この path に edge `score` を追加した新 PathScore を返す。
@@ -85,6 +89,20 @@ impl PathScore {
         self.add_edge_full(score, synthetic, false)
     }
 
+    /// [`Self::add_edge_full`] + この edge が辞書 entry 以外の漢字 1 字か (`lone_kanji`)
+    #[must_use]
+    pub fn add_edge_ctx(
+        self,
+        score: &Score,
+        synthetic: bool,
+        before_kana: bool,
+        lone_kanji: bool,
+    ) -> Self {
+        let mut s = self.add_edge_full(score, synthetic, before_kana);
+        s.lone_kanji += u32::from(lone_kanji);
+        s
+    }
+
     /// `before_kana` = この edge の直後がひらがな (= 同点型の条件、 [`Self::dict_chars`] に数えるか)
     #[must_use]
     pub fn add_edge_full(self, score: &Score, synthetic: bool, before_kana: bool) -> Self {
@@ -93,6 +111,7 @@ impl PathScore {
             edge_count: self.edge_count + 1,
             total_match_hits: self.total_match_hits + u32::from(score.match_hits),
             synthetic_edges: self.synthetic_edges + u32::from(synthetic),
+            lone_kanji: self.lone_kanji,
             dict_chars: self.dict_chars
                 + if before_kana && score.band >= BAND_DICT_EXACT {
                     u32::from(score.length)
@@ -112,6 +131,7 @@ impl Ord for PathScore {
             .then(self.total_match_hits.cmp(&other.total_match_hits))
             // synthetic_edges: 少 = better、 比較は逆方向
             .then(other.synthetic_edges.cmp(&self.synthetic_edges))
+            .then(other.lone_kanji.cmp(&self.lone_kanji))
             .then(self.dict_chars.cmp(&other.dict_chars))
     }
 }
@@ -219,7 +239,13 @@ pub fn solve_path<'a>(
                 .chars()
                 .next()
                 .is_some_and(crate::kana::is_hiragana_char);
-            let new_score = current_score.add_edge_full(&cand.score, cand.synthetic, before_kana);
+            let lone_kanji = cand.score.band < BAND_DICT_EXACT
+                && {
+                    let mut cs = ctx.input[pos..next_pos].chars();
+                    matches!((cs.next(), cs.next()), (Some(c), None) if crate::scoring::lindera_fallback::is_real_cjk_ideograph(c))
+                };
+            let new_score =
+                current_score.add_edge_ctx(&cand.score, cand.synthetic, before_kana, lone_kanji);
 
             // dp[next_pos] と比較、 better なら更新
             let better = match dp[next_pos] {
