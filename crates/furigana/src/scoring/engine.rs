@@ -54,6 +54,11 @@ pub struct PathScore {
     /// 性能 + 上げ を食わないように)。 補完 edge が要る path は edge 数か match_hits で
     /// 明確に勝つ時だけ採る (断捨離 + し + て 3 edge vs 断 + 捨 + 離し + て 4 edge)。
     pub synthetic_edges: u32,
+    /// 直後がひらがなの辞書 entry (band ≥ [`BAND_DICT_EXACT`]) が覆う文字数 (多いほど良い)。 上 4 軸が完全に並んだ時だけ効く。
+    /// entry の直後のかな 1 字が band 50 の素通しになると、 entry を含む path と含まない path が
+    /// band / edge 数で並び、 列挙順で Lindera 側の分割が勝っていた (足早いしな / 応援歌いいね /
+    /// 労わって / 高えな)。 並んだ時は辞書が覆う方を採る
+    pub dict_chars: u32,
 }
 
 impl PathScore {
@@ -64,6 +69,7 @@ impl PathScore {
         edge_count: 0,
         total_match_hits: 0,
         synthetic_edges: 0,
+        dict_chars: 0,
     };
 
     /// この path に edge `score` を追加した新 PathScore を返す。
@@ -76,11 +82,23 @@ impl PathScore {
     /// `synthetic` = 行き止まり補完 edge かどうか。
     #[must_use]
     pub fn add_edge_kind(self, score: &Score, synthetic: bool) -> Self {
+        self.add_edge_full(score, synthetic, false)
+    }
+
+    /// `before_kana` = この edge の直後がひらがな (= 同点型の条件、 [`Self::dict_chars`] に数えるか)
+    #[must_use]
+    pub fn add_edge_full(self, score: &Score, synthetic: bool, before_kana: bool) -> Self {
         Self {
             weakest_band: self.weakest_band.min(score.band),
             edge_count: self.edge_count + 1,
             total_match_hits: self.total_match_hits + u32::from(score.match_hits),
             synthetic_edges: self.synthetic_edges + u32::from(synthetic),
+            dict_chars: self.dict_chars
+                + if before_kana && score.band >= BAND_DICT_EXACT {
+                    u32::from(score.length)
+                } else {
+                    0
+                },
         }
     }
 }
@@ -94,6 +112,7 @@ impl Ord for PathScore {
             .then(self.total_match_hits.cmp(&other.total_match_hits))
             // synthetic_edges: 少 = better、 比較は逆方向
             .then(other.synthetic_edges.cmp(&self.synthetic_edges))
+            .then(self.dict_chars.cmp(&other.dict_chars))
     }
 }
 
@@ -196,7 +215,11 @@ pub fn solve_path<'a>(
                 continue; // overflow / 0-length / 後退は skip
             }
 
-            let new_score = current_score.add_edge_kind(&cand.score, cand.synthetic);
+            let before_kana = ctx.input[next_pos..]
+                .chars()
+                .next()
+                .is_some_and(crate::kana::is_hiragana_char);
+            let new_score = current_score.add_edge_full(&cand.score, cand.synthetic, before_kana);
 
             // dp[next_pos] と比較、 better なら更新
             let better = match dp[next_pos] {
