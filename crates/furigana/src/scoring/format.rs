@@ -62,9 +62,10 @@ use std::collections::HashMap;
 #[serde(untagged)]
 pub enum Entry {
     /// 省略形 — string 1 つ (= default reading のみ、 match block なし)
-    Simple(String),
-    /// 完全形 — default reading + match block 配列
-    Detailed(EntryDetail),
+    Simple(Box<str>),
+    /// 完全形 — default reading + match block 配列。 大半の entry は Simple なので Box にして
+    /// enum 全体を小さく保つ (2026-09-24 メモリ削減: 1 件あたりの slot が Detailed の大きさに引きずられていた)
+    Detailed(Box<EntryDetail>),
 }
 
 impl Entry {
@@ -72,7 +73,7 @@ impl Entry {
     #[must_use]
     pub fn default_reading(&self) -> &str {
         match self {
-            Entry::Simple(s) => s.as_str(),
+            Entry::Simple(s) => s.as_ref(),
             Entry::Detailed(d) => d.reading.as_str(),
         }
     }

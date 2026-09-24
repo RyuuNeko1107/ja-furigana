@@ -36,7 +36,7 @@ use crate::scoring::format::{Entry, EntryDetail, KanjiBlock};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// TOML ファイルの `[entries]` セクションを受ける defensive な型。
 ///
@@ -93,16 +93,19 @@ fn collect_hoisted_entries(v: &toml::Value, out: &mut Vec<(String, String)>) {
 /// (`lookup_jukugo` / `lookup_unihan`) は `default_reading` 経由で旧挙動維持、
 /// 新 inline match を使う Smart engine 側 logic は別 layer (= scoring engine
 /// 内 provider) で `rich` を読む想定。
+///
+/// **メモリ (2026-09-24)**: 旧実装は同じ entry を `jukugo` (表層 → 読み) / `rich` (表層 → Entry) /
+/// `rich_index` (表層のコピー) に 3 重に持ち、 1 件あたり数百 byte 使っていた。 `jukugo` は `rich` と
+/// 常に同内容だったので廃止して `rich` から引き、 `rich` のキーは `Arc<str>` にして index と共有する。
 #[derive(Debug, Default, Clone)]
 pub struct Dict {
-    /// 熟語・固有名詞・複合語 (surface ≥ 2 文字)、 default reading のみ保持
-    jukugo: HashMap<String, String>,
     /// 単漢字フォールバック (surface = 1 文字)、 default reading のみ保持
+    /// (`[[kanji]]` block の default もここに入るので `rich` とは別に持つ)
     unihan: HashMap<String, String>,
     /// 完全 [`Entry`] data (= Simple variant か、 inline / expanded match block 持ち
-    /// Detailed variant)。 surface 長で振り分けず全 entry をここに保持、
-    /// alpha.11+ で Smart engine が `MatchCondition` 評価に使う想定。
-    rich: HashMap<String, Entry>,
+    /// Detailed variant)。 surface 長で振り分けず全 entry をここに保持。
+    /// 熟語 (surface ≥ 2 文字) の default reading もここから引く (旧 `jukugo` map)。
+    rich: HashMap<Arc<str>, Entry>,
     /// `[[kanji]]` block 配列 (★A2 alpha.12、 `core/kanji/*.toml` の新 format)。
     /// 単漢字単独 default + 文脈分岐 reading を持つ first-class candidate generator、
     /// Smart engine から `kanji_iter()` で walk して `MatchCondition` 評価する想定。
@@ -113,7 +116,7 @@ pub struct Dict {
     /// 引くための逆引き。 これが無いと全 ~44k entry を毎位置 linear scan して
     /// O(N × M) になる (= 性能 hot path)。 lazy build (= 初回 [`Self::rich_index`]
     /// 呼び出し時に `rich` 全体から構築)、 `insert` / `merge` で invalidate。
-    rich_index: OnceLock<HashMap<char, Vec<String>>>,
+    rich_index: OnceLock<HashMap<char, Vec<Arc<str>>>>,
     /// `[[kanji]]` block の prefix index (char → `kanji` vec 内 index 群)。
     /// rich_index と同趣旨で、 kanji block の毎位置 linear scan を回避する。
     kanji_index: OnceLock<HashMap<char, Vec<usize>>>,
@@ -147,6 +150,20 @@ impl Dict {
     /// # Errors
     /// TOML 構文エラー / sanitize 失敗時に Err。
     pub fn from_toml_str(content: &str, file: &str) -> Result<Self> {
+        // 高速経路: `[meta]` + `[entries]` に `"表層" = "読み"` の行しか無い file (大多数) は
+        // toml の値の木を作らずに 1 行ずつ読む (21 万件級の蒸留語彙で読み込み中のピークが大きかった)。
+        // 少しでも外れる書き方 (detailed entry / [[kanji]] / エスケープ / 裸キー 等) があれば従来の toml 経路
+        if let Some(pairs) = parse_simple_entries(content) {
+            let mut d = Self::default();
+            for (k, s) in pairs {
+                crate::sanitize::sanitize_dict_value("dict surface", k)
+                    .map_err(|e| FuriganaError::Validation(format!("{file}: {e}")))?;
+                crate::sanitize::sanitize_dict_value("dict reading", s)
+                    .map_err(|e| FuriganaError::Validation(format!("{file}: {e}")))?;
+                d.insert(k, s);
+            }
+            return Ok(d);
+        }
         // permissive parse: HashMap<String, toml::Value> で受けて、 各 value を
         // Entry に変換可能か個別判定する (= 不一致 value silent skip 維持)。
         let parsed: DictFile = toml::from_str(content).map_err(|e| FuriganaError::Toml {
@@ -167,8 +184,7 @@ impl Dict {
                     .map_err(|e| FuriganaError::Validation(format!("{file}: {e}")))?;
                 crate::sanitize::sanitize_dict_value("dict reading", s)
                     .map_err(|e| FuriganaError::Validation(format!("{file}: {e}")))?;
-                d.insert(k.clone(), s.to_string());
-                d.rich.insert(k, Entry::Simple(s.to_string()));
+                d.insert(k, s.to_string());
                 continue;
             }
             // 2) value が table なら EntryDetail として deserialize 試行
@@ -199,7 +215,8 @@ impl Dict {
                 }
                 let default_reading = detail.reading.clone();
                 d.insert(k.clone(), default_reading);
-                d.rich.insert(k, Entry::Detailed(detail));
+                d.rich
+                    .insert(Arc::from(k), Entry::Detailed(Box::new(detail)));
                 continue;
             }
             // 3) その他 (= bool / array / etc) は silent skip
@@ -207,15 +224,14 @@ impl Dict {
 
         // hoist 候補を適用 (= explicit entry を上書きしない gap 埋めのみ)。
         for (surface, reading) in pending_hoist {
-            if d.rich.contains_key(&surface) {
+            if d.rich.contains_key(surface.as_str()) {
                 continue; // explicit entry (simple / detailed) が既にある → 優先
             }
             crate::sanitize::sanitize_dict_value("dict surface (hoisted)", &surface)
                 .map_err(|e| FuriganaError::Validation(format!("{file}: {e}")))?;
             crate::sanitize::sanitize_dict_value("dict reading (hoisted)", &reading)
                 .map_err(|e| FuriganaError::Validation(format!("{file}: {e}")))?;
-            d.insert(surface.clone(), reading.clone());
-            d.rich.insert(surface, Entry::Simple(reading));
+            d.insert(surface, reading);
         }
 
         // ★A2 alpha.12: `[[kanji]]` block の取り込み (= core/kanji/*.toml 等)
@@ -316,16 +332,19 @@ impl Dict {
     /// 使い、`DictBridgeProvider` の emit 優先順位に組み込むのが推奨。
     #[must_use]
     pub fn lookup(&self, surface: &str) -> Option<&str> {
-        self.jukugo
-            .get(surface)
-            .or_else(|| self.unihan.get(surface))
-            .map(String::as_str)
+        self.lookup_jukugo(surface)
+            .or_else(|| self.unihan.get(surface).map(String::as_str))
     }
 
     /// 熟語辞書 (surface ≥ 2 文字) のみを lookup
     #[must_use]
     pub fn lookup_jukugo(&self, surface: &str) -> Option<&str> {
-        self.jukugo.get(surface).map(String::as_str)
+        // 旧 `jukugo` map = rich のうち surface ≥ 2 文字の default reading と同内容
+        let mut cs = surface.chars();
+        if cs.next().is_none() || cs.next().is_none() {
+            return None;
+        }
+        self.rich.get(surface).map(Entry::default_reading)
     }
 
     /// 単漢字辞書 (surface = 1 文字) のみを lookup
@@ -355,17 +374,15 @@ impl Dict {
         }
         if s.chars().count() == 1 {
             self.unihan.insert(s.clone(), r.clone());
-        } else {
-            self.jukugo.insert(s.clone(), r.clone());
         }
-        self.rich.insert(s, Entry::Simple(r));
+        self.rich
+            .insert(Arc::from(s), Entry::Simple(r.into_boxed_str()));
         // rich を変更したので prefix index を invalidate (= 次の lookup で再 build)。
         self.rich_index = OnceLock::new();
     }
 
     /// 別の Dict を merge (other の方が後勝ち)
     pub fn merge(&mut self, other: Self) {
-        self.jukugo.extend(other.jukugo);
         self.unihan.extend(other.unihan);
         self.rich.extend(other.rich);
         // ★A2 alpha.12: [[kanji]] block も merge (= append、 重複 char は両方残るので
@@ -392,16 +409,16 @@ impl Dict {
     /// する用途。 `jukugo_iter` と異なり surface 長の制約なし、 Simple / Detailed
     /// 区別なく全 entry を返す。
     pub fn rich_iter(&self) -> impl Iterator<Item = (&str, &Entry)> {
-        self.rich.iter().map(|(k, v)| (k.as_str(), v))
+        self.rich.iter().map(|(k, v)| (&**k, v))
     }
 
     /// `rich` の prefix index を返す (lazy build)。
     ///
     /// surface 先頭 char → その char で始まる surface 群。 [`Self::rich_matching_prefix`]
     /// が使う内部 helper。
-    fn rich_index(&self) -> &HashMap<char, Vec<String>> {
+    fn rich_index(&self) -> &HashMap<char, Vec<Arc<str>>> {
         self.rich_index.get_or_init(|| {
-            let mut m: HashMap<char, Vec<String>> = HashMap::new();
+            let mut m: HashMap<char, Vec<Arc<str>>> = HashMap::new();
             for k in self.rich.keys() {
                 if let Some(c) = k.chars().next() {
                     m.entry(c).or_default().push(k.clone());
@@ -433,12 +450,12 @@ impl Dict {
     pub(crate) fn rich_matching_prefix(&self, tail: &str) -> impl Iterator<Item = (&str, &Entry)> {
         let mut chars = tail.chars();
         let first = chars.next();
-        let bucket: &[String] = first
+        let bucket: &[Arc<str>] = first
             .and_then(|c| self.rich_index().get(&c))
             .map_or(&[], Vec::as_slice);
 
         // 1 字 surface (= 先頭 char 単体) は昇順 bucket の先頭側に来る。
-        let single: &[String] = match first {
+        let single: &[Arc<str>] = match first {
             Some(c) => {
                 let fc = c.len_utf8();
                 if bucket.first().is_some_and(|s| s.len() == fc) {
@@ -451,10 +468,10 @@ impl Dict {
         };
 
         // 先頭 2 文字が一致する連続区間 (tail が 1 字なら 1 字 surface のみ対象)。
-        let range: &[String] = match (first, chars.next()) {
+        let range: &[Arc<str>] = match (first, chars.next()) {
             (Some(c1), Some(c2)) => {
                 let two = &tail[..c1.len_utf8() + c2.len_utf8()];
-                let lo = bucket.partition_point(|s| s.as_str() < two);
+                let lo = bucket.partition_point(|s| &**s < two);
                 let hi = lo + bucket[lo..].partition_point(|s| s.starts_with(two));
                 &bucket[lo..hi]
             }
@@ -464,7 +481,7 @@ impl Dict {
         single
             .iter()
             .chain(range.iter())
-            .filter_map(move |s| self.rich.get(s).map(|e| (s.as_str(), e)))
+            .filter_map(move |s| self.rich.get(&**s).map(|e| (&**s, e)))
     }
 
     /// `[[kanji]]` block の prefix index を返す (lazy build)。
@@ -502,19 +519,22 @@ impl Dict {
     /// 件数 (jukugo + unihan の合計)
     #[must_use]
     pub fn len(&self) -> usize {
-        self.jukugo.len() + self.unihan.len()
+        self.jukugo_len() + self.unihan.len()
     }
 
     /// 空判定
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.jukugo.is_empty() && self.unihan.is_empty()
+        self.jukugo_len() == 0 && self.unihan.is_empty()
     }
 
     /// 熟語のみの件数 (デバッグ用)
     #[must_use]
     pub fn jukugo_len(&self) -> usize {
-        self.jukugo.len()
+        self.rich
+            .keys()
+            .filter(|k| k.chars().nth(1).is_some())
+            .count()
     }
 
     /// 単漢字のみの件数 (デバッグ用)
@@ -528,8 +548,82 @@ impl Dict {
     /// 旧 `chunks::NumberChunker` (alpha.15 で削除済) が使っていた公開 helper。
     /// 現在 lib 内部に caller は無いが、 dict 内容の inspection 用 public API として残置。
     pub fn jukugo_iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.jukugo.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+        self.rich
+            .iter()
+            .filter(|(k, _)| k.chars().nth(1).is_some())
+            .map(|(k, v)| (&**k, v.default_reading()))
     }
+}
+
+/// `[meta]` と `[entries]` に `"表層" = "読み"` (行末コメント可) しか無い TOML なら、 その組を返す。
+/// 1 行でも外れる書き方があれば `None` (= 呼び出し側は toml crate で読む)。 表層・読みは
+/// エスケープ (`\`) を含まない basic string のみ。 同じキーが 2 回出たら TOML としてエラーなので `None`
+/// (toml 経路に任せてエラーを出させる)。
+fn parse_simple_entries(content: &str) -> Option<Vec<(&str, &str)>> {
+    /// `"..."` を先頭から読み、 (中身, 残り) を返す。 エスケープや改行を含むものは None
+    fn quoted(s: &str) -> Option<(&str, &str)> {
+        let rest = s.strip_prefix('"')?;
+        let end = rest.find('"')?;
+        let inner = &rest[..end];
+        if inner.contains('\\') {
+            return None;
+        }
+        Some((inner, &rest[end + 1..]))
+    }
+    /// 値の後ろ: 空白 + (無し | `# コメント`) のみ許す
+    fn tail_ok(s: &str) -> bool {
+        let t = s.trim_start_matches([' ', '\t']);
+        t.is_empty() || t.starts_with('#')
+    }
+    let mut section = "";
+    let mut pairs = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for raw in content.lines() {
+        let line = raw.trim_matches([' ', '\t']);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            let (head, rest) = line.split_at(line.find(']')? + 1);
+            if !tail_ok(rest) {
+                return None;
+            }
+            match head {
+                "[meta]" if section != "entries" => section = "meta",
+                "[entries]" => section = "entries",
+                _ => return None,
+            }
+            continue;
+        }
+        match section {
+            "meta" => {
+                // `key = "value"` だけ許す (中身は Dict では使わない)
+                let (key, rest) = line.split_once('=')?;
+                if !key
+                    .trim()
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    return None;
+                }
+                let (_, after) = quoted(rest.trim_start())?;
+                if !tail_ok(after) {
+                    return None;
+                }
+            }
+            "entries" => {
+                let (k, rest) = quoted(line)?;
+                let rest = rest.trim_start_matches([' ', '\t']).strip_prefix('=')?;
+                let (v, after) = quoted(rest.trim_start_matches([' ', '\t']))?;
+                if !tail_ok(after) || !seen.insert(k) {
+                    return None;
+                }
+                pairs.push((k, v));
+            }
+            _ => return None, // root 直下の key 等
+        }
+    }
+    Some(pairs)
 }
 
 #[cfg(test)]
