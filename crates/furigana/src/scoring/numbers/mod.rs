@@ -530,7 +530,25 @@ impl NumberCandidateProvider {
                     .counter
                     .get(base)
                     .is_some_and(|r| r.kanji_numeral);
-                if !opted_in || self.counter_blocked(base, &rest[m_end..]) {
+                // 位取りの漢数字 (〇〜九 だけの 3 桁以上 = 一九九九 / 二〇二三) は数としか読めないので、
+                // opt-in していない助数詞 (年 等) でも counter にする (★2026-09-24、 旧 いっきゅうくくねん)
+                let positional = num.chars().count() >= 3
+                    && num.chars().all(|c| {
+                        matches!(
+                            c,
+                            '〇' | '零'
+                                | '一'
+                                | '二'
+                                | '三'
+                                | '四'
+                                | '五'
+                                | '六'
+                                | '七'
+                                | '八'
+                                | '九'
+                        )
+                    });
+                if !(opted_in || positional) || self.counter_blocked(base, &rest[m_end..]) {
                     return;
                 }
                 base.to_string()

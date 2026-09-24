@@ -637,3 +637,22 @@ fn counter_rule_default_keeps_scale_trailing_on() {
     assert!(crate::rules::CounterRule::default().scale_trailing);
     assert!(crate::rules::CounterRule::default().not_before.is_empty());
 }
+
+// ─── 位取りの漢数字 (〇〜九 だけの 3 桁以上) は opt-in でない助数詞でも counter (★2026-09-24) ───
+
+#[test]
+fn positional_kanji_numeral_counts_even_without_opt_in() {
+    // fixture の 年 は kanji_numeral 無し。 一九九九年 は位取りなので数として読む
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("一九九九年"), 0);
+    let c = find(&cands, "一九九九年").expect("一九九九年 candidate");
+    assert_eq!(c.reading, "センキュウヒャクキュウジュウキュウネン");
+}
+
+#[test]
+fn short_or_unit_kanji_numeral_still_needs_opt_in() {
+    // 2 桁 (一九) や 単位入り (十年) は従来どおり opt-in が要る
+    let p = provider();
+    assert!(find(&p.candidates_vec(&ctx("二三年"), 0), "二三年").is_none());
+    assert!(find(&p.candidates_vec(&ctx("二十年"), 0), "二十年").is_none());
+}
