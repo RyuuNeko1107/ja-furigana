@@ -60,8 +60,9 @@ use crate::scoring::candidate::{
     CandidateProvider, RawCandidate, Score, ScoringContext, BAND_SPECIAL,
 };
 use patterns::{
-    at_start, build_counter_regexes, build_scale_regex, build_si_unit_regex, DATE_KANJI_FULL_RE,
-    DATE_KANJI_MD_RE, DIGIT_RE, TIME_COLON_RE, TIME_JP_FULL_RE,
+    at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
+    build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, TIME_COLON_RE,
+    TIME_JP_FULL_RE,
 };
 use regex::Regex;
 
@@ -88,6 +89,8 @@ pub struct NumberCandidateProvider {
     /// `(KANJI_NUM)(base)(recursive)` pattern (漢数字 + 末尾再帰 「目」 必須)。
     /// recursive counter が無い (= 「目」 未定義) なら `None`。
     counter_kanji_re: Option<Regex>,
+    /// 読点区切りの漢数字 + 助数詞 (`一、〇〇〇円`)。 counter が空なら `None`
+    counter_kanji_grouped_re: Option<Regex>,
     /// `(NUM)(scale)(unit?)` pattern。 scales 空なら `None`。
     scale_re: Option<Regex>,
     /// `(NUM)(si_unit)` pattern。 units 空なら `None`。
@@ -104,6 +107,7 @@ impl NumberCandidateProvider {
     #[must_use]
     pub fn new(rules: &RulesData) -> Self {
         let (counter_re, counter_kanji_re) = build_counter_regexes(&rules.counters);
+        let counter_kanji_grouped_re = build_grouped_kanji_counter_regex(&rules.counters);
         let scale_re = build_scale_regex(&rules.scales, &rules.units, &rules.counters);
         let si_unit_re = build_si_unit_regex(&rules.units);
 
@@ -140,6 +144,7 @@ impl NumberCandidateProvider {
             phrase_index,
             counter_re,
             counter_kanji_re,
+            counter_kanji_grouped_re,
             scale_re,
             si_unit_re,
             unit_symbols: std::sync::Arc::new(unit_symbols),
@@ -499,6 +504,46 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// section 6a: 読点区切りの漢数字 + 助数詞 (`一、〇〇〇円` = センエン / `三、五〇〇円`)。
+    /// 法令・判例は金額を漢数字で 3 桁ごとに読点で区切る。 区切りを外すと位取りの漢数字になるので
+    /// [`Self::read_counter`] (内部で位取りとして数に直す) にそのまま渡す (★2026-09-24、 旧 いち、れいれいれいえん)
+    fn try_counter_kanji_grouped(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        let Some(re) = &self.counter_kanji_grouped_re else {
+            return;
+        };
+        if let Some(caps) = at_start(re, rest) {
+            let m_end = caps.get(0).unwrap().end();
+            // 漢数字の桁を算用数字に直し、 万 / 億 / 兆 が挟まれば 0 を足す (一、〇〇〇万円 = 10000000 円)
+            let mut num: String = caps
+                .get(1)
+                .unwrap()
+                .as_str()
+                .chars()
+                .filter_map(|c| "〇一二三四五六七八九".chars().position(|d| d == c))
+                .map(|d| char::from(b'0' + d as u8))
+                .collect();
+            if let Some(scale) = caps.get(2) {
+                num.push_str(match scale.as_str() {
+                    "万" => "0000",
+                    "億" => "00000000",
+                    _ => "000000000000",
+                });
+            }
+            let base = caps.get(3).unwrap().as_str();
+            if self.counter_blocked(base, &rest[m_end..]) {
+                return;
+            }
+            let reading = self.read_counter(&num, base);
+            out.push(self.make(input, pos, m_end, reading));
+        }
+    }
+
     /// section 6b: 漢数字 + 助数詞 (+ optional 末尾再帰 「目」)。
     ///
     /// - recursive 形 (= 「一個目」「十二回目」): group 3 が match。常に採用。
@@ -670,6 +715,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_scale(input, pos, rest, out);
         self.try_si_unit(input, pos, rest, out);
         self.try_counter(input, pos, rest, out);
+        self.try_counter_kanji_grouped(input, pos, rest, out);
         self.try_counter_kanji(input, pos, rest, out);
         self.emit_symbol(input, pos, rest, out);
         self.try_digit(input, pos, rest, out);

@@ -191,6 +191,30 @@ pub(super) fn at_start<'h>(re: &Regex, hay: &'h str) -> Option<Captures<'h>> {
         .filter(|c| c.get(0).is_some_and(|m| m.start() == 0))
 }
 
+/// 読点区切りの漢数字 + 助数詞 (`一、〇〇〇円` / `三、五〇〇円` / `一二、三四五人`)。 法令・判例の金額表記。
+/// 先頭は 1〜3 桁、 読点の後ろは **ちょうど 3 桁** の位取り漢数字 (〇〜九) の繰り返し。 counter が空なら `None`
+pub(super) fn build_grouped_kanji_counter_regex(counters: &CountersData) -> Option<Regex> {
+    let mut base: Vec<String> = counters.simple.keys().cloned().collect();
+    for (key, rule) in &counters.counter {
+        if rule.mode != Some(CounterMode::Recursive) {
+            base.push(key.clone());
+        }
+    }
+    if base.is_empty() {
+        return None;
+    }
+    base.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
+    let base_joined = base
+        .iter()
+        .map(|s| regex::escape(s))
+        .collect::<Vec<_>>()
+        .join("|");
+    Some(
+        Regex::new(&format!(r"([一二三四五六七八九]{{1,3}}(?:、[〇一二三四五六七八九]{{3}})+)([万億兆])?({base_joined})"))
+            .expect("scoring grouped kanji counter regex build failed"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

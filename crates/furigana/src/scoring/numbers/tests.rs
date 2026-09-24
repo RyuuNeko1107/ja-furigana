@@ -656,3 +656,31 @@ fn short_or_unit_kanji_numeral_still_needs_opt_in() {
     assert!(find(&p.candidates_vec(&ctx("二三年"), 0), "二三年").is_none());
     assert!(find(&p.candidates_vec(&ctx("二十年"), 0), "二十年").is_none());
 }
+
+// ─── 読点区切りの漢数字 + 助数詞 (法令・判例の金額表記、 ★2026-09-24) ───
+
+#[test]
+fn grouped_kanji_numeral_reads_as_one_number() {
+    let p = provider();
+    let c =
+        find(&p.candidates_vec(&ctx("三、五〇〇円"), 0), "三、五〇〇円").map(|c| c.reading.clone());
+    // fixture に 円 が無ければ 年 で確認する
+    let c = c.or_else(|| {
+        find(&p.candidates_vec(&ctx("一、九九九年"), 0), "一、九九九年").map(|c| c.reading.clone())
+    });
+    let r = c.expect("grouped candidate");
+    assert!(
+        r == "サンゼンゴヒャクエン" || r == "センキュウヒャクキュウジュウキュウネン",
+        "{r}"
+    );
+}
+
+#[test]
+fn grouped_kanji_numeral_needs_exactly_three_digits_after_comma() {
+    // 第一、二条 / 一、二、三 のような列挙は数にしない
+    let p = provider();
+    assert!(p
+        .candidates_vec(&ctx("一、二年"), 0)
+        .iter()
+        .all(|c| c.surface != "一、二年"));
+}
