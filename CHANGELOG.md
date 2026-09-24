@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-24
+
+### Changed (破壊的)
+
+- **`rules::CounterRule` を `#[non_exhaustive]` 化し、 field を 2 つ追加** (`not_before` / `scale_trailing`)。
+  struct literal で `CounterRule` を組み立てている下流はコンパイルが通らなくなる
+  (`CounterRule::default()` + field 代入へ書き換え)。 TOML から読むだけの利用は影響なし。
+  今後の field 追加で再び壊さないための non_exhaustive 化
+
+### Added
+
+- **助数詞 `not_before`**: 直後がこの文字列で始まる時は counter 候補を出さない。 助数詞の字が動詞の語幹も
+  兼ねる時の衝突よけ。 dict で `行` を `["っ", "く", "け"]` にすると 「4000行って / 1000万行くな / 300万行ける」 が
+  行く の活用として読まれる (従来は よんせんぎょうって)。 数字 + 助数詞 / 漢数字 bare / 大数 + 末尾助数詞
+  (この時は助数詞だけ外して数として読む) の 3 経路に効く
+- **助数詞 `scale_trailing`** (既定 true): false にすると大数の後ろ (「1000万X」) の助数詞としては拾わない。
+  flat 形式 (`simple`) の助数詞は元々大数の後ろに付かないので、 table 形式へ移す時にその挙動を保つために使う
+
+### Performance
+
+- **辞書の保持を軽量化** (jukugo map の廃止、 entry を `Box<str>` / `Box<EntryDetail>`、 rich キーを `Arc<str>`)。
+  ピークメモリ 1,000 行 87 → 75 MB / 20 万行 147 → 135 MB。 速度は同等。 実コーパス 593 万行で
+  hiragana / ruby とも出力がバイト単位で一致
+
+
 ## [0.4.7] - 2026-09-23
 
 ### Fixed
