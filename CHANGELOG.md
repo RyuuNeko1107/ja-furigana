@@ -14,6 +14,10 @@
   offline 生成する `core/accent/unidic.toml` (約 11 万件)。 API ログの内容語で accent の付く割合が
   辞書 4.9% → 54.7% (付かない語 78.4% → 29.4%)。 常駐メモリは約 +7 MB。
   既定 on、 `FuriganaBuilder::accent_lexicon(false)` / CLI `--no-accent-lexicon` (lookup / serve) で読まない
+- **用途に合わない分野の辞書を外す設定** `FuriganaBuilder::exclude_dict_path` / CLI `--exclude-dict <PATH>`
+  (lookup / serve、 複数回指定可、 serve は reload 後も維持)。 dict dir からの相対 path で、 dir なら配下全部、
+  file なら 1 file (`.toml` 省略可)。 例: ニュース読み上げで `works` (作品・VTuber 名) や
+  `jukugo/society/mahjong` を外す。 読み / 外来語 / 異体字 / アクセント表の全部に効く
 - 辞書 file の `[meta]` 判定 (role / schema_version) は `[meta]` の部分だけを解析する。 従来は 1 file を
   role 判定のたびに全体解析しており、 大きい表があると起動が遅かった (切り出せない file は従来通り全体を解析)
 

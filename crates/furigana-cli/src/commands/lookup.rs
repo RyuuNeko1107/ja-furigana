@@ -74,6 +74,11 @@ pub struct Args {
     /// accent/analyze: dict のアクセント専用の表 (role = "accent") を読まない
     #[arg(long)]
     no_accent_lexicon: bool,
+
+    /// dict のこの相対 path (dir なら配下全部、 file なら 1 file) を読まない。 複数回指定可
+    /// (例: `--exclude-dict works --exclude-dict jukugo/society/mahjong`)
+    #[arg(long = "exclude-dict", value_name = "PATH")]
+    exclude_dict: Vec<String>,
 }
 
 /// 実行
@@ -100,11 +105,12 @@ pub fn run(args: &Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         for core in &args.core_dict_dir {
             b = b.core_dict_dir(core);
         }
-        b.estimate_accent(args.estimate_accent)
+        super::apply_dict_excludes(b, &args.exclude_dict)
+            .estimate_accent(args.estimate_accent)
             .accent_lexicon(!args.no_accent_lexicon)
             .build()?
     } else {
-        super::furigana_builder(paths)
+        super::apply_dict_excludes(super::furigana_builder(paths), &args.exclude_dict)
             .estimate_accent(args.estimate_accent)
             .accent_lexicon(!args.no_accent_lexicon)
             .build()?

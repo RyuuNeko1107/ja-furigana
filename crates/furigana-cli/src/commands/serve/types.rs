@@ -49,6 +49,8 @@ pub(super) struct AppState {
     pub(super) estimate_accent: bool,
     /// アクセント専用の表を使うか。 起動 flag `--no-accent-lexicon` 由来、 reload 時にも維持する
     pub(super) accent_lexicon: bool,
+    /// 読まない dict path。 起動 flag `--exclude-dict` 由来、 reload 時にも維持する
+    pub(super) dict_excludes: Arc<Vec<String>>,
 }
 
 /// `/furigana` のクエリ / body パラメータ

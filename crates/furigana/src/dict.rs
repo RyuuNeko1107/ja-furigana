@@ -297,7 +297,12 @@ impl Dict {
     /// # Errors
     /// I/O 失敗 / TOML パース失敗。
     pub fn from_toml_dir<P: AsRef<Path>>(dir: P) -> Result<Self> {
-        let dir = dir.as_ref();
+        Self::from_toml_dir_excluding(dir.as_ref(), &[])
+    }
+
+    /// [`Self::from_toml_dir`] の除外付き版 (`excludes` は dir からの相対 path、
+    /// [`crate::FuriganaBuilder::exclude_dict_path`] 参照)
+    pub(crate) fn from_toml_dir_excluding(dir: &Path, excludes: &[String]) -> Result<Self> {
         if !dir.exists() {
             return Ok(Self::default());
         }
@@ -311,7 +316,7 @@ impl Dict {
         // walk + schema 検証 + role 解決は `for_each_toml_in_dir` が共通担当
         // (★A1b: schema_version = "2" 必須、 alpha.10〜)。
         let mut merged = Self::default();
-        crate::loader::for_each_toml_in_dir(dir, |content, from, role| {
+        crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, from, role| {
             // Dict に load する role 一覧。 role 不明 (None) は backwards compat
             // で Dict として扱う (古い release で role tag が無い file を救う)。
             let load_into_dict = matches!(

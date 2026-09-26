@@ -104,13 +104,17 @@ pub(super) async fn do_reload(state: &AppState, source: ReloadSource) -> Result<
     let paths = state.paths.clone();
     let estimate_accent = state.estimate_accent;
     let accent_lexicon = state.accent_lexicon;
+    let dict_excludes = state.dict_excludes.clone();
     let new = tokio::task::spawn_blocking(move || -> Result<furigana::Furigana, String> {
         // 起動 flag (estimate_accent) を reload 後も維持する
-        let f = crate::commands::furigana_builder(&paths)
-            .estimate_accent(estimate_accent)
-            .accent_lexicon(accent_lexicon)
-            .build()
-            .map_err(|e| format!("build_furigana failed: {e}"))?;
+        let f = crate::commands::apply_dict_excludes(
+            crate::commands::furigana_builder(&paths),
+            &dict_excludes,
+        )
+        .estimate_accent(estimate_accent)
+        .accent_lexicon(accent_lexicon)
+        .build()
+        .map_err(|e| format!("build_furigana failed: {e}"))?;
         // reload 直後の最初の request が同期 analyzer init コストを払わない /
         // init 失敗でその 1 request が panic しないよう、 swap 前に eager init する
         // (起動時 preload と挙動を揃える)。 build と同じ spawn_blocking 内なので

@@ -25,6 +25,14 @@ pub fn build_furigana(paths: &Paths) -> Result<Furigana> {
     Ok(furigana_builder(paths).build()?)
 }
 
+/// `--exclude-dict` の指定を builder に載せる
+pub fn apply_dict_excludes(mut b: FuriganaBuilder, excludes: &[String]) -> FuriganaBuilder {
+    for e in excludes {
+        b = b.exclude_dict_path(e.clone());
+    }
+    b
+}
+
 /// [`build_furigana`] の builder 版 — 呼び出し側が追加オプション
 /// (例: `estimate_accent`) を載せてから build したい場合に使う。
 pub fn furigana_builder(paths: &Paths) -> FuriganaBuilder {

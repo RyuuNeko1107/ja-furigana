@@ -443,11 +443,50 @@ fn walk_toml_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 ///
 /// `from` は `path.display()` 文字列 (= parse error メッセージ用)。 `dir` 不在時の
 /// 挙動 (エラー / default) は caller が事前に判断する前提で、 本関数は walk のみ行う。
-pub(crate) fn for_each_toml_in_dir<F>(dir: &Path, mut visit: F) -> Result<()>
+pub(crate) fn for_each_toml_in_dir<F>(dir: &Path, visit: F) -> Result<()>
+where
+    F: FnMut(&str, &str, Option<&str>) -> Result<()>,
+{
+    for_each_toml_in_dir_excluding(dir, &[], visit)
+}
+
+/// `dir` からの相対 path が `excludes` のどれかに当たるか。
+///
+/// pattern は `/` 区切りの相対 path で、 dir (`works` / `works/vtuber`) なら配下全部、
+/// file (`jukugo/society/mahjong.toml`、 `.toml` は省略可) ならその file だけ。
+pub(crate) fn is_excluded(dir: &Path, path: &Path, excludes: &[String]) -> bool {
+    if excludes.is_empty() {
+        return false;
+    }
+    let Ok(rel) = path.strip_prefix(dir) else {
+        return false;
+    };
+    let rel: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let rel = rel.join("/");
+    let stem = rel.strip_suffix(".toml").unwrap_or(&rel);
+    excludes.iter().any(|p| {
+        let p = p.trim_matches('/').replace('\\', "/");
+        let p = p.strip_suffix(".toml").unwrap_or(&p);
+        !p.is_empty() && (stem == p || rel.strip_prefix(p).is_some_and(|r| r.starts_with('/')))
+    })
+}
+
+/// [`for_each_toml_in_dir`] の除外付き版 ([`is_excluded`] に当たる file は読まない)
+pub(crate) fn for_each_toml_in_dir_excluding<F>(
+    dir: &Path,
+    excludes: &[String],
+    mut visit: F,
+) -> Result<()>
 where
     F: FnMut(&str, &str, Option<&str>) -> Result<()>,
 {
     for path in walk_toml_files(dir)? {
+        if is_excluded(dir, &path, excludes) {
+            continue;
+        }
         let content = std::fs::read_to_string(&path)?;
         let from = path.display().to_string();
         validate_schema_version(&content, &from)?;
@@ -693,6 +732,35 @@ mod tests {
     }
 
     // ─── schema_version validation tests ─────────────────────────────────────
+
+    #[test]
+    fn is_excluded_matches_dir_prefix_and_file_stem() {
+        let d = Path::new("core");
+        let ex = |pats: &[&str], p: &str| {
+            let pats: Vec<String> = pats.iter().map(|s| (*s).to_string()).collect();
+            is_excluded(d, &d.join(p), &pats)
+        };
+        assert!(ex(&["works"], "works/vtuber/hololive.toml"));
+        assert!(ex(&["works/vtuber"], "works/vtuber/hololive.toml"));
+        assert!(!ex(&["works/vtuber"], "works/anime/gintama.toml"));
+        // 前方一致は path 区切り単位 (works2 は works に当たらない)
+        assert!(!ex(&["works"], "works2/a.toml"));
+        // file 指定 (.toml 省略可 / 前後の / と \ 区切りも可)
+        assert!(ex(
+            &["jukugo/society/mahjong"],
+            "jukugo/society/mahjong.toml"
+        ));
+        assert!(ex(
+            &[r"/jukugo\society\mahjong.toml/"],
+            "jukugo/society/mahjong.toml"
+        ));
+        assert!(!ex(
+            &["jukugo/society/mahjong"],
+            "jukugo/society/mahjong_extra.toml"
+        ));
+        assert!(!ex(&[], "works/a.toml"));
+        assert!(!ex(&[""], "works/a.toml"));
+    }
 
     #[test]
     fn parse_meta_reads_only_meta_section() {

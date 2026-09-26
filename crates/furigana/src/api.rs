@@ -415,6 +415,8 @@ pub struct FuriganaBuilder {
     overrides_files: Vec<PathBuf>,
     extra_entries: Vec<(String, String)>,
     estimate_accent: bool,
+    /// 読まない dict path (dict dir からの相対、 `exclude_dict_path`)
+    dict_excludes: Vec<String>,
     /// アクセント専用の表を読まない (`accent_lexicon(false)`)。 Default を false = 読む にするため否定形で持つ
     no_accent_lexicon: bool,
     cost_engine: bool,
@@ -476,6 +478,30 @@ impl FuriganaBuilder {
         self
     }
 
+    /// core / user dict dir のうち、 この相対 path 配下 (または この file) を読まない。
+    ///
+    /// 用途に合わない分野の辞書を外すためのもの。 pattern は各 dict dir からの相対 path を `/` 区切りで書き、
+    /// dir なら配下全部、 file なら 1 file (`.toml` は省略可)。 何度でも呼べる (全部外す)。
+    ///
+    /// ```no_run
+    /// # use furigana::Furigana;
+    /// // ニュース読み上げ: 作品・VTuber 名と麻雀用語を外す
+    /// let f = Furigana::builder()
+    ///     .core_dict_dir("furigana-dict/core")
+    ///     .exclude_dict_path("works")
+    ///     .exclude_dict_path("jukugo/society/mahjong")
+    ///     .build()?;
+    /// # Ok::<(), furigana::FuriganaError>(())
+    /// ```
+    ///
+    /// 読み (jukugo / kanji / unihan / works) / 外来語 / 異体字 / アクセント表の全部に効く。
+    /// rules_dir と overrides file には効かない。
+    #[must_use]
+    pub fn exclude_dict_path(mut self, path: impl Into<String>) -> Self {
+        self.dict_excludes.push(path.into());
+        self
+    }
+
     /// dict のアクセント専用の表 (`role = "accent"`) を使うか (default: on)。
     ///
     /// on の時、 dict bracket notation を持たない token に、 表記 + 読みが一致する表の accent を付ける
@@ -519,18 +545,18 @@ impl FuriganaBuilder {
         // 一切読まれず 髙→高 / 﨑→崎 が無効化される (構造的 trap)。 ここで core / user dict
         // 配下の `role = "compat"` も拾って rules.compat に補完する (rules_dir 由来を優先)。
         for d in &self.core_dict_dirs {
-            load_compat_into(&mut rules.compat, d)?;
+            load_compat_into(&mut rules.compat, d, &self.dict_excludes)?;
         }
         for d in &self.user_dict_dirs {
-            load_compat_into(&mut rules.compat, d)?;
+            load_compat_into(&mut rules.compat, d, &self.dict_excludes)?;
         }
 
         let mut dict = Dict::new();
         for d in &self.core_dict_dirs {
-            dict.merge(Dict::from_toml_dir(d)?);
+            dict.merge(Dict::from_toml_dir_excluding(d, &self.dict_excludes)?);
         }
         for d in &self.user_dict_dirs {
-            dict.merge(Dict::from_toml_dir(d)?);
+            dict.merge(Dict::from_toml_dir_excluding(d, &self.dict_excludes)?);
         }
         for f in &self.overrides_files {
             dict.merge(Dict::from_toml_file(f)?);
@@ -548,16 +574,16 @@ impl FuriganaBuilder {
         // に渡して band 1000 dict hit を実現する。
         let mut loanwords_map: HashMap<String, String> = HashMap::new();
         for d in &self.core_dict_dirs {
-            load_loanwords_into(&mut loanwords_map, d)?;
+            load_loanwords_into(&mut loanwords_map, d, &self.dict_excludes)?;
         }
         for d in &self.user_dict_dirs {
-            load_loanwords_into(&mut loanwords_map, d)?;
+            load_loanwords_into(&mut loanwords_map, d, &self.dict_excludes)?;
         }
         // アクセント専用の表 (role = "accent")。 core → user の順 (同じ表記 + 読みは先勝ち)
         let mut accent_lexicon = crate::scoring::accent_lexicon::AccentLexicon::default();
         if !self.no_accent_lexicon {
             for d in self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()) {
-                accent_lexicon.load_dir(d)?;
+                accent_lexicon.load_dir(d, &self.dict_excludes)?;
             }
         }
 
@@ -581,11 +607,11 @@ impl FuriganaBuilder {
 ///
 /// 既に `out` に存在する key (= rules_dir 由来) は上書きしない (rules_dir 優先)。
 /// 複数 dir / file に同 variant があれば最初に読んだ方を残す。
-fn load_compat_into(out: &mut CompatData, dir: &Path) -> Result<()> {
+fn load_compat_into(out: &mut CompatData, dir: &Path, excludes: &[String]) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
-    crate::loader::for_each_toml_in_dir(dir, |content, from, role| {
+    crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, from, role| {
         if role != Some("compat") {
             return Ok(());
         }
@@ -602,12 +628,16 @@ fn load_compat_into(out: &mut CompatData, dir: &Path) -> Result<()> {
 ///
 /// surface は [`normalize_alphabet`] で正規化 (= ASCII lowercase + 全角→半角)。
 /// 同 surface に複数 reading が現れた場合、 後勝ち (= file 名 sort 順で merge 後勝ち)。
-fn load_loanwords_into(out: &mut HashMap<String, String>, dir: &Path) -> Result<()> {
+fn load_loanwords_into(
+    out: &mut HashMap<String, String>,
+    dir: &Path,
+    excludes: &[String],
+) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
     // walk + schema 検証 + role 解決は `for_each_toml_in_dir` が共通担当。
-    crate::loader::for_each_toml_in_dir(dir, |content, from, role| {
+    crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, from, role| {
         if role != Some("loanwords") {
             return Ok(());
         }
@@ -1306,6 +1336,51 @@ mod tests {
         assert!(p.estimated);
         // 敬称そのものは推定対象外
         assert!(r.tokens[1].accent_phrases.is_empty());
+    }
+
+    #[test]
+    fn exclude_dict_path_skips_entries_under_the_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_exclude_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("works/vtuber")).unwrap();
+        std::fs::write(
+            dir.join("general.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"灰桜\" = \"ハイザクラ\"
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("works/vtuber/names.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"works\"
+
+[entries]
+\"天音\" = \"アマネ\"
+",
+        )
+        .unwrap();
+        let all = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        assert_eq!(all.to_ruby("天音"), "{天音|あまね}");
+        let ex = Furigana::builder()
+            .core_dict_dir(&dir)
+            .exclude_dict_path("works")
+            .build()
+            .unwrap();
+        assert_ne!(ex.to_ruby("天音"), "{天音|あまね}");
+        assert_eq!(ex.to_ruby("灰桜"), "{灰桜|はいざくら}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

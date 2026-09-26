@@ -75,6 +75,11 @@ pub struct Args {
     /// 読み出力には影響しない)
     #[arg(long)]
     pub no_accent_lexicon: bool,
+
+    /// dict のこの相対 path (dir なら配下全部、 file なら 1 file) を読まない。 複数回指定可。
+    /// reload 後も維持する
+    #[arg(long = "exclude-dict", value_name = "PATH")]
+    pub exclude_dict: Vec<String>,
 }
 
 pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
@@ -94,10 +99,11 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
         }
     }
 
-    let furigana_inner = super::furigana_builder(paths)
-        .estimate_accent(args.estimate_accent)
-        .accent_lexicon(!args.no_accent_lexicon)
-        .build()?;
+    let furigana_inner =
+        super::apply_dict_excludes(super::furigana_builder(paths), &args.exclude_dict)
+            .estimate_accent(args.estimate_accent)
+            .accent_lexicon(!args.no_accent_lexicon)
+            .build()?;
     // server は最初のリクエストレイテンシを下げるため、Lindera analyzer を eager init。
     // build_furigana 自体は lazy なので listen 前にここで明示的に init して
     // 起動失敗を listen 前に検知できるようにもする。
@@ -126,6 +132,7 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
         metrics: server_metrics,
         estimate_accent: args.estimate_accent,
         accent_lexicon: !args.no_accent_lexicon,
+        dict_excludes: Arc::new(args.exclude_dict.clone()),
     };
 
     let cors = build_cors(cfg);

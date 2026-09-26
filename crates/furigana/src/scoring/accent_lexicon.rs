@@ -125,11 +125,11 @@ impl AccentLexicon {
     }
 
     /// `dir` 配下の `role = "accent"` の TOML を取り込む
-    pub(crate) fn load_dir(&mut self, dir: &Path) -> crate::error::Result<()> {
+    pub(crate) fn load_dir(&mut self, dir: &Path, excludes: &[String]) -> crate::error::Result<()> {
         if !dir.exists() {
             return Ok(());
         }
-        crate::loader::for_each_toml_in_dir(dir, |content, _from, role| {
+        crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, _from, role| {
             if role == Some("accent") {
                 self.load_str(content);
             }
