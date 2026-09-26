@@ -79,11 +79,42 @@ struct MetaTag {
 /// は受け付けない、 [`validate_schema_version`] で明確 error reject。
 pub const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["2"];
 
+/// `[meta]` table だけを切り出す (`[meta]` 行から次の table 見出しの手前まで)。 見つからなければ None。
+///
+/// role / schema_version の判定のたびに file 全体を TOML 解析すると、 10 万件規模の表 (アクセント表 等) で
+/// 起動が遅くなる (loader が 1 file を役割判定のために複数回読む)。 `[meta]` は file 先頭に置く規約なので
+/// その部分だけ解析する。 切り出せない / 解析できない file は従来通り全体を解析する (2026-09-27)
+fn meta_section(content: &str) -> Option<&str> {
+    let mut begin = None;
+    let mut off = 0usize;
+    for l in content.split_inclusive('\n') {
+        let t = l.trim();
+        match begin {
+            None if t == "[meta]" => begin = Some(off),
+            Some(b) if t.starts_with('[') => return Some(&content[b..off]),
+            _ => {}
+        }
+        off += l.len();
+    }
+    begin.map(|b| &content[b..])
+}
+
+/// `[meta]` を解析する (切り出した部分 → 失敗なら file 全体)。
+fn parse_meta(content: &str) -> Option<MetaWrapper> {
+    if let Some(sec) = meta_section(content) {
+        if let Ok(w) = toml::from_str::<MetaWrapper>(sec) {
+            if w.meta.is_some() {
+                return Some(w);
+            }
+        }
+    }
+    toml::from_str::<MetaWrapper>(content).ok()
+}
+
 /// TOML 内の `[meta] role` を返す (無ければ None)。 失敗は None 扱い。
 #[must_use]
 pub fn parse_meta_role(content: &str) -> Option<String> {
-    toml::from_str::<MetaWrapper>(content)
-        .ok()
+    parse_meta(content)
         .and_then(|w| w.meta)
         .and_then(|m| m.role)
 }
@@ -91,8 +122,7 @@ pub fn parse_meta_role(content: &str) -> Option<String> {
 /// TOML 内の `[meta] schema_version` を返す (無ければ None)。 失敗は None 扱い。
 #[must_use]
 pub fn parse_meta_schema_version(content: &str) -> Option<String> {
-    toml::from_str::<MetaWrapper>(content)
-        .ok()
+    parse_meta(content)
         .and_then(|w| w.meta)
         .and_then(|m| m.schema_version)
 }
@@ -119,7 +149,7 @@ pub fn validate_schema_version(content: &str, file: &str) -> Result<()> {
     // TOML 構文 invalid なら silent pass (= 後段 parser が proper な Toml error を出す責務)。
     // この early-return が無いと 「壊れた TOML」 が "missing schema_version" Validation
     // error として扱われ、 caller の error UX が劣化する (parse error の方が診断的に有用)。
-    let Ok(wrapper) = toml::from_str::<MetaWrapper>(content) else {
+    let Some(wrapper) = parse_meta(content) else {
         return Ok(());
     };
     let version = wrapper.meta.and_then(|m| m.schema_version);
@@ -663,6 +693,28 @@ mod tests {
     }
 
     // ─── schema_version validation tests ─────────────────────────────────────
+
+    #[test]
+    fn parse_meta_reads_only_meta_section() {
+        // [meta] の後ろが TOML として壊れていても role / schema は読める (= 全体を解析しない)
+        let content = "# c
+[meta]
+schema_version = \"2\"
+role = \"accent\"
+
+[entries]
+\"a\" = = broken
+";
+        assert_eq!(parse_meta_role(content).as_deref(), Some("accent"));
+        assert_eq!(parse_meta_schema_version(content).as_deref(), Some("2"));
+        // [meta] が末尾にあっても読める
+        let tail = "[entries]
+\"a\" = \"b\"
+[meta]
+role = \"reading\"
+";
+        assert_eq!(parse_meta_role(tail).as_deref(), Some("reading"));
+    }
 
     #[test]
     fn parse_meta_schema_version_returns_value_when_present() {

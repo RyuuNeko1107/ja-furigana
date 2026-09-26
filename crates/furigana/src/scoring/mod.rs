@@ -34,6 +34,7 @@
 //! 詳細: `docs/PROPOSALS/scoring-engine.md` §5.6
 
 pub mod accent_estimate;
+pub(crate) mod accent_lexicon;
 pub mod analyze;
 pub mod boundary;
 pub mod bracket;

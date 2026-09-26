@@ -49,6 +49,8 @@ pub struct Furigana {
     /// value はカタカナ reading。
     /// [`AlphabetPassthroughProvider`] に渡して band 1000 で hit させる。
     loanwords: Arc<HashMap<String, String>>,
+    /// アクセント専用の表 (dict の `role = "accent"`)。 bracket の無い token に 表記 + 読み一致で accent を付ける
+    accent_lexicon: crate::scoring::accent_lexicon::AccentLexicon,
     /// rule-based accent 推定の opt-in flag (ADR-0007、 default false)。
     ///
     /// true のとき dict bracket を持たない token に外来語 -3 rule / 人名 rule で
@@ -122,6 +124,7 @@ impl Furigana {
             &self.dict,
             &self.number_provider,
             &self.loanwords,
+            &self.accent_lexicon,
             self.analyzer(),
             self.estimate_accent,
             self.cost_engine,
@@ -536,6 +539,11 @@ impl FuriganaBuilder {
         for d in &self.user_dict_dirs {
             load_loanwords_into(&mut loanwords_map, d)?;
         }
+        // アクセント専用の表 (role = "accent")。 core → user の順 (同じ表記 + 読みは先勝ち)
+        let mut accent_lexicon = crate::scoring::accent_lexicon::AccentLexicon::default();
+        for d in self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()) {
+            accent_lexicon.load_dir(d)?;
+        }
 
         Ok(Furigana {
             analyzer: OnceLock::new(),
@@ -543,6 +551,7 @@ impl FuriganaBuilder {
             dict,
             number_provider,
             loanwords: Arc::new(loanwords_map),
+            accent_lexicon,
             estimate_accent: self.estimate_accent,
             // 実験中の cost lattice engine (ADR-0011)。 環境変数で切り替えて A/B する。
             cost_engine: self.cost_engine

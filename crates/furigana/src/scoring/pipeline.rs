@@ -46,6 +46,8 @@ pub struct Pipeline<'a> {
     dict: &'a Dict,
     number_provider: &'a NumberCandidateProvider,
     loanwords: &'a Arc<HashMap<String, String>>,
+    /// アクセント専用の表 (role = "accent")。 post-pass の後、 rule 推定の前に当てる
+    accent_lexicon: &'a crate::scoring::accent_lexicon::AccentLexicon,
     analyzer: &'a Analyzer,
     /// コスト lattice engine (ADR-0011) の opt-in flag。
     cost_engine: bool,
@@ -60,6 +62,7 @@ impl<'a> Pipeline<'a> {
         dict: &'a Dict,
         number_provider: &'a NumberCandidateProvider,
         loanwords: &'a Arc<HashMap<String, String>>,
+        accent_lexicon: &'a crate::scoring::accent_lexicon::AccentLexicon,
         analyzer: &'a Analyzer,
         estimate_accent: bool,
         cost_engine: bool,
@@ -68,6 +71,7 @@ impl<'a> Pipeline<'a> {
             dict,
             number_provider,
             loanwords,
+            accent_lexicon,
             analyzer,
             estimate_accent,
             cost_engine,
@@ -82,6 +86,7 @@ impl<'a> Pipeline<'a> {
     pub fn tokens(&self, input: &str) -> Vec<Token> {
         let mut tokens = self.with_providers(input, run_analyze_tokens);
         postpass::apply_all(&mut tokens, self.dict, self.analyzer);
+        self.accent_lexicon.fill(&mut tokens);
         if self.estimate_accent {
             accent_estimate::estimate(&mut tokens, self.analyzer);
         }
@@ -96,6 +101,7 @@ impl<'a> Pipeline<'a> {
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
         let mut result = self.with_providers(input, run_analyze);
         postpass::apply_all(&mut result.tokens, self.dict, self.analyzer);
+        self.accent_lexicon.fill(&mut result.tokens);
         if self.estimate_accent {
             accent_estimate::estimate(&mut result.tokens, self.analyzer);
         }
