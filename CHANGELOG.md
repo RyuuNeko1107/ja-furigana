@@ -12,7 +12,8 @@
   **表記 + 読みが両方一致する時だけ** 表の accent を付ける (読み・区切りは不変、 実行時は二分探索で引くだけ = 決定的)。
   適用順は dict bracket (真値) → この表 → rule 推定 (`estimate_accent`、 opt-in)。 表は dict repo が UniDic の aType から
   offline 生成する `core/accent/unidic.toml` (約 11 万件)。 API ログの内容語で accent の付く割合が
-  辞書 4.9% → 54.7% (付かない語 78.4% → 29.4%)。 常駐メモリは約 +7 MB
+  辞書 4.9% → 54.7% (付かない語 78.4% → 29.4%)。 常駐メモリは約 +7 MB。
+  既定 on、 `FuriganaBuilder::accent_lexicon(false)` / CLI `--no-accent-lexicon` (lookup / serve) で読まない
 - 辞書 file の `[meta]` 判定 (role / schema_version) は `[meta]` の部分だけを解析する。 従来は 1 file を
   role 判定のたびに全体解析しており、 大きい表があると起動が遅かった (切り出せない file は従来通り全体を解析)
 

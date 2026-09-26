@@ -47,6 +47,8 @@ pub(super) struct AppState {
     /// rule-based accent 推定 (ADR-0007) の opt-in。 起動 flag `--estimate-accent` 由来、
     /// reload / auto-update での Furigana 再構築時にも維持する。
     pub(super) estimate_accent: bool,
+    /// アクセント専用の表を使うか。 起動 flag `--no-accent-lexicon` 由来、 reload 時にも維持する
+    pub(super) accent_lexicon: bool,
 }
 
 /// `/furigana` のクエリ / body パラメータ

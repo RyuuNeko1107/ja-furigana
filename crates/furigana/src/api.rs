@@ -415,6 +415,8 @@ pub struct FuriganaBuilder {
     overrides_files: Vec<PathBuf>,
     extra_entries: Vec<(String, String)>,
     estimate_accent: bool,
+    /// アクセント専用の表を読まない (`accent_lexicon(false)`)。 Default を false = 読む にするため否定形で持つ
+    no_accent_lexicon: bool,
     cost_engine: bool,
 }
 
@@ -471,6 +473,18 @@ impl FuriganaBuilder {
     #[must_use]
     pub fn estimate_accent(mut self, enabled: bool) -> Self {
         self.estimate_accent = enabled;
+        self
+    }
+
+    /// dict のアクセント専用の表 (`role = "accent"`) を使うか (default: on)。
+    ///
+    /// on の時、 dict bracket notation を持たない token に、 表記 + 読みが一致する表の accent を付ける
+    /// (適用順は dict bracket → この表 → [`Self::estimate_accent`] の推定)。 表は数万件規模なので、
+    /// accent を使わない (読みだけ欲しい) 用途は off にすると読み込み時間と常駐メモリを節約できる。
+    /// 読み出力には影響しない。
+    #[must_use]
+    pub fn accent_lexicon(mut self, enabled: bool) -> Self {
+        self.no_accent_lexicon = !enabled;
         self
     }
 
@@ -541,8 +555,10 @@ impl FuriganaBuilder {
         }
         // アクセント専用の表 (role = "accent")。 core → user の順 (同じ表記 + 読みは先勝ち)
         let mut accent_lexicon = crate::scoring::accent_lexicon::AccentLexicon::default();
-        for d in self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()) {
-            accent_lexicon.load_dir(d)?;
+        if !self.no_accent_lexicon {
+            for d in self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()) {
+                accent_lexicon.load_dir(d)?;
+            }
         }
 
         Ok(Furigana {
@@ -1290,6 +1306,56 @@ mod tests {
         assert!(p.estimated);
         // 敬称そのものは推定対象外
         assert!(r.tokens[1].accent_phrases.is_empty());
+    }
+
+    #[test]
+    fn accent_lexicon_on_by_default_and_can_be_disabled() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_accent_lexicon_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("accent")).unwrap();
+        std::fs::write(
+            dir.join("entries.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"天気\" = \"テンキ\"
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("accent/table.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"accent\"
+
+[entries]
+\"天気\" = \"[テ]ンキ\"
+",
+        )
+        .unwrap();
+        let on = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        let t = &on.to_accent("天気").tokens[0];
+        assert_eq!(t.surface, "天気");
+        assert_eq!(t.accent_phrases[0].accent, Some(1));
+        assert!(!t.accent_phrases[0].estimated);
+
+        let off = Furigana::builder()
+            .core_dict_dir(&dir)
+            .accent_lexicon(false)
+            .build()
+            .unwrap();
+        assert!(off.to_accent("天気").tokens[0].accent_phrases.is_empty());
+        // 読みは表の有無で変わらない
+        assert_eq!(on.to_ruby("天気"), off.to_ruby("天気"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

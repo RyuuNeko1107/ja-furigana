@@ -70,6 +70,11 @@ pub struct Args {
     /// (推定 phrase は `"estimated": true` で真値と区別)。 読み出力には影響しない。
     #[arg(long)]
     pub estimate_accent: bool,
+
+    /// dict のアクセント専用の表 (role = "accent") を読まない (読み込み時間と常駐メモリの節約。
+    /// 読み出力には影響しない)
+    #[arg(long)]
+    pub no_accent_lexicon: bool,
 }
 
 pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
@@ -91,6 +96,7 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
 
     let furigana_inner = super::furigana_builder(paths)
         .estimate_accent(args.estimate_accent)
+        .accent_lexicon(!args.no_accent_lexicon)
         .build()?;
     // server は最初のリクエストレイテンシを下げるため、Lindera analyzer を eager init。
     // build_furigana 自体は lazy なので listen 前にここで明示的に init して
@@ -119,6 +125,7 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
         paths: Arc::new(paths.clone()),
         metrics: server_metrics,
         estimate_accent: args.estimate_accent,
+        accent_lexicon: !args.no_accent_lexicon,
     };
 
     let cors = build_cors(cfg);

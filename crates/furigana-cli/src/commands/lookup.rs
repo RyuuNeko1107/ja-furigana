@@ -70,6 +70,10 @@ pub struct Args {
     /// (ADR-0007。 推定 phrase は `"estimated": true` で真値と区別される)
     #[arg(long)]
     estimate_accent: bool,
+
+    /// accent/analyze: dict のアクセント専用の表 (role = "accent") を読まない
+    #[arg(long)]
+    no_accent_lexicon: bool,
 }
 
 /// 実行
@@ -96,10 +100,13 @@ pub fn run(args: &Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         for core in &args.core_dict_dir {
             b = b.core_dict_dir(core);
         }
-        b.estimate_accent(args.estimate_accent).build()?
+        b.estimate_accent(args.estimate_accent)
+            .accent_lexicon(!args.no_accent_lexicon)
+            .build()?
     } else {
         super::furigana_builder(paths)
             .estimate_accent(args.estimate_accent)
+            .accent_lexicon(!args.no_accent_lexicon)
             .build()?
     };
 

@@ -103,10 +103,12 @@ pub(super) async fn do_reload(state: &AppState, source: ReloadSource) -> Result<
     let old_size = state.furigana.read().await.dict_size();
     let paths = state.paths.clone();
     let estimate_accent = state.estimate_accent;
+    let accent_lexicon = state.accent_lexicon;
     let new = tokio::task::spawn_blocking(move || -> Result<furigana::Furigana, String> {
         // 起動 flag (estimate_accent) を reload 後も維持する
         let f = crate::commands::furigana_builder(&paths)
             .estimate_accent(estimate_accent)
+            .accent_lexicon(accent_lexicon)
             .build()
             .map_err(|e| format!("build_furigana failed: {e}"))?;
         // reload 直後の最初の request が同期 analyzer init コストを払わない /
