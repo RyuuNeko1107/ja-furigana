@@ -218,6 +218,18 @@ fn date_md_normalizes_kansuji() {
     assert_eq!(c.reading, "ロクガツツイタチ");
 }
 
+#[test]
+fn date_kansuji_consecutive_digits_are_positional() {
+    // 法令・判例の 「一二月一日」 (12 月) / 「三月二三日」 (23 日)。 日付の欄に概数 (二三 = 2〜3) は来ない
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("一二月一日"), 0);
+    let c = find(&cands, "一二月一日").expect("date MD positional month");
+    assert_eq!(c.reading, "ジュウニガツツイタチ");
+    let cands = p.candidates_vec(&ctx("三月二三日"), 0);
+    let c = find(&cands, "三月二三日").expect("date MD positional day");
+    assert_eq!(c.reading, "サンガツニジュウサンニチ");
+}
+
 // ─── 日付 ────────────────────────────────────────────────────────────────
 
 #[test]

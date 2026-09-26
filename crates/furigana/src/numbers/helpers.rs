@@ -24,6 +24,29 @@ pub(crate) fn norm_num(s: &str) -> String {
     zen2han(s).replace(',', "")
 }
 
+/// 日付 (「N年N月N日」 / 「N月N日」) の中の漢数字用。 単位も 〇 も無い桁の列は **常に** positional で解く。
+///
+/// [`kansuji_to_arabic`] は 「二三日 / 四五人」 のような連続 2 桁を概数 (2〜3) として末尾桁だけにするが、
+/// 日付の月・日の欄に概数は来ない。 法令・判例の 「平成二年一二月一日」 (12 月) / 「三月二三日」 (23 日) が
+/// にがつ / みっか になっていた (2026-09-27)。
+pub(crate) fn kansuji_to_arabic_date(s: &str) -> Option<String> {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() >= 2
+        && chars
+            .iter()
+            .all(|&c| digit_of_kansuji(c).is_some_and(|d| (1..=9).contains(&d)))
+    {
+        return Some(
+            chars
+                .iter()
+                .filter_map(|&c| digit_of_kansuji(c))
+                .map(|d| char::from(b'0' + d))
+                .collect(),
+        );
+    }
+    kansuji_to_arabic(s)
+}
+
 /// 漢数字 (一〜九、十百千万億 の additive 表記) を Arabic 数字文字列に変換する。
 ///
 /// 例: 「三百」=300、「二十一」=21、「千二百三十四」=1234、「一万」=10000。
@@ -233,6 +256,20 @@ mod tests {
         assert_eq!(kansuji_to_arabic("四五").as_deref(), Some("5"));
         // 単位付きは従来通り
         assert_eq!(kansuji_to_arabic("六十九").as_deref(), Some("69"));
+    }
+
+    #[test]
+    fn kansuji_to_arabic_date_is_always_positional() {
+        // 日付の欄では連続 2 桁も位取り (一二月 = 12 月 / 二三日 = 23 日)
+        assert_eq!(kansuji_to_arabic_date("一二").as_deref(), Some("12"));
+        assert_eq!(kansuji_to_arabic_date("二三").as_deref(), Some("23"));
+        assert_eq!(kansuji_to_arabic_date("一一").as_deref(), Some("11"));
+        // 単位付き・〇 付き・1 桁は通常の変換と同じ
+        assert_eq!(kansuji_to_arabic_date("十二").as_deref(), Some("12"));
+        assert_eq!(kansuji_to_arabic_date("三〇").as_deref(), Some("30"));
+        assert_eq!(kansuji_to_arabic_date("一").as_deref(), Some("1"));
+        // 通常の変換は概数の扱いのまま
+        assert_eq!(kansuji_to_arabic("二三").as_deref(), Some("3"));
     }
 
     #[test]

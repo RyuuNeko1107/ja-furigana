@@ -52,8 +52,8 @@ mod patterns;
 mod tests;
 
 use crate::numbers::{
-    euphonic_counter_read, kansuji_to_arabic, number_to_katakana, scale_reading, si_unit_reading,
-    symbol_char_reading,
+    euphonic_counter_read, kansuji_to_arabic, kansuji_to_arabic_date, number_to_katakana,
+    scale_reading, si_unit_reading, symbol_char_reading,
 };
 use crate::rules::{CountersData, DaysData, RulesData, ScalesData, SymbolsData, UnitsData};
 use crate::scoring::candidate::{
@@ -222,7 +222,7 @@ impl NumberCandidateProvider {
 
     /// 数値 + 助数詞 を読みに変換 (= 日付内、 「N日」 が days.toml 特殊読みを採用)。
     fn read_counter_in_date(&self, raw_num: &str, counter: &str) -> String {
-        let normalized = kansuji_to_arabic(raw_num).unwrap_or_else(|| raw_num.to_string());
+        let normalized = kansuji_to_arabic_date(raw_num).unwrap_or_else(|| raw_num.to_string());
         let nk = number_to_katakana(&normalized);
         euphonic_counter_read(&nk, counter, &normalized, &self.counters, &self.days)
     }

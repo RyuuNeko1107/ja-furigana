@@ -26,4 +26,4 @@ pub use digit::number_to_katakana;
 pub use extras::{scale_reading, si_unit_reading, symbol_char_reading};
 
 // scoring/numbers.rs から使う internal helper を再 export
-pub(crate) use helpers::kansuji_to_arabic;
+pub(crate) use helpers::{kansuji_to_arabic, kansuji_to_arabic_date};
