@@ -46,13 +46,21 @@ pub(super) static DATE_KANJI_MD_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(&pat).expect("scoring DATE_KANJI_MD regex build failed")
 });
 
+/// 分数 「N分のM」 (間の半角空白は任意: Qiita 等の 「33 分の 10」 / 「14 分の 1」)。 2026-09-27
+/// 空白が入ると 「33 分」 が助数詞 (ふん) と区切られず 分の = ふんの になっていた。
+pub(super) static FRACTION_RE: Lazy<Regex> = Lazy::new(|| {
+    let pat = format!(r"({NUM_PAT}) ?分の ?({NUM_PAT})");
+    Regex::new(&pat).expect("scoring FRACTION regex build failed")
+});
+
 pub(super) static DIGIT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
 
 // ─── 動的 regex builders (data 依存) ─────────────────────────────────────────
 
 /// 助数詞 list から 2 本の regex を構築:
-/// - **arabic**: `(NUM)(base)(recursive)?` (= 算用 / 全角数字 + 助数詞、 recursive 任意)
+/// - **arabic**: `(NUM)( )?(base)(recursive)?` (= 算用 / 全角数字 + 助数詞、 recursive 任意。
+///   数字と助数詞の間の半角空白 1 つを許す = 「5 分」 「3 人」、 2026-09-27)
 /// - **kanji_recursive**: `(KANJI_NUM)(base)(recursive)` (= 漢数字 + 助数詞 + 「目」、 recursive **必須**)
 ///
 /// recursive-mode の助数詞 (= 「目」) は base alternation に混ぜず trailing group にする。
@@ -92,7 +100,7 @@ pub(super) fn build_counter_regexes(counters: &CountersData) -> (Option<Regex>, 
     // recursive group は optional 化し、 bare match (recursive 無し) の採否は matcher 側で
     // `kanji_numeral` フラグにより gate する (= 「一日中」 の 「一日」 等の誤 counter 化を防ぐ)。
     if recursive.is_empty() {
-        let arabic = Regex::new(&format!(r"({NUM_PAT})({base_joined})"))
+        let arabic = Regex::new(&format!(r"({NUM_PAT})(?: )?({base_joined})"))
             .expect("scoring counter regex build failed");
         let kanji = if kanji_optin {
             Some(
@@ -109,7 +117,7 @@ pub(super) fn build_counter_regexes(counters: &CountersData) -> (Option<Regex>, 
     let rec_alts: Vec<String> = recursive.iter().map(|s| regex::escape(s)).collect();
     let rec_joined = rec_alts.join("|");
 
-    let arabic = Regex::new(&format!(r"({NUM_PAT})({base_joined})({rec_joined})?"))
+    let arabic = Regex::new(&format!(r"({NUM_PAT})(?: )?({base_joined})({rec_joined})?"))
         .expect("scoring counter regex build failed");
     // recursive group を optional 化 (= 「一個目」 の recursive 形 + opt-in 助数詞の bare 形 両対応)。
     let kanji = Regex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})({rec_joined})?"))

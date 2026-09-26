@@ -230,6 +230,34 @@ fn date_kansuji_consecutive_digits_are_positional() {
     assert_eq!(c.reading, "サンガツニジュウサンニチ");
 }
 
+#[test]
+fn fraction_with_optional_spaces() {
+    // 分数は 分 = ブン (助数詞 分 = フン と区別)。 Qiita 等の 「33 分の 10」 のような空白入りも 1 候補にする
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("33 分の 10 という"), 0);
+    let c = find(&cands, "33 分の 10").expect("spaced fraction");
+    assert_eq!(c.reading, "サンジュウサンブンノジュウ");
+    let cands = p.candidates_vec(&ctx("3分の1"), 0);
+    let c = find(&cands, "3分の1").expect("fraction");
+    assert_eq!(c.reading, "サンブンノイチ");
+}
+
+#[test]
+fn counter_allows_single_space_but_not_before_kanji_word() {
+    // 「5 分」 = ゴフン (空白 1 つを許す)。 ただし空白入りで助数詞の直後が漢字なら別の語 (15 本体 / 3 人間)
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("5 分の遅れ"), 0);
+    assert_eq!(
+        find(&cands, "5 分").expect("spaced counter").reading,
+        "ゴフン"
+    );
+    let cands = p.candidates_vec(&ctx("15 本体"), 0);
+    assert!(
+        find(&cands, "15 本").is_none(),
+        "15 本体 の 本 は助数詞にしない: {cands:?}"
+    );
+}
+
 // ─── 日付 ────────────────────────────────────────────────────────────────
 
 #[test]

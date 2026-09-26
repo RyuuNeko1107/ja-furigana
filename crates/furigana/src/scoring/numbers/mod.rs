@@ -61,7 +61,7 @@ use crate::scoring::candidate::{
 };
 use patterns::{
     at_start, build_counter_regexes, build_scale_regex, build_si_unit_regex, DATE_KANJI_FULL_RE,
-    DATE_KANJI_MD_RE, DIGIT_RE, TIME_COLON_RE, TIME_JP_FULL_RE,
+    DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE, TIME_COLON_RE, TIME_JP_FULL_RE,
 };
 use regex::Regex;
 
@@ -461,6 +461,22 @@ impl NumberCandidateProvider {
             .is_some_and(|r| r.not_before.iter().any(|p| after.starts_with(p.as_str())))
     }
 
+    /// section 5.5: 分数 「N分のM」 (間の半角空白は任意)。 「3分の1」 は従来も 分の = ぶんの だったが、
+    /// それは 「3分」 (さんぷん) の後の 「の」 に候補が無く行き止まりになる偶然だった。 明示の候補にする
+    fn try_fraction(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
+        if let Some(caps) = at_start(&FRACTION_RE, rest) {
+            let m_end = caps.get(0).unwrap().end();
+            let den = caps.get(1).unwrap().as_str();
+            let num = caps.get(2).unwrap().as_str();
+            let reading = format!(
+                "{}ブンノ{}",
+                number_to_katakana(den),
+                number_to_katakana(num)
+            );
+            out.push(self.make(input, pos, m_end, reading));
+        }
+    }
+
     /// section 6: 数値 + 単一助数詞 (+ optional 末尾再帰 「目」)。
     fn try_counter(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(re) = &self.counter_re else { return };
@@ -473,6 +489,18 @@ impl NumberCandidateProvider {
             // の strip_suffix('目') 再帰で 「ニコメ」 等を得る。
             // 助数詞の字が動詞の語幹を兼ねる時 (行 + って 等) は候補を出さない
             if caps.get(3).is_none() && self.counter_blocked(base, &rest[m_end..]) {
+                return;
+            }
+            // 数字と助数詞の間に空白を挟む書き方 (「5 分」) は、 助数詞の直後が漢字なら別の語の頭
+            // (「15 本体」 / 「3 人間」) なので助数詞にしない (2026-09-27)
+            let spaced = caps.get(1).unwrap().end() < caps.get(2).unwrap().start();
+            if spaced
+                && caps.get(3).is_none()
+                && rest[m_end..]
+                    .chars()
+                    .next()
+                    .is_some_and(crate::scoring::lindera_fallback::is_real_cjk_ideograph)
+            {
                 return;
             }
             let combined;
@@ -651,6 +679,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_time_colon(input, pos, rest, out);
         self.try_scale(input, pos, rest, out);
         self.try_si_unit(input, pos, rest, out);
+        self.try_fraction(input, pos, rest, out);
         self.try_counter(input, pos, rest, out);
         self.try_counter_kanji(input, pos, rest, out);
         self.emit_symbol(input, pos, rest, out);
