@@ -5,24 +5,33 @@ ja-furigana の中長期計画。 **完了履歴は [CHANGELOG.md](../CHANGELOG.
 
 > 戻る: [README](../README.md)
 
-## ステータス概観 (2026-07-06 更新)
+## ステータス概観 (2026-09-27 更新)
 
-**v0.2.0 stable cut 完了 (2026-07-06)**。 0.2.0 = intonation milestone:
-accent core (bracket parse + `AccentResult` + `--mode=accent`) に加え、
-opt-in の rule-based accent 推定 (ADR-0007)、 OOV 促音便 join (ADR-0008)、
-VOICEVOX adapter crate `ja-furigana-voicevox` (ADR-0001) まで含めて安定化。
-UniDic aType → bracket 注釈の offline 生成 tool は dict repo 側で完成
-(`tools/gen_accent_brackets.py`、 core/jukugo に bracket 3,122 件適用済 =
-dict v2026.07.04)。 runtime 形態素辞書は IPADIC 据え置き確定
-(2026-06-11 A/B 評価: corpus で IPADIC 100% vs UniDic 95.9%、 詳細は
-[ARCHITECTURE.md](./ARCHITECTURE.md) 設計判断メモ)。
+**最新 release は v0.5.0 (2026-09-24)**。 0.2.0 以降の主な節目 (詳細は CHANGELOG):
 
-次の主なテーマは dict 側の継続改善 (bracket notation 蓄積、 姓 suffix-match entry の
-offline 生成 tool = 「大谷さん→おおたに」 系の文脈読み切替) と、 運用で発覚した
-lib 改善の随時 sweep。
+- **0.2.0 (2026-07-06)**: intonation milestone — accent core (bracket parse + `AccentResult` +
+  `--mode=accent`)、 opt-in の rule-based accent 推定、 OOV 促音便 join、 VOICEVOX adapter crate
+  `ja-furigana-voicevox`
+- **0.3.0〜0.3.2 (2026-08-11〜09-09)**: 本家 AquesTalk adapter crate `ja-furigana-aquestalk` +
+  共有コア `furigana::accent_symbols` + `TtsOptions::silence_symbols` (顔文字/絵文字の TTS silent 化)、
+  AquesTalk の句数上限に合わせた分割 (0.3.1)、 英字語内ハイフン (Wi-Fi) 修正 (0.3.2)
+- **0.4.0 (2026-09-11)**: 文スコープ match condition `input_contains_any`
+- **0.4.1〜0.4.3 (2026-09-12〜15)**: 数値・単位・記号まわりの誤読修正、 ruby の空 group 修正、
+  `furigana lookup --batch`
+- **0.4.4 (2026-09-17)**: 性能改善 (dict bucket の先頭 2 文字区間引き等、 実文 約 1.7 倍速)
+- **0.4.5〜0.4.7 (2026-09-18〜23)**: 誤読修正 (同字連続 / 1 字一段動詞 / 接尾辞の連濁形 /
+  位取り漢数字 / 行き止まり補完)、 確保削減、 コスト lattice engine (opt-in 実験)
+- **0.5.0 (2026-09-24)**: 助数詞 `not_before` / `scale_trailing` (破壊的: `rules::CounterRule` の
+  `#[non_exhaustive]` 化)、 辞書保持の軽量化 (ピークメモリ 87 → 75 MB)
 
-SemVer で互換を守る (0.2.x patch は additive only)。 Rust toolchain は **1.89+** が必要
-(`std::fs::File::lock` 安定化要求のため、 依存 rustyline 18 経由)。
+runtime 形態素辞書は IPADIC 据え置き (2026-06-11 A/B 評価で IPADIC 100% vs UniDic 95.9%、
+詳細は [ARCHITECTURE.md](./ARCHITECTURE.md) 設計判断メモ)。 UniDic aType → bracket 注釈は
+dict repo 側の offline 生成 tool で活用。
+
+次の主なテーマは dict 側の継続改善と、 運用で発覚した lib 改善の随時 sweep。
+
+0.x のため minor version で破壊的変更がありうる (patch は互換維持)。 Rust toolchain は
+**1.89+** が必要 (`std::fs::File::lock` 安定化要求のため、 依存 rustyline 18 経由)。
 
 ## 完了済み
 
@@ -39,7 +48,7 @@ SemVer で互換を守る (0.2.x patch は additive only)。 Rust toolchain は 
 - Lindera analyzer の lazy init
 
 ### Phase 3 (~2026-05-06、 alpha.3)
-- 本番互換の **5 段階優先順位** (`context rule → jukugo → Lindera → unihan`)
+- 本番互換の **5 段階優先順位** (`context rule → jukugo → Lindera → unihan`) (履歴: alpha.15 で Smart engine に置換)
 - `Dict` の jukugo / unihan 内部分離
 - `NumberChunker` の漢数字対応 + scale+unit 連結 + counter context
 - `postprocess.toml` (Step 7 mode 別 regex 置換)
@@ -73,7 +82,7 @@ SemVer で互換を守る (0.2.x patch は additive only)。 Rust toolchain は 
 
 ## 進行中 / 候補
 
-### 0.1.0 stable に向けて
+### 0.1.0 stable に向けて (履歴: 0.1.0 は 2026-05-12 に cut 済、 以下は当時の計画と実績)
 
 #### Phase 7: Scoring Engine (candidate-based reading resolution) ★ 0.2.0
 詳細仕様: [docs/PROPOSALS/scoring-engine.md](./PROPOSALS/scoring-engine.md)
@@ -107,19 +116,19 @@ SemVer で互換を守る (0.2.x patch は additive only)。 Rust toolchain は 
 - [x] matcher vocabulary 実装 (literal / char_type のみ、 **品詞 matcher は不採用**)
 - [x] (b) 漢字連続 boundary penalty + (c) 未知語 chunk 強化 penalty
 - [x] (a) longest match (length lexicographic 比較で実現)
-- [ ] **特殊処理 (cross-cutting) 再設計実装**: 保護トークン抽出 (URL/絵文字) ✅ / **アルファベット passthrough** ✅ / 数字 + 助数詞 (band 950) / 漢数字 / 数字読み / 踊り字 「々」 自動展開 ✅ (Smart engine post-pass 連濁) / postprocess ✅ (scoring-engine 独立性 doc 明示) (= C1/C2/C4 完了、 C3 残)
+- [x] **特殊処理 (cross-cutting) 再設計実装**: 保護トークン抽出 (URL/絵文字) / アルファベット passthrough / 数字 + 助数詞 (`NumberCandidateProvider`、 band 950) / 漢数字 / 数字読み / 踊り字 「々」 自動展開 / postprocess
 - [x] **bracket notation forward compat**: 読み込み時に `[`, `]`, `/` を strip、 reading 部分のみ使用
-- [x] `Engine::Smart` (experimental flag、 default は `Engine::Strict`)、 切替は env var `JA_FURIGANA_ENGINE` のみ、 **CLI `--engine` flag は公開しない**
+- [x] ~~`Engine::Smart` / `Engine::Strict` の env var 切替~~ (obsolete: alpha.15 で Strict engine を削除し Smart engine に一本化、 切替機構も撤去)
 - [x] `Furigana::analyze()` debug API (★11 確定型: AnalyzeResult / Token / Candidate / Score)
 - [x] **CLI `--mode analyze` 追加** (analyze 出力 mode、 ★12)
 - [x] **HTTP server schema freeze**: 既存 endpoint + `mode=analyze` 時に extra field (★13)
-- [ ] 旧 format は parse error (`[meta] schema_version` 検証で v2 以上要求、 ★5) (= validator は実装済、 各 caller への wire-up = A1b は dict v2 化と coordinated 待ち)
-- [ ] Lindera 形態素分割 + reading は継続使用 (band 50 unihan injection、 品詞は使わない) (= Smart engine の lindera-unihan provider は alpha.10 段階未統合、 alpha.10〜rc1 で追加予定)
-- [x] **`tools/diff_engines` (Smart vs Strict diff) 投入** (★6、 alpha.10 同時)
-- [ ] **benchmark 整備** (criterion、 ★14、 alpha.12+)、 数値 cut 要件なし、 0.1.0-rc1 で CHANGELOG 掲載
+- [x] 旧 format は parse error (`[meta] schema_version` 検証で v2 要求、 ★5)
+- [x] Lindera 形態素分割 + reading は継続使用 (`LinderaFallbackProvider`、 band 50 / 150、 品詞 matcher は使わない)
+- [x] ~~`tools/diff_engines` (Smart vs Strict diff)~~ (obsolete: Strict engine 削除に伴い撤去)
+- [x] **benchmark 整備** (criterion、 ★14): `benches/lookup.rs` / `scaling.rs` / `lindera_share.rs`、 目標と計測手順は [PERFORMANCE.md](./PERFORMANCE.md)
 - [ ] **既存機能 freeze 確認 test** (★16): portable 配置 / REPL / SI 単位 / ホットリロード / `furigana dict pull`
-- [ ] CHANGELOG `[Unreleased]` 蓄積 → 0.1.0 cut 時 finalize (★17)
-- [ ] **MIGRATION.md 新規** (alpha 期間中蓄積、 0.1.0 cut で finalize、 ★17)
+- [x] CHANGELOG `[Unreleased]` 蓄積 → 0.1.0 cut 時 finalize (★17)
+- [x] **MIGRATION.md 新規** (★17、 repo root の [MIGRATION.md](../MIGRATION.md))
 
 **dict 側 contributor 規律 (`furigana-dict/CONTRIBUTING.md`)**
 
@@ -156,14 +165,13 @@ SemVer で互換を守る (0.2.x patch は additive only)。 Rust toolchain は 
 - **bracket notation parse 実装**、 `Token { accent_phrases }` field 追加 (additive、 `#[non_exhaustive]` で SemVer minor 互換)
 - **`--mode=accent`** 中立 JSON 出力 (= engine 非依存の accent annotation)
 - **`--mode=voicevox-aques`** AquesTalk-風記法
-- **`--mode=voicevox-query`** — VOICEVOX `/synthesis` 直叩き用 AccentPhrase[] JSON (pitch / mora pause length 込み)
-- **`tts` mode に accent 機能を追加** (削除しない、 既存 pause 整形は維持、 `include_accent` opt-in)
-- **`rules/accent/` 階層** + `rules/numbers/fractions.toml`
-- **動的 accent shift rules** — 連濁 / 動詞活用 / 複合語 deaccenting / 助数詞 拡充
+- ~~`--mode=voicevox-query` / `tts` mode の `include_accent`~~ — 不採用 (intonation.md 冒頭の注記参照)
+- ~~`rules/accent/` 階層 + `rules/numbers/fractions.toml`~~ — 0.2.0 scope から除外 (dict bracket 由来の accent に一本化)
+- **動的 accent shift rules** — 連濁 / 動詞活用 / 複合語 deaccenting / 助数詞 拡充 (未着手)
 
 詳細は [intonation.md](./PROPOSALS/intonation.md) §0 / §8 参照。
 
-##### 主要 lib 改善 sweep (= 0.1.0 運用で発覚)
+##### 主要 lib 改善 sweep (= 0.1.0 運用で発覚、 2026-08-11 に 4 項目とも消化済 = 上記進捗参照)
 
 - **`next_char_type = "ひらがな"` 雑指示の最小マッチ化 sweep** ([[kanji]] block 30+ 箇所)
   - 現状 「ひらがな全体マッチ」 で 想定外文脈で誤発火 (= 「復帰勢でも → フッキイキオデモ」 round 44 等の bug 温床)
@@ -176,24 +184,19 @@ SemVer で互換を守る (0.2.x patch は additive only)。 Rust toolchain は 
   - protect token / 顔文字 chunk を TTS 出力で **silent** にする option (= `--include-emoji-tts=false`)
 - **半角 space normalize の正式化** (= 0.1.0 では `preprocess_input()` で 全角 space に変換、 0.2.0 で path 構築 logic に proper 統合)
 
-##### corpus regression test 状態 (= 2026-06-11 時点)
+##### corpus regression
 
-`tests/corpus/` 全 file (802 expected case) が **802/802 = 100%** pass。
-測定は `furigana-corpus-check` を使う (複数 corpus file / ディレクトリ一括対応済、
-Furigana 構築 1 回で 802 case ≈ 4 秒):
+回帰 corpus は [`ja-furigana-dict`](https://github.com/RyuuNeko1107/ja-furigana-dict) の
+`tests/corpus/` (2026-09 時点で約 1.2 万 case、 release 時点で 100% pass)。
+測定は `furigana-corpus-check` を使う (複数 corpus file / ディレクトリ一括対応、
+Furigana 構築 1 回で全件):
 
 ```bash
-cargo run --release --bin furigana-corpus-check -- \
-    --rules-dir <furigana-dict/rules> --core-dict-dir <furigana-dict/core> \
-    <furigana-dict/tests/corpus>
+cargo run --release --bin furigana-corpus-check --     --rules-dir <furigana-dict/rules> --core-dict-dir <furigana-dict/core>     <furigana-dict/tests/corpus>
 ```
 
 > **注意**: dict repo の `tools/run_corpus.py` は 1 case ごとに CLI を起動するため
-> 2 桁以上遅い (802 case で ~15 分)。 ローカルの regression 測定は常に
-> `furigana-corpus-check` を使うこと。
-
-corpus 増強 (= 新規 case 追加) は 0.1.0 cut 後 TODO の 「大規模 QA corpus 増強」
-で漸進、 現状 598 case の主要パターンは全 pass。
+> 桁違いに遅い。 ローカルの regression 測定は常に `furigana-corpus-check` を使うこと。
 
 ##### 改善材料収集 (= 0.2.0 round 前準備)
 
@@ -209,10 +212,10 @@ corpus 増強 (= 新規 case 追加) は 0.1.0 cut 後 TODO の 「大規模 QA 
 
 #### 0.1.0 cut 後 TODO (= 1〜3 ヶ月運用後判断)
 
-- [ ] **大規模 QA corpus 増強** — `should_read.toml` network coverage 拡充 (= 現 242 件)
+- [x] **大規模 QA corpus 増強** — 回帰 corpus は約 1.2 万 case まで拡充済 (継続)
 - [ ] **user_dict CSV 化検討** — 同形異音語 misclassification / 複合語 boundary ずれが
       頻発するなら、 user 側 dict 拡張 API 追加
-- [ ] **rules/accent/ の中身を地道に拡充** — 接頭辞 / 接尾辞 / 各 counter
+- [ ] **accent bracket の拡充** — dict 側で接頭辞 / 接尾辞 / 各 counter の bracket を地道に蓄積
 - [ ] **NHK アクセント新辞典 出典の bulk PR** — 出典 license 確認後、 まとまった量の seed PR
 - [ ] **engine adapter の community 受付** — openjtalk / ssml / ymm4 等は community PR 待ち、
   必要なら engine config 外部 TOML 化アーキテクチャを検討
@@ -229,9 +232,9 @@ corpus 増強 (= 新規 case 追加) は 0.1.0 cut 後 TODO の 「大規模 QA 
 - alpha.19: dict-curated context rule 路線統一 (= 動詞 / 形容詞 1 字 [[kanji]] block 化) + inspect API
 - alpha.20: 形態素信頼 band-up (= `BAND_LINDERA_COMPOUND = 150`、 dict 未登録の純漢字熟語救済)
 - alpha.21: dict 改善 round 31-46 (= 動詞訓読み default 偏向 sweep 60+ 字) + 公開 API wrapper (= signal_log) + lib 半角 space bug fix + tower_governor ConnectInfo fix
-- **v0.1.0 stable cut**: 主要 corpus 99.2% / OpenJTalk 83-85% / VOICEVOX 75-77% / crates.io publish 再開 / dict v0.1.0 coordinated
+- **v0.1.0 stable cut**: 主要 corpus (当時 262 case) 99.2% / OpenJTalk 83-85% / VOICEVOX 75-77% / crates.io publish 再開 / dict v0.1.0 coordinated
 
-**今後 (0.1.x → 0.2.0)**:
+**今後 (0.1.x → 0.2.0)** (履歴: 0.2.0 は 2026-07-06 に cut 済、 以降は冒頭のステータス概観参照):
 - **0.1.x patch**: dict 漸進拡充 / corpus 増強 / bug fix (additive only)、 daily-release 自動 cut 運用
 - **0.2.0 stable**: 上記 intonation + lib 改善 sweep
 - **0.3.0+**: UniDic csj (= 現代話し言葉)、 連濁 / 動詞活用 accent shift、 lindera-neologd opt-in

@@ -13,7 +13,9 @@ crates/
 │   ├── api.rs                # Furigana 構造体 + FuriganaBuilder (公開 API のエントリ)
 │   ├── analyzer.rs           # Lindera + IPADIC のラッパ (Smart engine の fallback として使用)
 │   ├── kana.rs               # ひら⇄カタ + Unicode 正規化
-│   ├── dict.rs               # surface→reading 辞書 (jukugo ≥2 文字 / unihan 1 文字 / [[kanji]] block / Detailed Entry を多重保持)
+│   ├── char_class.rs         # 文字種 (CharType) 分類 + Unicode range 表の single home
+│   ├── accent_symbols.rs     # TTS 記号列 adapter (voicevox / aquestalk crate) の共有コア
+│   ├── dict.rs               # surface→reading 辞書 (unihan 1 文字 default / rich entry = 熟語 + Detailed Entry / [[kanji]] block)
 │   ├── sanitize.rs           # 辞書 load 経路の sanitize layer (任意コード埋め込み防御 — 制御文字 / bidi override / zero-width / 過大長 reject)
 │   ├── tts.rs                # TTS 整形 (normalize_for_tts) + segment_for_tts
 │   ├── romaji.rs             # ひらがな → ローマ字 (ヘボン式 / 訓令式)
@@ -29,7 +31,7 @@ crates/
 │   │   ├── numeric_phrases.rs #  数詞慣用語句 data (scoring/numbers の try_phrase が consume)
 │   │   ├── compat.rs         #   compat.toml (異体字)
 │   │   └── postprocess.rs    #   postprocess.toml (mode 別後処理 regex 置換)
-│   ├── numbers/              # 数値処理 (data-driven、 scoring/numbers.rs から呼ばれる)
+│   ├── numbers/              # 数値処理 (data-driven、 scoring/numbers/ から呼ばれる)
 │   │   ├── helpers.rs        #   zen2han / norm_num / sokuonize_last / kansuji_to_arabic 等
 │   │   ├── digit.rs          #   number_to_katakana
 │   │   ├── counter.rs        #   euphonic_counter_read
@@ -41,20 +43,28 @@ crates/
 │       ├── mod.rs            #   module 集約
 │       ├── pipeline.rs       #   ★Pipeline facade — provider 構成 + Viterbi + Reading Post-pass を所有する single seam
 │       ├── candidate.rs      #   Score / Candidate / CandidateProvider trait + ScoringContext + band 定数
-│       ├── engine.rs         #   PathScore (weakest_band agg) + solve_path Viterbi DP
+│       ├── engine.rs         #   PathScore (4 軸 lexicographic) + solve_path Viterbi DP (行き止まり補完込み)
+│       ├── lattice.rs        #   コスト lattice engine (opt-in 実験、 IPADIC 語/連接コスト + dict 候補)
 │       ├── boundary.rs       #   BoundaryAnalysis (b)(c) 漢字連続 penalty
 │       ├── format.rs         #   Entry / EntryDetail / MatchBlock / KanjiBlock の dict 受け入れ型
 │       ├── matcher.rs        #   MatchContext + matches_context() + classify_char() + resolve_readings
 │       ├── special.rs        #   ProtectTokenProvider (URL/Email/絵文字) + AlphabetPassthroughProvider (loanwords lookup 込)
-│       ├── dict_bridge.rs    #   DictBridgeProvider (jukugo / unihan / [[kanji]] block、 先頭 char prefix index 引き)
-│       ├── numbers/          #   NumberCandidateProvider (band 950)。 patterns.rs = regex 構築、 mod.rs = 候補種別ごとの try_* (日付 / 時刻 / scale / SI / 助数詞 / 数詞慣用語句 / 記号 / 素数字)
+│       ├── dict_bridge.rs    #   DictBridgeProvider (rich entry / unihan / [[kanji]] block、 先頭 2 文字の区間引き)
+│       ├── numbers/          #   NumberCandidateProvider (band 950)。 patterns.rs = regex 構築、 mod.rs = 候補種別ごとの try_* (日付 / 時刻 / scale / SI / 助数詞 / 分数 / 数詞慣用語句 / 記号 / 素数字)
 │       ├── odoriji.rs        #   OdorijiProvider (々 placeholder) + RendakuPass
 │       ├── contextual.rs     #   HaraSukuPass (腹+空く 2-token-back 補正)
+│       ├── names.rs          #   NameBoundaryPass (人名 + 敬称の token 衝突補正)
+│       ├── phonojoin.rs      #   SokuonJoinPass (OOV 漢字複合語の促音便 join)
+│       ├── accent_estimate.rs #  rule-based accent 推定 (opt-in estimate_accent)
 │       ├── postpass.rs       #   ReadingPostPass trait + POST_PASSES 配列 (path 確定後の token 補正 seam)
 │       ├── lindera_fallback.rs #   LinderaFallbackProvider (band 50/150 safety net + gap-passthrough)
 │       ├── bracket.rs        #   bracket notation parse → AccentPhrase (0.2.0 core)
 │       ├── analyze.rs        #   AnalyzeResult / Token + analyze() / analyze_tokens()
 │       └── inspect.rs        #   dict gap 抽出等の inspection helper (公開 re-export)
+│
+├── furigana-voicevox/        # adapter crate (ja-furigana-voicevox): AccentResult → VOICEVOX kana 記法
+├── furigana-aquestalk/       # adapter crate (ja-furigana-aquestalk): AccentResult → 本家 AquesTalk 音声記号列
+│                             #   (無声化 / pause 区別 / 長さ上限での分割、 Converter facade 付)
 │
 └── furigana-cli/             # bin crate (crates.io 名: ja-furigana-cli / バイナリ名: furigana)
     └── src/
@@ -71,8 +81,9 @@ crates/
             ├── dict_pull.rs  #   pull 実装 (GitHub Releases + SHA-256 検証 + tar 展開)
             └── serve/        # furigana serve (Axum HTTP)
                 ├── mod.rs    #   run() + Args + shutdown_signal + SIGHUP reload
-                ├── handlers.rs # /furigana / /healthz / /admin/reload + do_reload
+                ├── handlers.rs # /furigana / /healthz / /metrics / /admin/reload + do_reload
                 ├── auth.rs   #   X-API-Key / Bearer middleware (一般 + admin) + CORS
+                ├── metrics.rs #  Prometheus text format の counter / histogram (/metrics)
                 └── types.rs  #   FuriganaParams / FuriganaResponse / AppState
 ```
 
@@ -105,10 +116,15 @@ let f = Furigana::builder()
     .user_dict_dir("/path/to/data/user")  // 複数追加可
     .overrides_file("/path/to/data/overrides.toml")  // 複数追加可
     .add_entry("追加語", "ツイカゴ")      // 最優先
+    .estimate_accent(true)                // (option) to_accent で rule-based accent 推定
     .build()?;
 ```
 
-## パイプライン (alpha.15+、 Smart engine 一本化)
+accent (0.2.0+): `f.to_accent(text)` が `AccentResult` (token ごとの読み + `AccentPhrase`) を返す。
+engine 固有の記号列は adapter crate (`ja_furigana_voicevox::to_aques_kana` /
+`ja_furigana_aquestalk::to_aquestalk`) で変換する。
+
+## パイプライン (Smart engine)
 
 `Furigana::to_*` の流れ:
 
@@ -120,7 +136,7 @@ let f = Furigana::builder()
 | 1 | テキスト正規化 (NFKC + 互換マップ) | `kana::normalize_text` + `rules::compat` |
 | 2 | candidate edge 列挙 (6 provider) | `scoring::pipeline` → `scoring::analyze` (下記) |
 | 3 | Viterbi DP で path 解 | `scoring::engine::solve_path` |
-| 4 | Reading Post-pass (連濁 RendakuPass + 腹空く HaraSukuPass、 適用順は `POST_PASSES` 配列) | `scoring::postpass::apply_all` |
+| 4 | Reading Post-pass (RendakuPass → HaraSukuPass → NameBoundaryPass → SokuonJoinPass の順) | `scoring::postpass::apply_all` |
 | 5 | `AnalyzeToken` → `ReadingToken` 変換 | `Furigana::tokenize` |
 | 6 | surface 文字種で reading 表記を分岐 | `reading::output::tokens_to_hiragana` (下記) |
 | 7 | 後処理 regex 置換 (mode 別) | `rules::postprocess::PostProcessData::apply` |
@@ -134,12 +150,12 @@ let f = Furigana::builder()
 | 優先 (band) | provider | 役割 | 例 |
 |---|---|---|---|
 | 2000 | `ProtectTokenProvider` | URL / Email / 絵文字 (= 読み付けず passthrough) | `https://example.com` / `a@b.jp` / 🦀 |
-| 1000 | `DictBridgeProvider` (jukugo) | dict surface ≥2 字 | `灰桜` → `ハイザクラ` |
+| 1000 | `DictBridgeProvider` (熟語 entry) | dict surface ≥2 字 | `灰桜` → `ハイザクラ` |
 | 1000 / 100 | `AlphabetPassthroughProvider` | 英字 passthrough (lookup あり = band 1000、 無し = band 100) | `Kubernetes` |
 | 950 | `NumberCandidateProvider` | 数字 + 助数詞 / 大数 / SI / 日付 / 時刻 / 記号 / 数詞慣用語句 | `1万円` / `2025年10月30日` / `100km` / `二十歳` |
 | 100 | `DictBridgeProvider` (unihan / `[[kanji]]`) | 1 字 surface fallback + 文脈分岐 | `米` (= 次がひらがな → こめ / 漢字 → ベイ) |
 | 100 | `OdorijiProvider` | 「々」 placeholder edge (post-pass で連濁適用) | `山々` → `やまやま` |
-| 50 | `LinderaFallbackProvider` | 上記 5 が一切覆わない位置の safety net | 助詞 / okurigana / dict 未登録 単語 |
+| 150 / 50 | `LinderaFallbackProvider` | 上記 5 が一切覆わない位置の safety net (2 字以上の純漢字語は 150) | 助詞 / okurigana / dict 未登録 単語 |
 
 ### Step 3 の詳細: `PathScore` lexicographic 比較
 
@@ -149,7 +165,7 @@ band の lexicographic** で、 連続値 score の calibration 沼を回避:
 1. **`weakest_band` 大**: path 中の最低 band edge が高いほど勝ち (= 弱い edge を含まない)
 2. **`edge_count` 少**: 同 weakest_band なら edges が少ない方が勝ち (= longest match 優先)
 3. **`total_match_hits` 多**: 文脈 match 条件 hit 数で tie-break
-4. **`total_boundary_penalty` 軽** (= less negative): 漢字連続境界 penalty 軽い方が勝ち
+4. **`synthetic_edges` 少**: 行き止まり補完 edge (dict entry の直後に候補が無い時だけ形態素 layer が補う edge) が少ない方が勝ち
 
 これにより 「米国産」 (3 字 jukugo = 1 edge band 1000) は per-char fallback
 「米+国+産」 (3 edges, weakest=100) に勝つ。
@@ -198,11 +214,11 @@ client                                    server (Arc<RwLock<Arc<Furigana>>>)
 
 ## 設計判断のメモ
 
-- **decisions.md にしない**: ADR (Architecture Decision Records) は今のところ書くほどのスコープではないので、本書で軽くメモする方針
+- **ADR**: 設計判断の記録 (ADR) はメンテナーの作業 workspace 側で管理しており、本 repo には含めない。本書と CHANGELOG に要点を残す
 - **データ駆動 (TOML)**: ルール変更で再ビルド不要、PR が contributors からも入りやすい
-- **Lindera + IPADIC 固定**: `embed-ipadic` で配布物に同梱。 Smart engine 上では band 50 の fallback として動作 (= 他 provider が一切覆わない位置だけで使われる)。 NEologd は opt-in feature flag で対応する案 (Phase 3 候補、[Issue #9](https://github.com/RyuuNeko1107/ja-furigana/issues/9))。 UniDic への runtime 切替は 2026-06 の A/B 評価 (corpus 802 件で IPADIC 100% vs UniDic 95.9%、 発音形化け + 短単位分解が要因) で見送り — UniDic は 0.2.0 の aType → bracket 注釈 offline 生成にのみ使う方針
-- **discrete band lexicographic 比較**: 連続値 score の calibration 沼を回避。 band 値は 5 種類 (2000 / 1000 / 950 / 100 / 50) のみで、 各 layer の責務が明確
-- **`Dict` の多重保持**: jukugo (≥2 字 default) / unihan (1 字 default) / rich (Entry with match) / kanji (`[[kanji]]` block) を別 HashMap で保持。 Smart engine の `DictBridgeProvider` が rich / kanji を walk して `MatchCondition` 評価する
+- **Lindera + IPADIC 固定**: `embed-ipadic` で配布物に同梱。 Smart engine 上では band 50 の fallback として動作 (= 他 provider が一切覆わない位置だけで使われる)。 NEologd は opt-in feature flag で対応する案 (Phase 3 候補、[Issue #9](https://github.com/RyuuNeko1107/ja-furigana/issues/9))。 UniDic への runtime 切替は 2026-06 の A/B 評価 (当時の corpus 802 件で IPADIC 100% vs UniDic 95.9%、 発音形化け + 短単位分解が要因) で見送り — UniDic は 0.2.0 の aType → bracket 注釈 offline 生成にのみ使う方針
+- **discrete band lexicographic 比較**: 連続値 score の calibration 沼を回避。 band 値は 6 種類 (2000 / 1000 / 950 / 150 / 100 / 50) のみで、 各 layer の責務が明確
+- **`Dict` の保持**: unihan (1 字 default) / rich (全 Entry、 熟語の default 読みもここ) / kanji (`[[kanji]]` block) の 3 系統 (0.5.0 で jukugo 専用 map を廃止)。 `DictBridgeProvider` は sort 済み bucket を先頭 2 文字で区間引き (`Dict::rich_matching_prefix`) して `MatchCondition` を評価する
 - **`postprocess.toml`**: 辞書 / [[kanji]] block で表現しづらい文字列レベルの最終調整 (例: 「ジュウパー → ジュッパー」の促音化補正)。mode 別 (`hiragana` / `ruby` / `tts` / `romaji`) フィルタ + regex pattern + capture group 参照可
 - **`Dict::from_toml_dir` 全階層再帰**: `core/works/<medium>/<title>.toml` のような任意深度のサブディレクトリを許容。配布 tar.gz の展開結果を想定するため symlink ループ対策は持たない (静的データ前提)。works/ の運用ルールは [`ja-furigana-dict/core/works/README.md`](https://github.com/RyuuNeko1107/ja-furigana-dict/blob/master/core/works/README.md) (公式読みのみ採録、出典コメント必須)
 - **WASM は無し**: 一度実装したが `.wasm` が 57 MB と重いため削除。Web からは `furigana serve` (HTTP API) を推奨

@@ -37,7 +37,7 @@ ja-furigana lib が `ambiguous: true` で返す同形異音語候補を、文脈
 
 ### Phase 3: production 統合
 
-1. **furigana_api_rust**: `ambiguous: true` token を検出 → ML model に投げる → reading 上書き
+1. **下流の API wrapper**: `ambiguous: true` token を検出 → ML model に投げる → reading 上書き
 2. **fallback**: model load 失敗 / タイムアウト時は lib の weight ベース top pick を使用
 3. **signal_log**: ML 選択結果を記録、定期的に精度評価
 
@@ -66,7 +66,7 @@ lightweight classifier (char Transformer)
 ONNX frozen model
         │
         ▼
-furigana_api_rust integration
+downstream API wrapper integration
 ```
 
 ## 4. ディレクトリ構成 (プロジェクト/ml/)
@@ -122,4 +122,4 @@ ml/
 - LLM ラベリングの精度: 日本語の微妙なニュアンスで LLM が間違える可能性。人手レビュー必要。
 - 訓練データの偏り: synthetic data に偏ると自然文での精度が落ちる。stream-comments で補う。
 - 単漢字 (生/日/行) の候補数が多い: 文脈窓を広げるか、品詞ヒントが必要かも。
-- lib の deterministic 制約との整合: model は furigana_api_rust 側で使う、lib には入れない。
+- lib の deterministic 制約との整合: model は下流の API wrapper 側で使う、lib には入れない。

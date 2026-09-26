@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **日付の漢数字は連続 2 桁も位取りで読む** (平成二年一二月一日 → にねんにがつ / 三月二三日 → みっか /
+  昭和四五年 → ごねん だった)。 `kansuji_to_arabic` は 「二三日 / 四五人」 の連続 2 桁を概数として末尾桁だけに
+  するが、 日付の欄 (N年N月N日 / N月N日) に概数は来ないので、 日付の中だけ単位・〇 無しの桁列を常に位取りで
+  解く。 日付以外の漢数字変換は不変
+- **数字と助数詞の間の半角空白を許す** (「1 つ」 「10 分」 「2026 年 4 月」 が いち つ / じゅう ぶん /
+  よん つき になっていた)。 算用数字 + 助数詞に半角空白 1 つを許す。 ただし空白入りで助数詞の直後が漢字なら
+  別の語の頭 (15 本体 / 3 人間) とみなして助数詞にしない
+- **分数 N分のM を明示候補に** (空白は任意、 分の = ブンノ)。 従来の 3分の1 = ぶんの は偶然の産物で、
+  空白が入ると 33 分の 10 → ふんの / 5 分の遅れ → ぶん と崩れていた
+
 ## [0.5.0] - 2026-09-24
 
 ### Changed (破壊的)
@@ -1692,6 +1704,19 @@ ja-furigana-dict 側で `core/works/game/touhou.toml`、`core/works/anime/<title
      で yank、 alpha.1 / alpha.2 は yank 済み (rename 前 crate name)。
      ─────────────────────────────────────────────────────────────────── -->
 
+[Unreleased]: https://github.com/RyuuNeko1107/ja-furigana/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.5.0
+[0.4.7]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.7
+[0.4.6]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.6
+[0.4.5]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.5
+[0.4.4]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.4
+[0.4.3]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.3
+[0.4.2]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.2
+[0.4.1]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.1
+[0.4.0]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.0
+[0.3.2]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.3.2
+[0.3.1]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.3.1
+[0.3.0]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.3.0
 [0.2.0]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.2.0
 [0.1.0-alpha.9]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.1.0-alpha.9
 [0.1.0-alpha.8]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.1.0-alpha.8

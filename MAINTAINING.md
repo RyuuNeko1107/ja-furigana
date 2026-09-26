@@ -9,10 +9,11 @@
 
 ## Release を打つ (binary 配布 + crates.io publish)
 
-> **publish policy** (2026-05-11 更新): **0.1.0 stable まで crates.io publish は
-> 休止**。 alpha 期間中 (alpha.10〜alpha.N / 0.1.0-rc1) は **GitHub release のみ**。
-> 既 publish 済 alpha (alpha.1〜alpha.9) は yank しない (metadata 不変)。
-> 以下手順のうち **step 6 (cargo publish) は 0.1.0 stable cut まで skip**。
+> **publish policy**: 0.1.0 stable (2026-05-12) 以降は release ごとに **GitHub release +
+> crates.io publish** を行う (4 crate: `ja-furigana` / `ja-furigana-voicevox` /
+> `ja-furigana-aquestalk` / `ja-furigana-cli`)。
+> (履歴: alpha 期間中は crates.io publish を休止し GitHub release のみだった。
+> 既 publish 済 alpha (alpha.1〜alpha.9) は yank しない = metadata 不変。)
 
 ### 前提
 - master が緑 (CI / lint / license audit すべて pass)
@@ -24,32 +25,35 @@
 
 ```sh
 # 1. workspace の version を bump
-#    ルート `Cargo.toml` の [workspace.package].version
-#    例: 0.1.0-alpha.6 → 0.1.0-alpha.7
-#    `crates/furigana-cli/Cargo.toml` の依存表記
-#    (`furigana = { package = "ja-furigana", path = "../furigana", version = "=0.1.0-alpha.X" }`)
-#    も合わせて更新
+#    ルート `Cargo.toml` の [workspace.package].version (4 crate 共通)
+#    例: 0.5.0 → 0.5.1
+#    crate 間の依存は `=` で完全一致 pin しているので、 次の 3 file の依存表記も合わせて更新:
+#    - `crates/furigana-voicevox/Cargo.toml`  : furigana (ja-furigana) = "=0.5.X"
+#    - `crates/furigana-aquestalk/Cargo.toml` : furigana (ja-furigana) = "=0.5.X"
+#    - `crates/furigana-cli/Cargo.toml`       : furigana / ja-furigana-voicevox /
+#                                               ja-furigana-aquestalk = "=0.5.X"
 
 # 2. CHANGELOG.md を整理して commit
-git add CHANGELOG.md Cargo.toml crates/furigana/Cargo.toml crates/furigana-cli/Cargo.toml
-git commit -m "chore(release): bump to 0.1.0-alpha.7"
+git add CHANGELOG.md Cargo.toml Cargo.lock crates/*/Cargo.toml
+git commit -m "chore(release): 0.5.1"
 git push origin master
 
 # 3. tag を打って push
-git tag -a v0.1.0-alpha.7 -m "v0.1.0-alpha.7 - <要約>"
-git push origin v0.1.0-alpha.7
+git tag -a v0.5.1 -m "v0.5.1 - <要約>"
+git push origin v0.5.1
 
 # 4. GitHub Actions の release workflow が走る (5 platform binary + Docker)
 gh run watch --repo RyuuNeko1107/ja-furigana --workflow=release.yml
 
 # 5. 確認
-gh release view v0.1.0-alpha.7 --repo RyuuNeko1107/ja-furigana
+gh release view v0.5.1 --repo RyuuNeko1107/ja-furigana
 
-# 6. crates.io にも publish (順序重要: lib → cli)
-#    ※ 0.1.0 stable cut まで step 6 は skip (= GitHub release のみ)。
-#       alpha 期間中の crates.io publish 休止 policy に従う。
+# 6. crates.io にも publish (順序重要: 依存される側から)
+#    lib → adapter 2 本 → cli (cli は lib + 両 adapter に `=` pin で依存)
 cargo publish -p ja-furigana
 # ↑ index 反映待ちで数十秒〜数分。完了を待ってから次。
+cargo publish -p ja-furigana-voicevox
+cargo publish -p ja-furigana-aquestalk
 cargo publish -p ja-furigana-cli
 ```
 
@@ -61,8 +65,8 @@ cargo publish -p ja-furigana-cli
 release が無ければ `gh release create` で空 release を先に作る:
 
 ```sh
-gh release create v0.1.0-alpha.7 --repo RyuuNeko1107/ja-furigana \
-  --target master --title v0.1.0-alpha.7 --generate-notes
+gh release create v0.5.1 --repo RyuuNeko1107/ja-furigana \
+  --target master --title v0.5.1 --generate-notes
 gh run rerun <run-id> --repo RyuuNeko1107/ja-furigana --failed
 ```
 
@@ -71,7 +75,7 @@ GitHub の挙動で、同名 tag の delete + 再 push は push event として�
 ことがある。手動で trigger:
 
 ```sh
-gh workflow run release.yml --repo RyuuNeko1107/ja-furigana -f tag=v0.1.0-alpha.7
+gh workflow run release.yml --repo RyuuNeko1107/ja-furigana -f tag=v0.5.1
 ```
 
 #### `cargo fmt --check` で fail
@@ -133,9 +137,9 @@ token に持たせると毎回切替不要。
 ## yank する
 
 ```sh
-cargo yank --version 0.1.0-alpha.X <crate-name>
-# 例
-cargo yank --version 0.1.0-alpha.1 furigana-cli
+cargo yank --version <version> <crate-name>
+# 例 (crate 名は crates.io 上の名前 = ja- prefix 付き)
+cargo yank --version 0.5.1 ja-furigana-cli
 ```
 
 - yank しても crate name 自体は永久に自分が保持 (他人は取れない)。
@@ -151,7 +155,7 @@ cargo yank --version 0.1.0-alpha.1 furigana-cli
 
 1. `ja-furigana-dict` 側で tag を打つ → release.yml が走って tarball + sha256 公開
 2. CLI 側 (`ja-furigana-cli`) のコード変更は **不要** (latest を runtime で解決)
-3. ピン留めしている利用者向けには CLI の README で `--version v0.1.X` 例を更新
+3. ピン留めしている利用者向けには CLI の README で `--version vYYYY.MM.DD` 例を更新 (dict は CalVer tag)
 
 `dict_pull.rs` の `REPO` 定数を変える必要があるのは「組織名 / repo 名」が変わった時だけ
 (過去に `furigana-dict` → `ja-furigana-dict` rename で必要になった)。
@@ -161,7 +165,11 @@ cargo yank --version 0.1.0-alpha.1 furigana-cli
 ## CI / Pages / Dependabot
 
 ### CI (`ci.yml`)
-- `test` (3 OS) / `lint` (fmt + clippy) / `license` (cargo-about で copyleft 検知)
+- `test` (ubuntu + windows。 macOS は週次 schedule の `test-macos` のみ) / `lint` (fmt + clippy) /
+  `license` (cargo-about で copyleft 検知 + NOTICE.md drift) / `audit` (cargo-audit) /
+  `corpus` (ja-furigana-dict の回帰 corpus + inline `[[test]]`) / `diff-coverage`
+  (変更行 coverage 80% gate) / `mutation-diff` (PR の変更行だけ cargo-mutants)
+- `nightly.yml`: full mutation (8 shard 並列) + flaky 検出
 - 失敗を放置せず必ず fix。fmt 違反は再 commit、clippy 違反は対応。
 - license job が `about.toml` 未許可の license を検知したら、依存追加時に
   `accepted` リストに追加するか、依存を別物に切替える判断。

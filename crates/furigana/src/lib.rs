@@ -54,19 +54,20 @@
 //!
 //! - [`analyzer`] : 形態素解析 (Lindera + IPADIC、 Smart engine fallback として使用)
 //! - [`kana`]     : ひら⇄カタ + Unicode 正規化 (文字種判定は内部 `char_class` module に集約)
-//! - [`numbers`]  : 数値処理 (digit / counter / extras / `kansuji_to_arabic`)
+//! - [`numbers`]  : 数値処理 (digit / counter / extras / 漢数字 → 算用数字)
 //! - [`reading`]  : 出力 layer (= [`ReadingToken`] + tokens_to_hiragana / tokens_to_ruby)
 //! - [`tts`]      : TTS 整形 + segment
 //! - [`romaji`]   : ひらがな → ローマ字 (Hepburn / Kunrei)
-//! - [`dict`]     : surface → reading 辞書 (内部で **jukugo (≥2 文字) / unihan (1 文字) /
-//!   `[[kanji]]` block / Detailed Entry 多重保持**)
+//! - [`dict`]     : surface → reading 辞書 (内部で **unihan (1 文字 default) / rich entry
+//!   (熟語 + Detailed Entry) / `[[kanji]]` block** を保持)
 //! - [`rules`]    : ルールデータ型 (counters / scales / units / **postprocess** / etc)
 //! - [`loader`]   : TOML 汎用パーサ
-//! - [`scoring`]  : Smart engine (Viterbi DP + 6 provider band lexicographic)
+//! - [`accent_symbols`] : TTS 記号列 adapter (`ja-furigana-voicevox` / `ja-furigana-aquestalk`) の共有コア
+//! - `scoring` (crate 内部) : Smart engine (Viterbi DP + 6 provider band lexicographic)
 //!
-//! ### 読み解決パイプライン (alpha.15+、 Smart engine 一本化)
+//! ### 読み解決パイプライン (Smart engine)
 //!
-//! [`Furigana::analyze`] で input を 6 provider に流し、 [`scoring::engine::solve_path`]
+//! [`Furigana::analyze`] で input を 6 provider に流し、 crate 内部の `solve_path`
 //! で Viterbi-like path を解く。 各 provider が band 付きの candidate edge を emit:
 //!
 //! 1. **ProtectTokenProvider** (band 2000): URL / Email / 絵文字
@@ -84,9 +85,13 @@
 //!
 //! ## ステータス
 //!
-//! v0.1.x (alpha) — 公開 API は変更されうる ([docs/ROADMAP.md](https://github.com/RyuuNeko1107/ja-furigana/blob/master/docs/ROADMAP.md) 参照)。MSRV: Rust 1.88+。
+//! 0.5.x — 0.x のため minor version で破壊的変更がありうる (内容は
+//! [CHANGELOG.md](https://github.com/RyuuNeko1107/ja-furigana/blob/master/CHANGELOG.md) に記録、
+//! 今後の計画は [docs/ROADMAP.md](https://github.com/RyuuNeko1107/ja-furigana/blob/master/docs/ROADMAP.md))。
+//! MSRV: Rust 1.89+。
 //!
-//! 内部例文 75 件回帰で **75/75 (100%)** 達成 (0.1.0-alpha.3、CHANGELOG 参照)。
+//! 読みは [`ja-furigana-dict`](https://github.com/RyuuNeko1107/ja-furigana-dict) の
+//! 回帰 corpus (約 1.2 万 case) で照合している (release 時点で全件 pass)。
 
 #![allow(clippy::tabs_in_doc_comments)]
 

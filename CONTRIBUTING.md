@@ -43,25 +43,33 @@ cargo run -p ja-furigana --example basic
 
 1. このリポジトリで `crates/furigana/src/rules/<file>.rs` の構造体を更新
 2. `crates/furigana/tests/fixtures/rules/<file>.toml` も新フィールドに対応
-3. 必要なら engine 側の利用コード (numbers / chunks / reading) も更新
+3. 必要なら engine 側の利用コード (`scoring/` の provider / `numbers/` / `reading/`) も更新
 4. **同時に** `furigana-dict` リポジトリに対応 PR を出す (新フィールドを使うデータがあるなら)
 5. 両方の PR をリンクし、merge 順序を明示する
 
 ### 2-4. モジュール構成
 
+`crates/furigana/src/` 配下 (lib crate):
+
 | 場所 | 役割 |
 |---|---|
-| `src/lib.rs` + `api.rs` | 公開 API (`Furigana` / `FuriganaBuilder`) |
-| `src/analyzer.rs` | Lindera ラッパ |
-| `src/kana.rs` | ひら⇄カタ + Unicode 正規化 |
-| `src/numbers/` | 数値処理 (digit / counter / phrase / extras / helpers)、 `phrase.rs` は jukugo Aho-Corasick super-set check 付き |
-| `src/chunks/` | テキスト全体の数値・固有語チャンク分割 (URL/日付/jukugo/loanword/scale/SI/counter/symbols/digit の階層的優先確定) |
-| `src/reading/` | 読み解決パイプライン (pipeline / merge / context / output)、 `output.rs` で surface 文字種ごとの reading 表記切替 |
-| `src/dict.rs` | 単純 surface→reading 辞書 (jukugo / unihan 内部分離、 再帰 walk から `loanwords/` skip) |
-| `src/loanwords.rs` | 外来語 (IT 用語等の英単語) 辞書 (case-fold + 全角→半角 + 完全一致 lookup) |
-| `src/tts.rs` | TTS 整形 + segment |
-| `src/loader.rs` | TOML 汎用パーサ |
-| `src/rules/` | ルールデータ schema |
+| `lib.rs` + `api.rs` | 公開 API (`Furigana` / `FuriganaBuilder`)。 解析は `scoring/pipeline.rs` 経由の薄い層 |
+| `scoring/` | Smart engine (crate 内部)。 `pipeline.rs` = 6 provider + Viterbi + post-pass の facade、 `engine.rs` = Viterbi DP / `PathScore`、 `dict_bridge.rs` / `special.rs` / `numbers/` / `odoriji.rs` / `lindera_fallback.rs` = 各 provider、 `postpass.rs` / `names.rs` / `contextual.rs` / `phonojoin.rs` = 読みの post-pass、 `bracket.rs` / `accent_estimate.rs` = accent、 `lattice.rs` = コスト lattice engine (opt-in 実験) |
+| `analyzer.rs` | Lindera ラッパ |
+| `dict.rs` | surface → reading 辞書 (unihan / rich entry / `[[kanji]]` block、 先頭 2 文字の prefix 区間引き) |
+| `kana.rs` / `char_class.rs` | ひら⇄カタ + Unicode 正規化 / 文字種判定 (Unicode range 表の single home) |
+| `numbers/` | 漢数字・助数詞の読み組み立て (digit / counter / extras / helpers) |
+| `reading/` | 出力 layer (`ReadingToken` + `tokens_to_hiragana` / `tokens_to_ruby`)、 `output.rs` で surface 文字種ごとの reading 表記切替 |
+| `tts.rs` | TTS 整形 + segment |
+| `accent_symbols.rs` | TTS 記号列 adapter (voicevox / aquestalk crate) の共有コア |
+| `romaji.rs` | ひらがな → ローマ字 (ヘボン式 / 訓令式) |
+| `loader.rs` / `sanitize.rs` | TOML 汎用パーサ (schema_version 検証) / 辞書 value の sanitize (制御文字・bidi override・過大長の entry を load 時に reject) |
+| `rules/` | ルールデータ schema (counters / scales / units / days / symbols / numeric_phrases / compat / postprocess) |
+| `embedded.rs` / `error.rs` | 埋め込みデータ (空 rules) / エラー型 |
+
+他 crate: `crates/furigana-voicevox/` (VOICEVOX kana 記法 adapter)、 `crates/furigana-aquestalk/`
+(AquesTalk 音声記号列 adapter)、 `crates/furigana-cli/` (`furigana` バイナリ + HTTP server
+`commands/serve/`)。
 
 各 module 内に test がある (`#[cfg(test)] mod tests`)。
 
@@ -91,5 +99,6 @@ cargo run -p ja-furigana --example basic
 
 ## 4. ステータス
 
-Pre-alpha。設計判断は流動的なので、**API/構造を大きく変える PR は Issue で先に相談**
+0.x stable (crates.io で通常 publish 中、 最新は [CHANGELOG](CHANGELOG.md) 参照)。
+公開 API / TOML スキーマを変える PR や構造を大きく変える PR は **Issue で先に相談**
 してください。バグ修正・小さい機能追加は普通に PR で OK。

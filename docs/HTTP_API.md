@@ -11,7 +11,12 @@
 furigana serve                                 # 127.0.0.1:8000
 furigana serve --bind 0.0.0.0:8000             # 外部からも叩く
 FURIGANA_TOKEN=<secret> furigana serve         # 認証有効
+furigana serve --estimate-accent               # accent 系 mode で rule-based accent 推定を有効化
 ```
+
+`--estimate-accent` は `mode=accent` / `voicevox-aques` / `aquestalk` で、 dict bracket を持たない
+token にも rule-based の accent 推定を適用する (推定した句は `"estimated": true` で区別される)。
+hot reload / auto update で辞書を作り直した後も維持される。
 
 ## エンドポイント
 
@@ -54,18 +59,32 @@ curl -X POST http://127.0.0.1:8000/furigana \
 {"status": "reloaded", "dict_size": 44354}
 ```
 
+### `GET /metrics`
+
+認証不要。 Prometheus text format (`text/plain; version=0.0.4`) で次を返す:
+
+- `furigana_requests_total` (mode 別) / `furigana_request_duration_ms` (histogram)
+- `furigana_slow_requests_total` / `furigana_failed_resolution_total` /
+  `furigana_rate_limited_total` / `furigana_auth_failures_total` / `furigana_reloads_total`
+- `furigana_dict_size` (gauge)
+
+外部に公開する構成では reverse proxy 側でアクセス制限をかけること。
+
 ## パラメータ
 
 | パラメータ | 型 | default | 説明 |
 |---|---|---|---|
 | `text` | string | — | 変換対象。`text` または `text_b64` のどちらか必須 |
 | `text_b64` | string | — | URL-safe base64 (`+` / `=` 含む文字列を URL に乗せる用) |
-| `mode` | string | `tts` | 後述の 6 種 |
+| `mode` | string | `tts` | 後述 |
 | `short_pause` | string | `" "` | TTS: 「、」後に挿入する文字列 |
 | `long_pause` | string | `"   "` | TTS: 「。!?」後に挿入する文字列 |
-| `keep_period` | bool | `true` | TTS: 末尾の `。` を残すか |
-| `segmented` | bool | `false` | `tts` / `hiragana` のとき分割配列を `segments` に同梱 |
-| `max_segment_len` | int | `60` | `segmented=true` のときの 1 セグメント最大文字数 |
+| `keep_period` | bool | `true` | TTS: 末尾の `。` を残すか (`aquestalk` では文末記号の有無) |
+| `silence_symbols` | bool | `false` | `tts`: 絵文字 / 顔文字パーツを読み上げから外す |
+| `segmented` | bool | `false` | `tts` / `hiragana` のとき分割配列を `segments` に同梱。 `aquestalk` ではアクセント句境界で分割した記号列を同梱 |
+| `max_segment_len` | int | `60` | `tts` / `hiragana` で `segmented=true` のときの 1 セグメント最大文字数 |
+| `devoice` | bool | `true` | `aquestalk`: 無声化記号 `_` を自動付与するか |
+| `max_len` | int | `255` | `aquestalk` + `segmented=true` のときの 1 塊の最大文字数 (省略時は AquesTalk の目安上限) |
 | `debug` | bool | `false` | `timings_ms` を同梱 (tokenize / convert / total) |
 
 ### `mode` 一覧
@@ -78,6 +97,12 @@ curl -X POST http://127.0.0.1:8000/furigana \
 | `kanji` | 入力をそのまま (no-op) |
 | `romaji` | ヘボン式ローマ字 |
 | `romaji-kunrei` | 訓令式ローマ字 |
+| `analyze` | `result` に採択 path の読み連結、 `analyze` に解析の詳細 (token / 候補 / band 等) |
+| `accent` | `result` に読み連結、 `accent` に accent 句 JSON (dict bracket 由来 + `--estimate-accent` 時は推定) |
+| `voicevox-aques` | VOICEVOX の `POST /accent_phrases?is_kana=true` にそのまま渡せる kana 記法 |
+| `aquestalk` | 本家 AquesTalk の音声記号列 |
+
+alias: `bouyomi` = `tts` / `voicevox` = `voicevox-aques` (レスポンスの `mode` は正式名になる)。
 
 未知の `mode` 値は **silently `tts` (default) にフォールバック** (エラーにはならない)。
 

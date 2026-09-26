@@ -25,41 +25,44 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
   - 配信テロップ用の難読語チェック
   - DB の人名・地名フィールドに読みフリガナを付与
   - **IT 用語の英単語にも対応** (Kubernetes / Docker / TypeScript 等を
-    `core/loanwords/*.toml` で登録 → chunk 全体を完全一致 lookup)
+    `core/loanwords/*.toml` で登録 → 英字の連続を丸ごと完全一致 lookup)
 - ❌ 苦手なこと:
   - **超高精度な文脈読み分け**: 機械学習ベース (BERT 等) のニューラル推論はしない
   - **辞書にない人名・固有名詞**: `furigana-dict` の手動 PR で語彙拡充が前提
   - **古文 / 文語 / 方言**: IPADIC ベースなので現代語が中心
-  - **同形異音語の完璧な解決**: `rules/context/*.toml` でカバー範囲は限定的
+  - **同形異音語の完璧な解決**: 辞書 entry / `[[kanji]]` block の文脈 match 条件で
+    カバーできる範囲に限られる
 
 「不確かなときは形態素解析の素朴な結果に fall back」「辞書 hit したものは確実に固定」 という
 **保守的な決定論**。 コミュニティ PR で精度が上がる設計。
 
-> **Status**: 0.3.0 stable (2026-08-11、 0.1.0 cut は 2026-05-12)。
-> 0.3.0 = TTS adapter 2 本立て (VOICEVOX kana 記法 + 本家 AquesTalk 音声記号列) と
-> 共有コアの lib 移設 (`furigana::accent_symbols`、 ADR-0009) + 顔文字/絵文字の
-> TTS silent 化 (`TtsOptions::silence_symbols`)。
-> (0.2.0 = intonation milestone: dict bracket notation 由来の accent 出力 (`--mode=accent`) +
-> opt-in の rule-based accent 推定 (`--estimate-accent`) + VOICEVOX adapter crate
-> (`ja-furigana-voicevox`))。
+> **Status**: 0.5.0 (2026-09-24、 0.1.0 stable cut は 2026-05-12)。 crates.io で 4 crate を公開:
+> `ja-furigana` (lib) / `ja-furigana-cli` (`furigana` バイナリ + HTTP server) /
+> `ja-furigana-voicevox` (VOICEVOX kana 記法 adapter) / `ja-furigana-aquestalk`
+> (本家 AquesTalk 音声記号列 adapter)。 各 release の内容は [CHANGELOG.md](./CHANGELOG.md)。
+>
 > **Smart engine** (= candidate scoring + Viterbi-like path 選択 + band lexicographic 比較) で
 > 全 reading を解決。 6 provider 構成:
-> ProtectToken (URL/Email/絵文字) / Alphabet passthrough / DictBridge (jukugo / unihan /
+> ProtectToken (URL/Email/絵文字) / Alphabet passthrough / DictBridge (熟語 / unihan /
 > `[[kanji]]` block の match) / NumberCandidate (数字 + 助数詞 / 大数 / SI / 日付) /
 > Odoriji (踊り字 「々」 連濁) / LinderaFallback (band 50 safety net)。
+> accent は dict の bracket 記法由来 (`--mode=accent`) + opt-in の rule-based 推定
+> (`--estimate-accent`)。 TTS 記号列の共有コアは lib 側 (`furigana::accent_symbols`)。
 >
-> 精度 (= 0.1.0、 IPADIC default):
-> - 主要 corpus 262 case: **99.2%**
-> - OpenJTalk g2p 1000 件比較: **83-85%** (= seed 平均)
-> - VOICEVOX engine query 1000 件比較: **75-77%** (= TTS 整合度)
+> 精度:
+> - [`ja-furigana-dict`](https://github.com/RyuuNeko1107/ja-furigana-dict) の回帰 corpus
+>   (約 1.2 万 case): release 時点で **100%**
+> - (履歴、 0.1.0 時点の計測) OpenJTalk g2p 1000 件比較: **83-85%** (= seed 平均) /
+>   VOICEVOX engine query 1000 件比較: **75-77%** (= TTS 整合度)
 >
 > 形態素辞書は **`dict-ipadic`** (default) / **`dict-unidic`** (cwj) の feature flag で
-> build-time switch 可能 (0.2.0 の A/B 評価で runtime は IPADIC 据え置き確定、
+> build-time switch 可能 (A/B 評価で runtime は IPADIC 据え置き、
 > UniDic の pitch accent は offline bracket 生成 tool [dict repo 側] で活用)。
 >
 > 詳細は [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) / 中長期計画は [docs/ROADMAP.md](./docs/ROADMAP.md) /
 > 変更履歴は [CHANGELOG.md](./CHANGELOG.md) / breaking 変更ガイドは [MIGRATION.md](./MIGRATION.md)。
-> 0.2.x patch では SemVer 互換維持 (= 公開 API / TOML スキーマ / CLI 引数 / HTTP レスポンス は additive only)。
+> 0.x のため **minor version で破壊的変更がありうる** (例: 0.3.0 の `TtsOptions` /
+> 0.5.0 の `rules::CounterRule` の `#[non_exhaustive]` 化)。 patch release は互換を保つ。
 
 ## 名前の対応 (混乱しやすい点)
 
@@ -84,9 +87,9 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
 ```toml
 # Cargo.toml
 [dependencies]
-ja-furigana = "0.2.0"
+ja-furigana = "0.5"
 # 形態素辞書を選びたい場合 (default = dict-ipadic):
-# ja-furigana = { version = "0.2.0", default-features = false, features = ["dict-unidic"] }
+# ja-furigana = { version = "0.5", default-features = false, features = ["dict-unidic"] }
 ```
 
 ```rust
@@ -100,7 +103,7 @@ println!("{}", f.to_ruby("灰桜の散る道"));
 
 辞書 / ルールを mount する場合は builder API。 詳細は [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md#公開-api-lib)。
 
-### production logging で辞書改善 (★alpha.19+)
+### production logging で辞書改善
 
 production traffic から **dict 未登録 surface** を抽出して、 OSS curation loop に
 PR 入力として流す pure 関数 API:

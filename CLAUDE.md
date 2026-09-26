@@ -3,32 +3,29 @@
 Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動。
 
 - **GitHub**: <https://github.com/RyuuNeko1107/ja-furigana>
-- **crates.io**: `ja-furigana` (lib) + `ja-furigana-cli` (bin: `furigana`)
-- **License**: MIT or Apache-2.0
+- **crates.io**: `ja-furigana` (lib) + `ja-furigana-cli` (bin: `furigana`) +
+  `ja-furigana-voicevox` / `ja-furigana-aquestalk` (TTS 記号列 adapter)
+- **License**: MIT
 - **MSRV**: Rust 1.89+
 
 ## 現 version + 進捗
 
-- **LIVE**: `0.4.5` (2026-09-18、 crates.io 4 crate publish + tag v0.4.5)。 内容 =
-  **誤読 fix 2 件 + 確保 35〜43% 削減 + cost lattice engine (opt-in 実験)**。
-  破壊的変更なし、 既定の解析経路の出力は fix 2 件ぶんだけ変化。
-  - 同じ漢字の繰り返し (海海海 → うみうみうみ): `[[kanji]]` の 「前が漢字なら音」 型 match が
-    2 文字目以降だけ効いていた。 連続全体を 1 単位として外側の文字で判定する
-    (`dict_bridge::same_char_run`)。 A/B 478 行変化、 ほぼ全て改善
-  - 1 字だけ切り出された一段動詞 (寝んな → ねんな): Lindera の活用込みの読みを band 100 へ格上げ
-    (一段・自立 / 直後が助動詞 (断定除く)・接続助詞・非自立動詞 / 直前が漢字・お・ご でない / 得 除外)
-  - 性能: Lattice 使い回し + 内部候補型 `RawCandidate` (公開 API 不変) 等で確保 -35〜43%
-  - **cost lattice engine** (`FURIGANA_COST_ENGINE=1`、 ADR-0011): IPADIC の語コスト + 連接コストと
-    dict 候補を 1 本の lattice で解く。 **実験中** (corpus 98.4% / 43,000 行/秒、 既定は band engine)
-  - `docs/PERFORMANCE.md` に性能目標 (下限 10,000 行/秒、 1 変更 +10% 以内) と A/B 手順を明記
-  - **本番 wrapper 未反映** (次: `cargo update -p ja-furigana` → wrapper bump → debian デプロイ)
+- **LIVE**: `0.5.0` (2026-09-24、 crates.io 4 crate publish + tag v0.5.0)。 内容 =
+  **助数詞 `not_before` / `scale_trailing`** (助数詞の字が動詞語幹を兼ねる時の衝突よけ、
+  4000行って → 行く の活用) + **辞書保持の軽量化** (jukugo map 廃止、 ピークメモリ 1,000 行 87 → 75 MB)。
+  破壊的変更は `rules::CounterRule` の `#[non_exhaustive]` 化 1 点。
+- **master (未 release)**: 日付の漢数字の位取り (一二月 = 12 月) / 数字と助数詞の間の半角空白 +
+  分数 N分のM (CHANGELOG `[Unreleased]`)
+- (履歴) `0.4.5`〜`0.4.7` (2026-09-18〜23): 誤読 fix (同字連続 / 1 字一段動詞 / 接尾辞の連濁形 /
+  位取り漢数字 / 行き止まり補完) + 確保 35〜43% 削減 + cost lattice engine (opt-in 実験、
+  `FURIGANA_COST_ENGINE=1`、 既定は band engine)。 詳細は CHANGELOG
 - (履歴) `0.4.4` (2026-09-17、 crates.io 4 crate publish + GitHub release v0.4.4 =
   5 platform binary + Docker)。 内容 = **性能改善 3 件** (実文 約 1.7 倍速: long 287→200µs /
   medium 85→52µs) + 促音化 fix。 破壊的変更なし、 **公開 API も出力も不変** (corpus 11,058 件 100%)。
   最大の効き所は `DictBridgeProvider` の bucket **全件走査** 除去 (= sort 済み bucket に
   `partition_point` 2 回で先頭 2 文字の連続区間を取る `Dict::rich_matching_prefix`)。
   「御」 713 件 / 「大」 358 件 のような **実文で頻出する字だけ bucket が肥大** しており、
-  辞書改善を続けるほど遅くなる構造だった。 本番 wrapper `2.6.1` 反映済み。
+  辞書改善を続けるほど遅くなる構造だった。
   残件: 入力正規化の確保削減 (`normalize_char_piece`) は **速度未測定** (計測機が OBS 常駐で
   同一バイナリの連続実行ですら ±50% 振れたため)、 静かな環境で `cargo bench --bench lookup` 再計測のこと
 - (履歴) `0.3.1` (2026-08-12、 crates.io 4 crate publish = ja-furigana / ja-furigana-voicevox /
@@ -65,31 +62,15 @@ Japanese furigana / TTS-prep engine。 Lindera + IPADIC + TOML データ駆動�
   (`卅→{卅|さん}{|じゅう}` を、 空 surface token の読みを直前 token に結合して `{卅|さんじゅう}` に。
   0.1.13 surface 保持機構の latent bug)。 lib 499 + cli 48 test green。
   既知の限界: `卅日` 等 旧字漢数字+助数詞は誤読しうる (展開後 十日=とおか と誤分割、 稀ケース)。
-  本番 furigana-api は wrapper `2.0.13` で lib 0.1.16 稼働 (2026-06-14 deploy、 health gate ✓、
-  dict v2026.06.14 swap 済で 髙田→たかだ / 廿→にじゅう / 卅→さんじゅう / ３本→さんぼん live 確認)
+  (dict v2026.06.14 と組み合わせて 髙田→たかだ / 廿→にじゅう / 卅→さんじゅう / ３本→さんぼん を確認)
 - UniDic aType は runtime 統合ではなく **offline bracket 生成 tool** に確定
   (dict repo `tools/gen_accent_brackets.py`、 core/jukugo に bracket 3,122 件適用済 =
   dict v2026.07.04)。 runtime 形態素辞書は IPADIC 据え置き (ADR-0006)
 
-## alpha.10 task 進捗 (2026-05-11)
+## 履歴メモ
 
-### ✅ completed (16)
-
-- A 系 (foundation): A1 schema_version validator + A1b caller wire-up (load_rules_dir / Dict / Loanwords / SingleOverrides の file load 経路に必須化、 lib fixture も `[meta] schema_version = "2"` 化、 dict 側の coordinate stamp は E1 / alpha.11 dict release 側責任) / A2 dict format 拡張 / A3 matcher
-- B 系 (Smart engine core): B1 Viterbi DP / B2 band lexicographic / B3 (b)(c) penalty / B4 Engine 切替
-- C 系 (cross-cutting):
-  - C1 保護トークン抽出 (`scoring/special.rs` の ProtectTokenProvider、 band 2000)
-  - C2 アルファベット passthrough (`scoring/special.rs` の AlphabetPassthroughProvider、 hit band 1000 / miss band 100)
-  - C3 数字 + 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 / 記号 / 素の数字 (`scoring/numbers.rs` の NumberCandidateProvider、 band 950) + Furigana::analyze 5 provider 構成に統合
-  - C4 踊り字 (`scoring/odoriji.rs` の OdorijiProvider + apply_rendaku post-pass、 既存 Strict 連濁 logic は kana::voice_first_kana に共通化) + postprocess 独立性 doc
-- D: bracket forward compat (lib strip)
-- F1: scoring/analyze.rs standalone API + Furigana::analyze() / CLI --mode analyze / HTTP mode=analyze (alpha.10 段階で ProtectToken / AlphabetPassthrough / DictBridge / NumberCandidate / Odoriji の 5 provider 構成、 loanwords / numeric_phrases 統合は今後)
-- F2: `furigana-diff-engines` CLI tool
-
-### ⏳ pending (2)
-
-- E1: migration script Python (**dict repo 側 work**)
-- ~~H1: alpha.10 release prep~~ (撤回、 alpha.10 release 自体 skip 方針、 alpha.11+ 一括 release で対応)
+- alpha.10 (2026-05) で Smart engine (Viterbi DP + band lexicographic + 6 provider) を新設し、
+  alpha.15 で旧 Strict engine / chunks を削除して一本化。 詳細は CHANGELOG の alpha 各節
 
 ## 主要 module 構造
 
@@ -99,13 +80,17 @@ crates/furigana/src/
 ├── api.rs                 — Furigana / FuriganaBuilder (公開 entry、 解析は scoring/pipeline 経由の薄い層)
 ├── analyzer.rs            — Lindera + IPADIC ラッパー
 ├── char_class.rs          — 文字種 (CharType) 分類 + Unicode range 表の single home (kana/matcher/special が参照)
-├── dict.rs                — jukugo / unihan / rich entry / [[kanji]] block 多重保持 (先頭 char prefix index 付)
+├── dict.rs                — unihan / rich entry / [[kanji]] block 保持。 rich は sort 済み bucket を
+│                            先頭 2 文字で区間引き (`Dict::rich_matching_prefix`)
+├── embedded.rs            — 埋め込みデータ (本体には rules を embed しない = 空 RulesData)
+├── error.rs               — FuriganaError / Result
 ├── kana.rs                — ひら⇄カタ変換 + 連濁 (voice_first_kana)。 判定 3 関数は char_class への公開 delegate
 ├── loader.rs              — TOML loader (schema_version validate)
-├── numbers/               — kansuji / 助数詞 logic (scoring/numbers.rs から呼ばれる)
+├── numbers/               — kansuji / 助数詞 logic (scoring/numbers/ から呼ばれる)
 ├── reading/               — 出力 layer (ReadingToken + tokens_to_hiragana / tokens_to_ruby)
 ├── romaji.rs              — ひらがな → ローマ字 (Hepburn / Kunrei)
-├── rules/                 — counters / context / days / scales / postprocess 等 TOML data
+├── rules/                 — counters / days / scales / units / symbols / numeric_phrases / compat / postprocess の TOML schema
+├── sanitize.rs            — 辞書 value の sanitize (制御文字 / bidi override / 過大長を load 時に reject)
 ├── scoring/               — Smart engine module (詳細 別記)
 └── tts.rs                 — TTS pre-processing (pause 整形 等)
 
@@ -117,11 +102,11 @@ crates/furigana-aquestalk/   — 本家 AquesTalk 音声記号列 adapter (ADR-0
 
 crates/furigana-cli/src/
 ├── main.rs                — `furigana` バイナリ (CLI + HTTP server)
-├── commands/              — lookup / repl / serve / dict subcommands
-└── bin/                   — dict_gap_mine 等 support tool
+├── commands/              — lookup / repl / serve (auth / handlers / metrics / types) / dict subcommands
+└── bin/                   — support tool (furigana-corpus-check / furigana-analyze-one / furigana-dict-gap-mine)
 ```
 
-## scoring/ module (alpha.10 新設)
+## scoring/ module
 
 | sub module | 役割 |
 |---|---|
@@ -129,15 +114,18 @@ crates/furigana-cli/src/
 | `format.rs` | Entry / EntryDetail / MatchBlock / MatchCondition / KanjiBlock の struct (CharType は char_class.rs から re-export) |
 | `matcher.rs` | MatchContext + matches_context() + pseudo-token 走査 + resolve_readings (classify_char は char_class.rs へ移動) |
 | `candidate.rs` | Score / Candidate / CandidateProvider trait + ScoringContext + band 定数 |
-| `engine.rs` | PathScore (weakest_band + edge_count agg) + solve_path Viterbi DP |
+| `engine.rs` | PathScore (weakest_band → edge_count → total_match_hits → synthetic_edges の lexicographic) + solve_path Viterbi DP (行き止まり補完込み) |
 | `boundary.rs` | KanjiRegion + BoundaryAnalysis (b)(c) penalty -300/-600 |
 | `special.rs` | ProtectTokenProvider (band 2000) + AlphabetPassthroughProvider (hit 1000 / miss 100、 loanwords lookup 込) |
-| `dict_bridge.rs` ★ | DictBridgeProvider — Dict (jukugo / unihan / [[kanji]] block) の candidate 化、 先頭 char prefix index 引き |
+| `dict_bridge.rs` ★ | DictBridgeProvider — Dict (rich entry / unihan / [[kanji]] block) の candidate 化、 先頭 2 文字の区間引き |
 | `numbers/` | NumberCandidateProvider (band 950: 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 / 記号 / 素の数字)。 `patterns.rs` = regex 定義+構築、 `mod.rs` = 候補種別ごとの try_* matcher |
 | `odoriji.rs` | OdorijiProvider (々 placeholder) + RendakuPass (連濁 logic は kana::voice_first_kana 共通化) |
 | `lindera_fallback.rs` | LinderaFallbackProvider (band 50/150 safety net + gap-passthrough) |
 | `postpass.rs` | ReadingPostPass trait + apply_all 適用順 (ADR-0005) |
 | `contextual.rs` | HaraSukuPass (腹+空く 2-token-back 補正) |
+| `phonojoin.rs` | SokuonJoinPass (OOV 漢字複合語の促音便 join、 ADR-0008) |
+| `accent_estimate.rs` | rule-based accent 推定 (opt-in `estimate_accent`、 ADR-0007) |
+| `lattice.rs` | コスト lattice engine (opt-in 実験、 `cost_engine` / `FURIGANA_COST_ENGINE=1`、 ADR-0011) |
 | `names.rs` | NameBoundaryPass (人名+敬称 token 衝突の再分割/merge、 読み source = dict→IPADIC 固有名詞) |
 | `bracket.rs` | bracket notation parse → AccentPhrase (0.2.0 core) |
 | `analyze.rs` | AnalyzeResult / Token + analyze() / analyze_tokens() (★11 freeze types) |
@@ -147,7 +135,7 @@ crates/furigana-cli/src/
 
 ```powershell
 # build + test
-cargo test --lib                             # 435 lib test (alpha.11 dict 完全再編成 完了時点)
+cargo test --lib                             # 約 630 lib test (0.5.0 後の master)
 cargo test --lib scoring::                   # scoring module のみ
 cargo clippy --lib -- -D warnings            # clippy clean 確認
 cargo fmt                                    # フォーマット
@@ -155,7 +143,7 @@ cargo fmt                                    # フォーマット
 # CLI 動作確認
 cargo run --bin furigana -- lookup "猫が好き" --mode hiragana
 
-# corpus regression (高速一括、 Furigana 構築 1 回で全 corpus。 802 case ≈ 4 秒)
+# corpus regression (高速一括、 Furigana 構築 1 回で全 corpus。 約 1.2 万 case)
 # ※ dict repo の tools/run_corpus.py (1 case ごと CLI 起動、 ~15 分) より常にこちらを使う
 cargo run --release --bin furigana-corpus-check -- `
   --rules-dir ..\furigana-dict\rules --core-dict-dir ..\furigana-dict\core `
@@ -170,16 +158,16 @@ cargo bench --bench scaling                  # 入力長スケーリング + all
 ## 重要設計指針
 
 - **Smart engine 一本化済** (alpha.15): 旧 Strict engine は削除済、 `Furigana::to_*` / `tokenize` / `analyze` はすべて `scoring/pipeline.rs` の Pipeline facade 経由 (= 同一の採択 path)
-- **discrete band + lexicographic**: 連続値 score ではなく band/length/match_hits/penalty の 4 軸 lexicographic 比較 (= calibration 沼回避)
+- **discrete band + lexicographic**: 連続値 score ではなく PathScore の 4 軸 (weakest_band → edge_count → total_match_hits → synthetic_edges) lexicographic 比較 (= calibration 沼回避)
 - **品詞 matcher 不採用**: Lindera 撤廃路線と整合、 `prev_pos` / `next_pos` は無し、 literal + char_type のみ
 - **forward compat for intonation**: bracket notation `[` `]` `/` を 0.1.0 から dict 側で書ける、 lib は strip / 無視、 0.2.0 で活用
 
 ## 主要 doc
 
 - `docs/PROPOSALS/scoring-engine.md` — 0.1.0 stable architecture 詳細
-- `docs/PROPOSALS/intonation.md` — 0.2.0 stable target (Postponed → Planned for 0.2.0)
+- `docs/PROPOSALS/intonation.md` — intonation 仕様 (0.2.0 で出荷済)
 - `docs/ROADMAP.md` — phase + timeline
-- `docs/ARCHITECTURE.md` — 既存 4 層構造
+- `docs/ARCHITECTURE.md` — crate / module 構成と engine 設計
 - `CHANGELOG.md` — 各 release 差分
 - `CONTRIBUTING.md` / `MAINTAINING.md` — contributor / maintainer ガイド
 
@@ -190,5 +178,6 @@ cargo bench --bench scaling                  # 入力長スケーリング + all
   Diff coverage (llvm-cov+diff-cover) / Mutation (changed lines)。strict=true、
   enforce_admins=false (オーナーは unsigned で直 push 可、 既存履歴も admin bypass)。
   テスト要件フレームワーク (`../テスト要件/`) の CI ゲートを 2026-06-17 に追加
-- **publish policy** (2026-05-11 再更新): **alpha 期間中は crates.io publish しない** (= 0.1.0 stable 再開)、 加えて **alpha.10 は GitHub release も skip** (= 4 commit は master push 済の内部 milestone label として残す)。 次の release は alpha.10 + alpha.11 work をまとめた alpha.11+。 既 publish 済 (`alpha.1` 〜 `alpha.9`) は metadata 不変のまま yank しない
-- **dict version compat**: alpha.10 lib は `[meta] schema_version = "2"` のみ accept、 旧 format dict は parse error (= dict v2 化と coordinated)
+- **publish policy**: 0.1.0 stable 以降は release ごとに crates.io publish (4 crate、 順序は
+  lib → voicevox / aquestalk → cli、 手順は MAINTAINING.md)。 既 publish 済 alpha (`alpha.1` 〜 `alpha.9`) は yank しない
+- **dict version compat**: lib は `[meta] schema_version = "2"` のみ accept、 旧 format dict は parse error (= dict v2 化と coordinated)

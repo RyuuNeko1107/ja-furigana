@@ -1,6 +1,6 @@
 # Proposal: Scoring Engine v1.5 — Multi-Signal Accumulation in Same Band
 
-**Status**: **Superseded in part by [ADR-0004](../../../docs/adr/0004-ambiguous-reading-candidates.md)** (元: Proposed 2026-05-21)
+**Status**: **Superseded in part by ADR-0004** (ambiguous reading candidates。 ADR はメンテナーの workspace 側で管理、 本 repo 外) (元: Proposed 2026-05-21)
 
 > ⚠️ **この doc は歴史的記録です。本文どおりに実装しないこと。**
 > 提案後に ADR-0004 が `[[alt]]` 機構として **Phase 2 / Phase 3 を別設計で出荷済**。
@@ -21,7 +21,7 @@
 >
 > 降格根拠: 2026-06-03 の敵対的レビュー (5 lens + synthesis、 decision = split-minimal)。
 
-> 関連: [scoring-engine.md](./scoring-engine.md) (= v1 archive) / [intonation.md](./intonation.md) (= 0.2.0 独立 phase) / [../ROADMAP.md](../ROADMAP.md) / [ADR-0004](../../../docs/adr/0004-ambiguous-reading-candidates.md)
+> 関連: [scoring-engine.md](./scoring-engine.md) (= v1 archive) / [intonation.md](./intonation.md) (= 0.2.0 独立 phase) / [../ROADMAP.md](../ROADMAP.md) / ADR-0004 (本 repo 外)
 
 ## 0. 動機
 

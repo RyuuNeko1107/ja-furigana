@@ -40,10 +40,10 @@ const HOT: &str = "御飯と御茶を大きく三つ小さく天から一つ御�
 /// bucket 1 の字ばかり (同程度の byte 数)。
 const COLD: &str = "曖昧模糊たる薔薇窯変釉薬瑠璃硝子燐寸蝋燭絨毯襖障子。";
 
-/// `estimate_accent` を有効にした版 (= 本番 wrapper と同じ設定、 ADR-0007)。
+/// `estimate_accent` を有効にした版 (ADR-0007)。
 ///
 /// bench の既定は opt-in が off なので accent 推定コストが計測に入らない。
-/// 本番 (furigana-api wrapper 2.1.0 以降) は常時 on なので、 その差分も測る。
+/// 下流の API wrapper では常時 on にする運用もあるので、 その差分も測る。
 fn build_with_accent() -> Furigana {
     let (core, rules) = (
         std::env::var("FURIGANA_BENCH_CORE").expect("FURIGANA_BENCH_CORE"),
