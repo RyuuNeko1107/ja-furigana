@@ -445,6 +445,26 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                 range.clone(),
                 Score::new(band, length, 0),
             ));
+
+            // 英字の直後に # / + が続く語 (C# / F# / C++ / g++) は、 外来語表に載っている時だけ
+            // 記号込みで引く (英字の範囲は記号を含まないので、 そのままでは C + # に割れて # が素通しになる)。 2026-09-27
+            let tail: String = ctx.input[range.end..]
+                .chars()
+                .take_while(|c| matches!(c, '#' | '＃' | '+' | '＋'))
+                .collect();
+            if !tail.is_empty() {
+                let end = range.end + tail.len();
+                let key = normalize_alphabet(&ctx.input[range.start..end]);
+                if let Some(r) = self.lookup.get(&key) {
+                    let length = u8::try_from(ctx.input[range.start..end].chars().count())
+                        .unwrap_or(u8::MAX);
+                    out.push(RawCandidate::new(
+                        r.as_str(),
+                        range.start..end,
+                        Score::new(BAND_DICT_EXACT, length, 0),
+                    ));
+                }
+            }
         }
     }
 }
@@ -791,6 +811,21 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].surface, "API");
         assert_eq!(candidates[0].reading, "エーピーアイ");
+    }
+
+    #[test]
+    fn alphabet_with_trailing_symbol_uses_lookup_only_when_listed() {
+        // C# は外来語表にあれば記号込みで引く。 表に無い X# は従来どおり英字だけ
+        let input = "C#とX#";
+        let mut lookup = HashMap::new();
+        lookup.insert("c#".to_string(), "シーシャープ".to_string());
+        let provider = AlphabetPassthroughProvider::new(input, Arc::new(lookup));
+        let c = provider.candidates_vec(&ctx(input), 0);
+        assert!(c
+            .iter()
+            .any(|x| x.surface == "C#" && x.reading == "シーシャープ"));
+        let x = provider.candidates_vec(&ctx(input), "C#と".len());
+        assert!(x.iter().all(|c| c.surface == "X"), "{x:?}");
     }
 
     #[test]
