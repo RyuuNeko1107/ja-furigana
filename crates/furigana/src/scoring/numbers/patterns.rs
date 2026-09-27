@@ -53,6 +53,12 @@ pub(super) static FRACTION_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(&pat).expect("scoring FRACTION regex build failed")
 });
 
+/// 位取りの漢数字の小数 (一・〇〇七 / 三・〇〇)。 小数部 2 桁以上に限る (一・二・三 のような列挙を拾わない)
+pub(super) static KANJI_DECIMAL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new("^([〇一二三四五六七八九]{1,6})・([〇一二三四五六七八九]{2,12})")
+        .expect("scoring KANJI_DECIMAL regex build failed")
+});
+
 pub(super) static DIGIT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
 

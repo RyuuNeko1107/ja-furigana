@@ -62,7 +62,7 @@ use crate::scoring::candidate::{
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    TIME_COLON_RE, TIME_JP_FULL_RE,
+    KANJI_DECIMAL_RE, TIME_COLON_RE, TIME_JP_FULL_RE,
 };
 use regex::Regex;
 
@@ -482,6 +482,35 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// 位取りの漢数字の小数 (一・〇〇七 = イチテンゼロゼロナナ / 〇・五〇 = ゼロテンゴゼロ)。
+    /// 漢数字の列の途中 (直前が漢数字 / ・) からは出さない。 2026-09-27
+    fn try_kanji_decimal(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        let Some(caps) = at_start(&KANJI_DECIMAL_RE, rest) else {
+            return;
+        };
+        if input[..pos]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c == '・' || kanji_digit(c).is_some())
+        {
+            return;
+        }
+        let m_end = caps.get(0).unwrap().end();
+        let to_arabic = |s: &str| s.chars().filter_map(kanji_digit).collect::<String>();
+        let num = format!(
+            "{}.{}",
+            to_arabic(caps.get(1).unwrap().as_str()),
+            to_arabic(caps.get(2).unwrap().as_str())
+        );
+        out.push(self.make(input, pos, m_end, number_to_katakana(&num)));
+    }
+
     /// section 6: 数値 + 単一助数詞 (+ optional 末尾再帰 「目」)。
     fn try_counter(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(re) = &self.counter_re else { return };
@@ -755,10 +784,17 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_scale(input, pos, rest, out);
         self.try_si_unit(input, pos, rest, out);
         self.try_fraction(input, pos, rest, out);
+        self.try_kanji_decimal(input, pos, rest, out);
         self.try_counter(input, pos, rest, out);
         self.try_counter_kanji_grouped(input, pos, rest, out);
         self.try_counter_kanji(input, pos, rest, out);
         self.emit_symbol(input, pos, rest, out);
         self.try_digit(input, pos, rest, out);
     }
+}
+
+/// 漢数字 1 字 (〇〜九) を算用数字 1 字に
+fn kanji_digit(c: char) -> Option<char> {
+    let i = "〇一二三四五六七八九".chars().position(|k| k == c)?;
+    char::from_digit(u32::try_from(i).ok()?, 10)
 }

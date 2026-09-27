@@ -741,3 +741,25 @@ fn grouped_kanji_numeral_needs_exactly_three_digits_after_comma() {
         .iter()
         .all(|c| c.surface != "一、二年"));
 }
+
+// ─── 位取りの漢数字の小数 (★2026-09-27) ───
+
+#[test]
+fn kanji_decimal_reads_as_decimal() {
+    let p = provider();
+    let c = p.candidates_vec(&ctx("一・〇〇七を"), 0);
+    assert_eq!(
+        find(&c, "一・〇〇七").expect("decimal").reading,
+        "イチテンゼロゼロナナ"
+    );
+}
+
+#[test]
+fn kanji_enumeration_is_not_decimal() {
+    // 小数部 1 桁 (第一・二条 / 一・二・三) は列挙として扱い、 小数にしない
+    let p = provider();
+    assert!(find(&p.candidates_vec(&ctx("一・二・三"), 0), "一・二").is_none());
+    // 漢数字の列の途中からは出さない
+    let input = "二一・五〇";
+    assert!(find(&p.candidates_vec(&ctx(input), "二".len()), "一・五〇").is_none());
+}
