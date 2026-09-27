@@ -221,6 +221,9 @@ impl MatchCondition {
         if let Some(expected_type) = self.prev_char_type {
             let last_char = ctx.prev_token.and_then(|s| s.chars().next_back());
             match last_char {
+                // 踊り字 々 は漢字に数えない: 畳語 (時々 / 早々 / 人々) の後ろは新しい語の頭で、
+                // 「漢字の後ろ = 熟語の続き = 音読み」 の規則が当たらない (帰宅早々雨 = う になっていた、 2026-09-27)
+                Some('々') if expected_type == CharType::Kanji => return None,
                 Some(c) if classify_char(c) == Some(expected_type) => {
                     hits += HIT_WEIGHT_BROAD;
                 }
@@ -640,6 +643,17 @@ mod tests {
     }
 
     // ─── prev_char_type ──────────────────────────────────────────────────────
+
+    #[test]
+    fn prev_char_type_kanji_skips_odoriji() {
+        // 畳語 (時々 / 早々) の後ろは新しい語の頭なので 「前が漢字」 に数えない
+        let cond = MatchCondition {
+            prev_char_type: Some(CharType::Kanji),
+            ..Default::default()
+        };
+        assert!(!cond.matches_context(&MatchContext::with_prev("時々")));
+        assert!(!cond.matches_context(&MatchContext::with_prev("々")));
+    }
 
     #[test]
     fn prev_char_type_matches_kanji() {
