@@ -61,8 +61,8 @@ use crate::scoring::candidate::{
 };
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
-    build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE, TIME_COLON_RE,
-    TIME_JP_FULL_RE,
+    build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
+    TIME_COLON_RE, TIME_JP_FULL_RE,
 };
 use regex::Regex;
 
