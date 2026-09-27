@@ -720,23 +720,46 @@ impl NumberCandidateProvider {
         rest: &str,
         out: &mut Vec<RawCandidate<'_>>,
     ) {
-        let Some(re) = &self.counter_kanji_re else {
+        // 何百件 / 何千円 = 何 の位置から 1 つの候補にする (2026-09-28)。 百 / 千 から出すと 何 が単独で なに に
+        // なり連濁も落ちる (なにひゃっけん / なにせんえん)。 何 の連濁・促音は 三 と同じ (なんびゃく / さんびゃく、
+        // なんぜん / さんぜん) なので、 三 に置き換えて読み、 頭の サン を ナン に戻す (三 と 何 は同じ 3 byte)
+        if let Some(after) = rest.strip_prefix('何') {
+            if after.starts_with(['百', '千']) {
+                let alt = format!("三{after}");
+                if let Some((m_end, reading)) = self.counter_kanji_reading(&alt, 0, &alt) {
+                    if let Some(tail) = reading.strip_prefix("サン") {
+                        out.push(self.make(input, pos, m_end, format!("ナン{tail}")));
+                    }
+                }
+            }
             return;
-        };
-        if let Some(caps) = at_start(re, rest) {
+        }
+        if let Some((m_end, reading)) = self.counter_kanji_reading(input, pos, rest) {
+            out.push(self.make(input, pos, m_end, reading));
+        }
+    }
+
+    /// [`Self::try_counter_kanji`] の本体: 候補を出すなら (長さ, 読み)。
+    fn counter_kanji_reading(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+    ) -> Option<(usize, String)> {
+        let re = self.counter_kanji_re.as_ref()?;
+        let caps = at_start(re, rest)?;
+        {
             let m_end = caps.get(0).unwrap().end();
             let num = caps.get(1).unwrap().as_str();
             let base = caps.get(2).unwrap().as_str();
             // 万 / 億 / 兆 から始まる数は 「一万」 ではなく前の語 (数万件 / 何万円 / 3桁万円) の一部なので counter にしない
             // (数万件 = すういちまんけん になっていた、 2026-09-27)。 大数の読みは 万 / 億 の漢字側に任せる
             if num.starts_with(['万', '億', '兆']) {
-                return;
+                return None;
             }
             // 算用数字に直せない並び (八億二七〇〇〇万 のような崩れた表記) は候補にしない。
             // read_counter は直せないと漢数字をそのまま読みに使うので、 漢字が読みに残っていた (2026-09-27)
-            if kansuji_to_arabic(num).is_none() {
-                return;
-            }
+            kansuji_to_arabic(num)?;
             // 数の途中 (一・九六億円 の 九六億円 / 一〇八六億円 の 〇八六億円) からは出さない
             let mut before = input[..pos].chars().rev();
             let prev = before.next();
@@ -745,7 +768,11 @@ impl NumberCandidateProvider {
             if prev.is_some_and(is_digit)
                 || (matches!(prev, Some('・' | '、' | '．')) && prev2.is_some_and(is_digit))
             {
-                return;
+                return None;
+            }
+            // 何百 / 何千 の 百 / 千 からは出さない (何 の位置で出す、 上の try_counter_kanji)
+            if prev == Some('何') && num.starts_with(['百', '千']) {
+                return None;
             }
             let counter = if let Some(rec) = caps.get(3) {
                 // recursive 形 (「目」) は常に採用
@@ -776,12 +803,11 @@ impl NumberCandidateProvider {
                         )
                     });
                 if !(opted_in || positional) || self.counter_blocked(base, &rest[m_end..]) {
-                    return;
+                    return None;
                 }
                 base.to_string()
             };
-            let reading = self.read_counter(num, &counter);
-            out.push(self.make(input, pos, m_end, reading));
+            Some((m_end, self.read_counter(num, &counter)))
         }
     }
 
@@ -898,6 +924,10 @@ impl CandidateProvider for NumberCandidateProvider {
                     .next_back()
                     .is_some_and(|c| is_digit_like_char(c) || c.is_ascii_alphabetic());
         if !numeric_lead || sign_is_separator {
+            // 何百件 / 何千円 は 何 の位置から 1 候補にする (try_counter_kanji、 2026-09-28)
+            if first_char == '何' {
+                self.try_counter_kanji(input, pos, rest, out);
+            }
             self.emit_symbol(input, pos, rest, out);
             return;
         }

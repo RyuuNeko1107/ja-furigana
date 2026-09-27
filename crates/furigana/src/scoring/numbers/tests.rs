@@ -836,3 +836,20 @@ fn grouped_kanji_numeral_allows_zero_in_head_and_thousand_unit() {
     let r = &find(&c, "一〇、〇〇〇千年").expect("thousand unit").reading;
     assert!(r.starts_with("イチマンセン"), "{r}");
 }
+
+#[test]
+fn counter_kanji_starts_at_nan_with_rendaku() {
+    // 何百回目 は 何 の位置から 1 候補 (三 と同じ連濁・促音で ナンビャッカイメ)。
+    // 百 の位置からは出さない (出すと 何 が単独で なに になる)
+    let p = provider();
+    let input = "何百回目";
+    let c = p.candidates_vec(&ctx(input), 0);
+    assert_eq!(
+        find(&c, "何百回目").expect("nan prefix").reading,
+        "ナンビャッカイメ"
+    );
+    let c = p.candidates_vec(&ctx(input), '何'.len_utf8());
+    assert!(find(&c, "百回目").is_none());
+    // 何 の後が 百 / 千 でなければ 何 の位置では出さない (何回目 は別経路)
+    assert!(p.candidates_vec(&ctx("何回目"), 0).is_empty());
+}
