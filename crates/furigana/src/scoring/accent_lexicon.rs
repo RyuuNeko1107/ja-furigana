@@ -184,6 +184,9 @@ impl AccentLexicon {
     ///
     /// 辞書形は表から引く (一段 = 語幹 + ル、 五段 = 語尾の段を u 段に戻す)。 引けなければ `None`
     fn conjugated(&self, surface: &str, reading: &str, next: &str) -> Option<(u8, u8)> {
+        if let Some(adj) = self.adjective(surface, reading, next) {
+            return Some(adj);
+        }
         let past = ["た", "て", "だ", "で"].iter().any(|p| next.starts_with(p));
         let neg = next.starts_with("な") && !next.starts_with("なら");
         if !(past || neg) {
@@ -239,6 +242,47 @@ impl AccentLexicon {
             base.saturating_sub(1).max(1)
         } else {
             base
+        };
+        (accent <= mora).then_some((accent, mora))
+    }
+}
+
+impl AccentLexicon {
+    /// 形容詞の活用途中の accent (東京式の規則、 推定扱い)。 2026-09-28
+    ///
+    /// 辞書形 (語幹 + い) を表から引く。
+    /// - 起伏式: 過去 (高かっ + た) も く形 (高く + ない / て / なる / する) も核を 1 つ前へ (タカ'イ → タ'カカッタ / タ'カクナイ、
+    ///   ヨ'イ → ヨ'カッタ)
+    /// - 平板式: 過去は語幹の末尾に核 (アカイ → アカ'カッタ)、 く形は平板のまま (アカクテ)
+    fn adjective(&self, surface: &str, reading: &str, next: &str) -> Option<(u8, u8)> {
+        let (s_stem, r_stem, past) = if next.starts_with('た') {
+            (
+                surface.strip_suffix("かっ")?,
+                reading.strip_suffix("カッ")?,
+                true,
+            )
+        } else if next.starts_with(['て', 'な', 'し', 'す', 'さ']) && !next.starts_with("なら")
+        {
+            (
+                surface.strip_suffix('く')?,
+                reading.strip_suffix('ク')?,
+                false,
+            )
+        } else {
+            return None;
+        };
+        if s_stem.is_empty() || r_stem.is_empty() || !s_stem.chars().any(crate::kana::is_kanji_char)
+        {
+            return None;
+        }
+        let (base, _) = self.get(&format!("{s_stem}い"), &format!("{r_stem}イ"))?;
+        let mora = u8::try_from(count_mora(reading)).ok()?;
+        let accent = if base > 0 {
+            base.saturating_sub(1).max(1)
+        } else if past {
+            u8::try_from(count_mora(r_stem)).ok()?
+        } else {
+            0
         };
         (accent <= mora).then_some((accent, mora))
     }
@@ -346,6 +390,39 @@ role = \"accent\"
         assert_eq!(acc(6), Some(0), "平板動詞は平板のまま");
         assert_eq!(acc(8), Some(2), "タベ'ナイ");
         assert!(ts[0].accent_phrases[0].estimated, "規則由来は推定扱い");
+    }
+
+    #[test]
+    fn conjugated_adjective_accent() {
+        let lx = lexicon(
+            "[meta]
+role = \"accent\"
+[entries]
+\"高い\" = \"[タカ]イ\"
+\"良い\" = \"[ヨ]イ\"
+\"赤い\" = \"[アカイ\"
+",
+        );
+        let mut ts = vec![
+            token("高かっ", "たかかっ"),
+            token("た", "た"),
+            token("高く", "たかく"),
+            token("ない", "ない"),
+            token("良かっ", "よかっ"),
+            token("た", "た"),
+            token("赤かっ", "あかかっ"),
+            token("た", "た"),
+            token("赤く", "あかく"),
+            token("て", "て"),
+        ];
+        lx.fill(&mut ts);
+        let acc = |i: usize| ts[i].accent_phrases.first().and_then(|p| p.accent);
+        assert_eq!(acc(0), Some(1), "起伏式の過去 = 核が 1 つ前 (タ'カカッタ)");
+        assert_eq!(acc(2), Some(1), "起伏式の く形 = タ'カクナイ");
+        assert_eq!(acc(4), Some(1), "ヨ'カッタ");
+        assert_eq!(acc(6), Some(2), "平板式の過去 = 語幹の末尾 (アカ'カッタ)");
+        assert_eq!(acc(8), Some(0), "平板式の く形は平板のまま");
+        assert!(ts[0].accent_phrases[0].estimated);
     }
 
     #[test]
