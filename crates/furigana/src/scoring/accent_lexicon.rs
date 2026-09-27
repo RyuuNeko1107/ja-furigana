@@ -139,26 +139,136 @@ impl AccentLexicon {
         Ok(())
     }
 
-    /// accent の無い token に、 表記 + 読みが一致する表の accent を付ける
+    fn get(&self, surface: &str, reading: &str) -> Option<(u8, u8)> {
+        let k = key(surface, reading);
+        self.entries
+            .binary_search_by(|e| (*e.0).cmp(k.as_str()))
+            .ok()
+            .map(|i| (self.entries[i].1, self.entries[i].2))
+    }
+
+    /// accent の無い token に、 表記 + 読みが一致する表の accent を付ける。
+    /// 動詞の活用途中 (食べ + た / 書か + ない) は、 辞書形の accent から活用規則で決める ([`Self::conjugated`])
     pub(crate) fn fill(&self, tokens: &mut [Token]) {
         if self.entries.is_empty() {
             return;
         }
-        for t in tokens.iter_mut() {
-            if !t.accent_phrases.is_empty() || t.reading.is_empty() {
+        for i in 0..tokens.len() {
+            if !tokens[i].accent_phrases.is_empty() || tokens[i].reading.is_empty() {
                 continue;
             }
-            let k = key(&t.surface, &t.reading);
-            if let Ok(i) = self.entries.binary_search_by(|e| (*e.0).cmp(k.as_str())) {
-                let (_, accent, mora) = self.entries[i];
-                t.accent_phrases = vec![AccentPhrase {
-                    reading: crate::kana::hira_to_kata(&t.reading),
-                    mora,
-                    accent: Some(accent),
-                    estimated: false,
-                }];
+            let next = tokens.get(i + 1).map_or("", |n| n.surface.as_str());
+            let reading = crate::kana::hira_to_kata(&tokens[i].reading);
+            let (accent, mora, estimated) =
+                if let Some((a, m)) = self.conjugated(&tokens[i].surface, &reading, next) {
+                    (a, m, true)
+                } else if let Some((a, m)) = self.get(&tokens[i].surface, &tokens[i].reading) {
+                    (a, m, false)
+                } else {
+                    continue;
+                };
+            tokens[i].accent_phrases = vec![AccentPhrase {
+                reading,
+                mora,
+                accent: Some(accent),
+                estimated,
+            }];
+        }
+    }
+
+    /// 動詞の活用途中の accent (東京式の規則、 推定扱い)。 2026-09-27
+    ///
+    /// - 後ろが た / て / だ / で (過去・て形): 平板動詞は平板のまま。 起伏式は 一段 = 辞書形の核を 1 つ前へ
+    ///   (タベ'ル → タ'ベタ / オキ'ル → オ'キテ)、 五段 = 核の位置そのまま (ハナ'ス → ハナ'シタ / カ'ク → カ'イタ)
+    /// - 後ろが ない (否定): 平板動詞は平板のまま、 起伏式は ない の直前に核 (タベ'ナイ / カカ'ナイ)
+    ///
+    /// 辞書形は表から引く (一段 = 語幹 + ル、 五段 = 語尾の段を u 段に戻す)。 引けなければ `None`
+    fn conjugated(&self, surface: &str, reading: &str, next: &str) -> Option<(u8, u8)> {
+        let past = ["た", "て", "だ", "で"].iter().any(|p| next.starts_with(p));
+        let neg = next.starts_with("な") && !next.starts_with("なら");
+        if !(past || neg) {
+            return None;
+        }
+        let last = surface.chars().next_back()?;
+        let stem = surface.strip_suffix(last)?;
+        if stem.is_empty() || !stem.chars().any(crate::kana::is_kanji_char) {
+            // 見 / 寝 のような送り仮名の無い一段 (surface 全体が語幹)
+            if !crate::kana::is_kanji_char(last) {
+                return None;
             }
         }
+        let mora = u8::try_from(count_mora(reading)).ok()?;
+        let r_last = reading.chars().next_back()?;
+        let r_stem = reading.strip_suffix(r_last)?;
+        // (辞書形の表記, 読み, 一段か) の候補
+        let mut cands: Vec<(String, String, bool)> = Vec::new();
+        if crate::kana::is_kanji_char(last) || is_ie_row(r_last) {
+            // 一段: 食べ / 起き / 見 + る
+            cands.push((format!("{surface}る"), format!("{reading}ル"), true));
+        }
+        if !crate::kana::is_kanji_char(last) {
+            let godan_endings: &[char] = match (past, r_last) {
+                (true, 'ッ') => &['ル', 'ツ', 'ウ'],
+                (true, 'イ') => &['ク', 'グ'],
+                (true, 'ン') => &['ム', 'ブ', 'ヌ'],
+                (true, 'シ') => &['ス'],
+                (false, c) => a_to_u(c),
+                _ => &[],
+            };
+            for &u in godan_endings {
+                let hira_u = crate::kana::kata_to_hira(&u.to_string());
+                cands.push((format!("{stem}{hira_u}"), format!("{r_stem}{u}"), false));
+            }
+        }
+        let mut found: Option<(u8, bool)> = None;
+        for (s, r, ichidan) in &cands {
+            if let Some((a, _)) = self.get(s, r) {
+                if found.is_some_and(|(fa, fi)| fa != a || fi != *ichidan) {
+                    return None; // 候補が割れる (帰る / 返る 等) = 決めない
+                }
+                found = Some((a, *ichidan));
+            }
+        }
+        let (base, ichidan) = found?;
+        if base == 0 {
+            return Some((0, mora));
+        }
+        let accent = if neg {
+            mora
+        } else if ichidan {
+            base.saturating_sub(1).max(1)
+        } else {
+            base
+        };
+        (accent <= mora).then_some((accent, mora))
+    }
+}
+
+/// モーラ数 (小書きの ャュョァィゥェォ は前に含める)
+fn count_mora(kata: &str) -> usize {
+    kata.chars()
+        .filter(|c| !matches!(c, 'ャ' | 'ュ' | 'ョ' | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ'))
+        .count()
+}
+
+/// イ段・エ段 (一段動詞の語幹末)
+fn is_ie_row(c: char) -> bool {
+    "イキギシジチヂニヒビピミリエケゲセゼテデネヘベペメレ".contains(c)
+}
+
+/// 五段の未然形 (ア段) → 終止形 (ウ段) の候補
+fn a_to_u(c: char) -> &'static [char] {
+    match c {
+        'カ' => &['ク'],
+        'ガ' => &['グ'],
+        'サ' => &['ス'],
+        'タ' => &['ツ'],
+        'ナ' => &['ヌ'],
+        'バ' => &['ブ'],
+        'マ' => &['ム'],
+        'ラ' => &['ル'],
+        'ワ' => &['ウ'],
+        _ => &[],
     }
 }
 
@@ -202,6 +312,40 @@ mod tests {
         assert_eq!(ts[1].accent_phrases[0].accent, Some(1));
         assert!(ts[2].accent_phrases.is_empty(), "読みが違えば付けない");
         assert!(ts[3].accent_phrases.is_empty(), "表に無い語は付けない");
+    }
+
+    #[test]
+    fn conjugated_verb_accent_from_dictionary_form() {
+        let lx = lexicon(
+            "[meta]
+role = \"accent\"
+[entries]
+\"食べる\" = \"[タベ]ル\"
+\"話す\" = \"[ハナ]ス\"
+\"書く\" = \"[カ]ク\"
+\"遊ぶ\" = \"[アソブ\"
+",
+        );
+        let mut ts = vec![
+            token("食べ", "たべ"),
+            token("た", "た"),
+            token("話し", "はなし"),
+            token("た", "た"),
+            token("書か", "かか"),
+            token("ない", "ない"),
+            token("遊ん", "あそん"),
+            token("だ", "だ"),
+            token("食べ", "たべ"),
+            token("ない", "ない"),
+        ];
+        lx.fill(&mut ts);
+        let acc = |i: usize| ts[i].accent_phrases.first().and_then(|p| p.accent);
+        assert_eq!(acc(0), Some(1), "一段 た形 = 核が 1 つ前 (タ'ベタ)");
+        assert_eq!(acc(2), Some(2), "五段 た形 = 核そのまま (ハナ'シタ)");
+        assert_eq!(acc(4), Some(2), "ない形 = ない の直前 (カカ'ナイ)");
+        assert_eq!(acc(6), Some(0), "平板動詞は平板のまま");
+        assert_eq!(acc(8), Some(2), "タベ'ナイ");
+        assert!(ts[0].accent_phrases[0].estimated, "規則由来は推定扱い");
     }
 
     #[test]
