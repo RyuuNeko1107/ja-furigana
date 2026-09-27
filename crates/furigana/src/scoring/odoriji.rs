@@ -101,7 +101,23 @@ pub fn apply_rendaku_inplace(tokens: &mut [Token]) {
             if prev_reading.is_empty() {
                 continue;
             }
-            tokens[i].reading = voice_first_kana(&prev_reading).unwrap_or(prev_reading);
+            // 音読みの畳語は連濁しない: 早々 = そうそう / 再々 = さいさい / 先々 = せんせん
+            // (到着早々 が そうぞう になっていた、 2026-09-27)。 訓読みは従来どおり 人々 = ひとびと / 島々 = しまじま。
+            // 音読みと判定するのは 「漢字 1 字の token で、 読みがカタカナかつ ン/ウ/イ/ー で終わる」 時だけ
+            // (dict の表記規約では音 = カタカナ・訓 = ひらがな だが、 利用者辞書や形態素解析由来は訓もカタカナなので
+            // カミ / ヒト 型は訓として濁らせる。 部屋々々 = へやべや のような 2 字語も従来どおり)。
+            // 音読みでも濁る慣用 (散々 / 精々) だけ例外
+            let on_yomi = tokens[i - 1].surface.chars().count() == 1
+                && prev_reading
+                    .chars()
+                    .all(|c| ('ァ'..='ヺ').contains(&c) || c == 'ー')
+                && prev_reading.ends_with(['ン', 'ウ', 'イ', 'ー']);
+            let voiced_on = matches!(tokens[i - 1].surface.as_str(), "散" | "精");
+            tokens[i].reading = if on_yomi && !voiced_on {
+                prev_reading
+            } else {
+                voice_first_kana(&prev_reading).unwrap_or(prev_reading)
+            };
         }
     }
 }
@@ -186,6 +202,34 @@ mod tests {
         let mut tokens = vec![token("神", "カミ", 0..3), token("々", "々", 3..6)];
         apply_rendaku_inplace(&mut tokens);
         assert_eq!(tokens[1].reading, "ガミ");
+    }
+
+    #[test]
+    fn on_yomi_repetition_is_not_voiced() {
+        // 早々 = ソウソウ / 再々 = サイサイ / 先々 = センセン (音読みの畳語は連濁しない)
+        for (k, r) in [("早", "ソウ"), ("再", "サイ"), ("先", "セン")] {
+            let mut tokens = vec![token(k, r, 0..3), token("々", "々", 3..6)];
+            apply_rendaku_inplace(&mut tokens);
+            assert_eq!(tokens[1].reading, r, "{k}々");
+        }
+    }
+
+    #[test]
+    fn voiced_on_yomi_exceptions() {
+        // 散々 = サンザン / 精々 = セイゼイ は音読みでも濁る
+        for (k, r, v) in [("散", "サン", "ザン"), ("精", "セイ", "ゼイ")] {
+            let mut tokens = vec![token(k, r, 0..3), token("々", "々", 3..6)];
+            apply_rendaku_inplace(&mut tokens);
+            assert_eq!(tokens[1].reading, v, "{k}々");
+        }
+    }
+
+    #[test]
+    fn two_char_word_repetition_keeps_rendaku() {
+        // 部屋々々 = ヘヤベヤ: 形態素解析由来の 2 字語はカタカナでも従来どおり濁らせる
+        let mut tokens = vec![token("部屋", "ヘヤ", 0..6), token("々", "々", 6..9)];
+        apply_rendaku_inplace(&mut tokens);
+        assert_eq!(tokens[1].reading, "ベヤ");
     }
 
     #[test]
