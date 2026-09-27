@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-27
+
 ### Added
 
 - **動詞の活用途中のアクセントを辞書形から規則で決める** (食べ + た = タ'ベタ / 話し + た = ハナ'シタ / 書か + ない = カカ'ナイ /
@@ -1752,7 +1754,8 @@ ja-furigana-dict 側で `core/works/game/touhou.toml`、`core/works/anime/<title
      で yank、 alpha.1 / alpha.2 は yank 済み (rename 前 crate name)。
      ─────────────────────────────────────────────────────────────────── -->
 
-[Unreleased]: https://github.com/RyuuNeko1107/ja-furigana/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/RyuuNeko1107/ja-furigana/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.5.1
 [0.5.0]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.5.0
 [0.4.7]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.7
 [0.4.6]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.4.6
