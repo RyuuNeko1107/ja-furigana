@@ -717,6 +717,11 @@ impl NumberCandidateProvider {
             let m_end = caps.get(0).unwrap().end();
             let num = caps.get(1).unwrap().as_str();
             let base = caps.get(2).unwrap().as_str();
+            // 万 / 億 / 兆 から始まる数は 「一万」 ではなく前の語 (数万件 / 何万円 / 3桁万円) の一部なので counter にしない
+            // (数万件 = すういちまんけん になっていた、 2026-09-27)。 大数の読みは 万 / 億 の漢字側に任せる
+            if num.starts_with(['万', '億', '兆']) {
+                return;
+            }
             let counter = if let Some(rec) = caps.get(3) {
                 // recursive 形 (「目」) は常に採用
                 format!("{base}{}", rec.as_str())

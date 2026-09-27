@@ -813,3 +813,10 @@ fn bare_kanji_number_skips_counter_approx_and_words() {
     assert!(find(&p.candidates_vec(&ctx("八九と"), 0), "八九").is_none());
     assert!(find(&p.candidates_vec(&ctx("万一の"), 0), "万一").is_none());
 }
+
+#[test]
+fn counter_kanji_does_not_start_with_large_unit() {
+    // 数万件 / 何万件 の 万件 を 「一万件」 と読まない (万 / 億 / 兆 始まりは前の語の一部)
+    let p = provider();
+    assert!(find(&p.candidates_vec(&ctx("万件"), 0), "万件").is_none());
+}
