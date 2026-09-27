@@ -441,6 +441,32 @@ impl NumberCandidateProvider {
     /// section 5: 数値 + SI 単位。
     fn try_si_unit(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(re) = &self.si_unit_re else { return };
+        // 数字と記号始まりの単位の間の半角空白 1 つ (Wikipedia 表記の 「50 °C」) は詰めて照合する。
+        // 英字の単位 (in / m) は英文 (Top 5 in) を巻き込むので空白を許さない。
+        let spaced = DIGIT_RE
+            .find(rest)
+            .filter(|m| m.start() == 0)
+            .and_then(|m| {
+                let after = rest.get(m.end()..)?.strip_prefix(' ')?;
+                after
+                    .chars()
+                    .next()
+                    // % は助数詞側 (促音の規則付き) で読むので対象外
+                    .is_some_and(|c| {
+                        !c.is_alphanumeric() && !c.is_whitespace() && !matches!(c, '%' | '％' | '‰')
+                    })
+                    .then(|| (m.end(), format!("{}{}", m.as_str(), after)))
+            });
+        if let Some((num_end, joined)) = spaced {
+            if let Some(caps) = at_start(re, &joined) {
+                let num = caps.get(1).unwrap().as_str();
+                let unit = caps.get(2).unwrap().as_str();
+                if caps.get(1).unwrap().end() == num_end && self.units.lookup(unit).is_some() {
+                    let m_end = caps.get(0).unwrap().end() + 1; // 詰めた空白 1 つ分を戻す
+                    out.push(self.make(input, pos, m_end, si_unit_reading(num, unit, &self.units)));
+                }
+            }
+        }
         if let Some(caps) = at_start(re, rest) {
             let m_end = caps.get(0).unwrap().end();
             let num = caps.get(1).unwrap().as_str();

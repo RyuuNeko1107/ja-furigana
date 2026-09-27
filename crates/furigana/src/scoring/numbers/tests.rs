@@ -763,3 +763,25 @@ fn kanji_enumeration_is_not_decimal() {
     let input = "二一・五〇";
     assert!(find(&p.candidates_vec(&ctx(input), "二".len()), "一・五〇").is_none());
 }
+
+#[test]
+fn si_unit_allows_space_before_symbol_unit() {
+    // 「50 °C」 (数字と記号始まりの単位の間の空白 1 つ) も単位として読む。 英字の単位は空白越しに取らない (Top 5 in)
+    let mut r = rules();
+    for (k, v) in [("°C", "ド"), ("in", "インチ")] {
+        r.units.entries.insert(
+            k.to_string(),
+            crate::rules::UnitEntry {
+                kana: v.to_string(),
+                ci: true,
+            },
+        );
+    }
+    let p = NumberCandidateProvider::new(&r);
+    let c = p.candidates_vec(&ctx("50 °Cを"), 0);
+    assert_eq!(
+        find(&c, "50 °C").expect("spaced unit").reading,
+        "ゴジュウド"
+    );
+    assert!(find(&p.candidates_vec(&ctx("5 in"), 0), "5 in").is_none());
+}
