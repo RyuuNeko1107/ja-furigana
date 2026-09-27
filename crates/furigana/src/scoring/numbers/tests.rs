@@ -677,3 +677,20 @@ fn counter_rule_default_keeps_scale_trailing_on() {
     assert!(crate::rules::CounterRule::default().scale_trailing);
     assert!(crate::rules::CounterRule::default().not_before.is_empty());
 }
+
+#[test]
+fn repeated_plus_covers_the_run() {
+    // Lindera が 「++」 を 1 token にまとめても素通しにならないよう、 列全体の候補を出す (C++ / g++)
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("C++と"), 1);
+    let c = find(&cands, "++").expect("run candidate");
+    assert_eq!(c.reading, "プラスプラス");
+}
+
+#[test]
+fn repeated_slash_is_not_merged() {
+    // 「///」 (照れ表現) / 「//」 (コメント記号) はまとめない
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("いいね///"), "いいね".len());
+    assert!(find(&cands, "///").is_none(), "{cands:?}");
+}

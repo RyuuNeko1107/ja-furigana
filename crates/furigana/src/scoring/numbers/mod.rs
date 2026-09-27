@@ -599,6 +599,18 @@ impl NumberCandidateProvider {
             };
             out.push(self.make(input, pos, ch.len_utf8(), final_read.clone()));
 
+            // 同じ記号が続く場合 (C++ / g++ の 「++」)、 列全体を覆う候補も出す。 Lindera は 「++」 を
+            // 1 つの未知語 token (reading = surface) にまとめるので、 1 文字ずつの候補では edge 数で負けて
+            // 「C++と」 が 「++」 のまま素通しになっていた (「C++で」 だけ分かれ方が違って読めていた、 2026-09-27)。
+            // 対象は + だけ: 「///」 は配信コメントの照れ表現 / 「//」 はコメント記号で、 読み上げると
+            // すらっしゅ の連呼になる (実コーパス A/B で確認)。 - / 〜 は文脈で読みが変わる兼用記号
+            if matches!(ch, '+' | '＋') && !final_read.is_empty() {
+                let run = rest.chars().take_while(|&c| c == ch).count();
+                if run > 1 {
+                    out.push(self.make(input, pos, ch.len_utf8() * run, final_read.repeat(run)));
+                }
+            }
+
             // 記号の直後に句読点が続く場合、 **記号 + 句読点** を覆う候補も出す。
             //
             // Lindera は 「%。」 のような列を 1 つの未知語 token (band 50、 reading = surface)
