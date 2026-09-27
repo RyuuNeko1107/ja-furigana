@@ -785,3 +785,31 @@ fn si_unit_allows_space_before_symbol_unit() {
     );
     assert!(find(&p.candidates_vec(&ctx("5 in"), 0), "5 in").is_none());
 }
+
+// ─── 助数詞の付かない漢数字の列 (★2026-09-27) ───
+
+#[test]
+fn bare_kanji_number_reads_as_number() {
+    let p = provider();
+    let c = p.candidates_vec(&ctx("七百七十三です"), 0);
+    assert_eq!(
+        find(&c, "七百七十三").expect("bare number").reading,
+        "ナナヒャクナナジュウサン"
+    );
+    let c = p.candidates_vec(&ctx("二〇二五に"), 0);
+    assert_eq!(
+        find(&c, "二〇二五").expect("positional").reading,
+        "ニセンニジュウゴ"
+    );
+}
+
+#[test]
+fn bare_kanji_number_skips_counter_approx_and_words() {
+    let p = provider();
+    // 直後が漢字 (助数詞) は既存の読みに任せる
+    assert!(find(&p.candidates_vec(&ctx("十一項"), 0), "十一").is_none());
+    // 概数 (三十七八) / 位の字も 〇 も無い 2 桁 (八九) / 万 始まり (万一) は出さない
+    assert!(find(&p.candidates_vec(&ctx("三十七八、"), 0), "三十七八").is_none());
+    assert!(find(&p.candidates_vec(&ctx("八九と"), 0), "八九").is_none());
+    assert!(find(&p.candidates_vec(&ctx("万一の"), 0), "万一").is_none());
+}

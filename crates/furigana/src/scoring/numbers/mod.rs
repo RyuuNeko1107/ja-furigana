@@ -508,6 +508,75 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// 助数詞の付かない漢数字の列 (七百七十三 / 千七百 / 百九億)。 2026-09-27
+    ///
+    /// 従来は 1 字ずつ dict の漢字規則で読まれ、 助数詞向けの促音規則が数の中に当たっていた
+    /// (七百 = しっぴゃく / 百九 = ひゃっきゅう / 七千 = しちせん)。 数として読む候補を出す。
+    /// 対象は 2 字以上で、 位の字 (十百千万億) を含むか 〇 を含む位取り 3 桁以上のもの。
+    /// 先頭が 万 / 億 (万一)、 数字が 2 つ続く概数 (三十七八 / 八九)、 漢数字の列の途中、
+    /// 直後が漢字 (助数詞: 十一兆 / 十二月 / 第十一項 は既存の促音・特殊読みに任せる) の時は出さない
+    fn try_kanji_bare_number(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        const DIGITS: &str = "〇一二三四五六七八九";
+        const UNITS: &str = "十百千万億";
+        let run: String = rest
+            .chars()
+            .take_while(|&c| DIGITS.contains(c) || UNITS.contains(c))
+            .collect();
+        let chars: Vec<char> = run.chars().collect();
+        if chars.len() < 2 || matches!(chars[0], '万' | '億') {
+            return;
+        }
+        // 数の形をした慣用語は形態素解析の読みに任せる (八百万 = やおよろず)
+        if matches!(run.as_str(), "八百万") {
+            return;
+        }
+        if input[..pos]
+            .chars()
+            .next_back()
+            .is_some_and(|c| DIGITS.contains(c) || UNITS.contains(c))
+        {
+            return;
+        }
+        let has_unit = chars.iter().any(|&c| UNITS.contains(c));
+        let positional = !has_unit && chars.len() >= 3 && chars.contains(&'〇');
+        if !(has_unit || positional) {
+            return;
+        }
+        let consecutive_digits = chars.windows(2).any(|w| {
+            w[0] != '〇' && w[1] != '〇' && DIGITS.contains(w[0]) && DIGITS.contains(w[1])
+        });
+        if has_unit && consecutive_digits {
+            return;
+        }
+        // 同じ位置からもっと長い候補 (助数詞付き: 十一兆 / 十二月 / 三十八分 / 辞書の 八百屋) が既にあれば出さない。
+        // 数だけの候補が 助数詞の促音・特殊読み (じゅういっちょう / じゅうにがつ) に勝ってしまうため
+        if out
+            .iter()
+            .any(|c| c.range.start == pos && c.range.end >= pos + run.len())
+        {
+            return;
+        }
+        // 直後が漢字なら助数詞 (年 / 兆 / 項 / 号 …) として既存の読み (促音・特殊読み: じゅういっちょう /
+        // じゅうにがつ / じゅういっこう) に任せる。 後ろがかな・カタカナ・記号・行末の数だけを対象にする
+        if rest[run.len()..]
+            .chars()
+            .next()
+            .is_some_and(crate::kana::is_kanji_char)
+        {
+            return;
+        }
+        let Some(arabic) = crate::numbers::helpers::kansuji_to_arabic(&run) else {
+            return;
+        };
+        out.push(self.make(input, pos, run.len(), number_to_katakana(&arabic)));
+    }
+
     /// 位取りの漢数字の小数 (一・〇〇七 = イチテンゼロゼロナナ / 〇・五〇 = ゼロテンゴゼロ)。
     /// 漢数字の列の途中 (直前が漢数字 / ・) からは出さない。 2026-09-27
     fn try_kanji_decimal(
@@ -814,6 +883,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_counter(input, pos, rest, out);
         self.try_counter_kanji_grouped(input, pos, rest, out);
         self.try_counter_kanji(input, pos, rest, out);
+        self.try_kanji_bare_number(input, pos, rest, out);
         self.emit_symbol(input, pos, rest, out);
         self.try_digit(input, pos, rest, out);
     }
