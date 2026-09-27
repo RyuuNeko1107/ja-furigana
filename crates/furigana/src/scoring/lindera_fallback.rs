@@ -167,6 +167,9 @@ impl LinderaFallbackProvider {
         // 直前の語が連濁を起こさない境界か (文頭 / 空白・記号 / 助詞 / 接頭詞 お・ご /
         // ひらがなで終わる未知語 = 「ぺこらの」 「ぺこちゃんお」 のような読み無し token)
         let mut prev_is_boundary = true;
+        // 上のうち、 閉じ括弧とひらがなの未知語を除いた強い境界。 通り / 沿い 等は閉じ括弧や未知語の後ろだと
+        // 名詞の続き (「TODO.md」通り / 国道４１号）沿い / やちむん通り) なので、 強い境界の直後だけ清音に戻す
+        let mut prev_is_strong_boundary = true;
         for ((tok, next_attaches), ni_motion) in
             tokens.into_iter().zip(attaches_next).zip(next_ni_motion)
         {
@@ -188,6 +191,7 @@ impl LinderaFallbackProvider {
                 }
                 byte_pos = gap_end;
                 prev_is_boundary = true;
+                prev_is_strong_boundary = true;
             }
             let end = byte_pos + surface_len;
             // reading: Lindera details[7] (= カタカナ)、 無ければ surface fallback
@@ -205,7 +209,9 @@ impl LinderaFallbackProvider {
                         is_real_cjk_ideograph(c) || matches!(c, 'お' | 'ご' | '御')
                     }),
             };
+            // 代名詞 (これ帰り / それ使い) の後ろでも複合語の連濁は起きない (2026-09-27)
             let this_is_boundary = tok.is_particle
+                || tok.is_pronoun
                 || (tok.is_prefix && matches!(tok.surface.as_str(), "お" | "ご" | "御"))
                 || tok.surface.chars().all(is_rendaku_boundary_symbol)
                 || (tok.reading.is_none()
@@ -213,19 +219,36 @@ impl LinderaFallbackProvider {
                         crate::kana::is_hiragana_char(c)
                             && !matches!(c, 'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ' | 'っ')
                     }));
+            let this_is_strong_boundary = tok.is_particle
+                || tok.is_pronoun
+                || (tok.is_prefix && matches!(tok.surface.as_str(), "お" | "ご" | "御"))
+                || (tok.surface.chars().all(is_rendaku_boundary_symbol)
+                    && !tok
+                        .surface
+                        .chars()
+                        .next_back()
+                        .is_some_and(is_closing_symbol));
             let mut reading = tok.reading.unwrap_or_else(|| tok.surface.clone());
             // IPADIC は 疲れ=ヅカレ / 使い=ヅカイ / 書き=ガキ 等の連濁形を 名詞-接尾 として持ち、
             // 文頭や助詞の直後 (書きはムリ / ぺこらの勝ち / お疲れ) にも付けてしまう。
             // 連濁は前に語がある時だけ起きるので、 境界の直後と 「に + 移動動詞」 の前では清音に戻す
+            // 通り / 帰り 等は名詞の後ろで濁るのが普通なので 「に + 移動動詞」 の判定からは外すが、
+            // 境界の直後 (文頭 / 助詞 / 代名詞 = これ帰り) では他の語と同じく清音に戻す (2026-09-27)
+            let after_boundary = if is_okurigana_form_voiced_after_noun_excluded(&tok.surface) {
+                prev_is_boundary
+            } else {
+                prev_is_strong_boundary
+            };
             if tok.is_noun_suffix
-                && (prev_is_boundary || ni_motion)
-                && is_okurigana_form(&tok.surface)
+                && ((after_boundary && is_okurigana_form(&tok.surface))
+                    || (ni_motion && is_okurigana_form_voiced_after_noun_excluded(&tok.surface)))
             {
                 if let Some(plain) = devoice_first_kana(&reading) {
                     reading = plain;
                 }
             }
             prev_is_boundary = this_is_boundary;
+            prev_is_strong_boundary = this_is_strong_boundary;
             edges.push((byte_pos, end, reading, kind));
             byte_pos = end;
         }
@@ -448,9 +471,24 @@ fn is_okurigana_form(surface: &str) -> bool {
     let mut chars = surface.chars();
     chars.next().is_some_and(is_real_cjk_ideograph)
         && surface.chars().next_back().is_some_and(crate::kana::is_hiragana_char)
-        // 通り / 越し / 帰り / 攻め / 沿い / 伝い は名詞の後ろで濁るのが普通 (時間通りに行く / 年越しに / 仕事帰りに)、
         // 出し は元の読みが濁音 (出す = だす)
-        && !matches!(surface, "通り" | "越し" | "帰り" | "攻め" | "沿い" | "伝い" | "出し")
+        && surface != "出し"
+}
+
+/// [`is_okurigana_form`] のうち、 「に + 移動動詞」 の前で清音に戻してよいもの。
+/// 通り / 越し / 帰り / 攻め / 沿い / 伝い は名詞の後ろで濁るのが普通なので除く
+/// (時間通りに行く / 年越しに / 仕事帰りに寄る)
+fn is_okurigana_form_voiced_after_noun_excluded(surface: &str) -> bool {
+    is_okurigana_form(surface)
+        && !matches!(surface, "通り" | "越し" | "帰り" | "攻め" | "沿い" | "伝い")
+}
+
+/// 閉じ括弧・閉じ引用符 (この直後は直前の語句の続きになりやすい)
+fn is_closing_symbol(c: char) -> bool {
+    matches!(
+        c,
+        ')' | '）' | '」' | '』' | '】' | ']' | '］' | '〉' | '》' | '〕' | '"' | '”' | '’'
+    )
 }
 
 /// 連濁の境界になる記号 (句読点 / 括弧 / 空白 / 絵文字の区切り)。 `%` や数字の後ろは
@@ -558,6 +596,16 @@ mod tests {
         assert_eq!(edge_reading(&a, "ぺこらの勝ちだ", "勝ち"), "カチ");
         assert_eq!(edge_reading(&a, "ぺこちゃんお疲れ様", "疲れ"), "ツカレ");
         assert_eq!(edge_reading(&a, ":_勝ち猫:", "勝ち"), "カチ");
+        // 代名詞の後ろも境界 (これ帰り / それ使い)。 名詞の後ろは濁ったまま (仕事帰り)
+        assert_eq!(edge_reading(&a, "これ帰りもある", "帰り"), "カエリ");
+        assert_eq!(edge_reading(&a, "それ使いやすい", "使い"), "ツカイ");
+        assert_eq!(edge_reading(&a, "仕事帰り", "帰り"), "ガエリ");
+        // 通り / 沿い は閉じ括弧・未知語の後ろでは名詞の続き
+        assert_eq!(
+            edge_reading(&a, "「TODO.md」通りに作って", "通り"),
+            "ドオリ"
+        );
+        assert_eq!(edge_reading(&a, "国道４１号）沿いの", "沿い"), "ゾイ");
     }
 
     /// 「X食いに行く / 刺しにきてる」 は動詞の連用形 (目的) なので清音。
@@ -593,7 +641,10 @@ mod tests {
     fn okurigana_form_excludes_single_kanji_and_listed_words() {
         assert!(is_okurigana_form("疲れ"));
         assert!(!is_okurigana_form("代"));
-        assert!(!is_okurigana_form("通り"));
+        // 通り 等は境界の直後なら清音に戻す対象、 「に + 移動動詞」 の前では対象外
+        assert!(is_okurigana_form("通り"));
+        assert!(!is_okurigana_form_voiced_after_noun_excluded("通り"));
+        assert!(is_okurigana_form_voiced_after_noun_excluded("疲れ"));
         assert!(!is_okurigana_form("出し"));
         assert!(!is_okurigana_form("ツカレ"));
     }
