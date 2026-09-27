@@ -62,6 +62,12 @@ pub(crate) fn kansuji_to_arabic(s: &str) -> Option<String> {
     if chars.is_empty() {
         return None;
     }
+    // 2026-09-27: 万 / 億 / 兆 で区切った各部分が 〇〜九 だけの位取り表記 (三億四一〇二万三六四〇 /
+    // 四一万八二五七 / 一二三八億五九〇〇万) は、 部分ごとに位取りで読んで大数を掛ける。 法令・判決の金額表記。
+    // 十 / 百 / 千 を含むものは従来の additive、 2 桁で連続する概数 (二三万) は対象外
+    if let Some(v) = sectioned_positional(&chars) {
+        return Some(v);
+    }
     let has_unit = chars
         .iter()
         .any(|&c| matches!(c, '十' | '百' | '千' | '万' | '億'));
@@ -129,6 +135,53 @@ pub(crate) fn kansuji_to_arabic(s: &str) -> Option<String> {
     }
     let result = total.checked_add(section)?.checked_add(current)?;
     Some(result.to_string())
+}
+
+/// [`kansuji_to_arabic`] の 「大数で区切った位取り」 分岐。 当たらなければ `None`
+fn sectioned_positional(chars: &[char]) -> Option<String> {
+    if !chars.iter().any(|&c| matches!(c, '万' | '億' | '兆'))
+        || chars.iter().any(|&c| matches!(c, '十' | '百' | '千'))
+    {
+        return None;
+    }
+    let mut total: u128 = 0;
+    let mut digits = String::new();
+    let mut last_unit: u128 = u128::MAX;
+    for &c in chars {
+        let unit: u128 = match c {
+            '万' => 10_000,
+            '億' => 100_000_000,
+            '兆' => 1_000_000_000_000,
+            '〇' | '零' => {
+                digits.push('0');
+                continue;
+            }
+            _ => {
+                digits.push(char::from(b'0' + digit_of_kansuji(c)?));
+                continue;
+            }
+        };
+        // 大数は大きい順に 1 回ずつ、 各部分は 1〜4 桁 (五億万 のような並びは解さない)
+        if unit >= last_unit || digits.is_empty() || digits.len() > 4 || is_approx_pair(&digits) {
+            return None;
+        }
+        total = total.checked_add(digits.parse::<u128>().ok()?.checked_mul(unit)?)?;
+        digits.clear();
+        last_unit = unit;
+    }
+    if digits.len() > 4 || is_approx_pair(&digits) {
+        return None;
+    }
+    if !digits.is_empty() {
+        total = total.checked_add(digits.parse::<u128>().ok()?)?;
+    }
+    Some(total.to_string())
+}
+
+/// 2 桁で連続する数字 (二三 / 四五 = 概数)
+fn is_approx_pair(digits: &str) -> bool {
+    let b = digits.as_bytes();
+    b.len() == 2 && b[1] == b[0] + 1 && b[0] != b'0'
 }
 
 /// 漢数字 1 文字 (一〜九) → 1〜9 の int。
@@ -330,5 +383,31 @@ mod tests {
         assert_eq!(sokuonize_last("ハチ"), "ハッ");
         assert_eq!(sokuonize_last("ジュウ"), "ジュッ");
         assert_eq!(sokuonize_last("ニ"), "ニ");
+    }
+
+    #[test]
+    fn kansuji_sectioned_positional() {
+        // 大数で区切った各部分が位取り (法令・判決の金額表記)
+        assert_eq!(
+            kansuji_to_arabic("三億四一〇二万三六四〇").as_deref(),
+            Some("341023640")
+        );
+        assert_eq!(
+            kansuji_to_arabic("四一万八二五七").as_deref(),
+            Some("418257")
+        );
+        assert_eq!(
+            kansuji_to_arabic("一二三八億五九〇〇万").as_deref(),
+            Some("123859000000")
+        );
+        assert_eq!(
+            kansuji_to_arabic("一兆二〇〇〇億").as_deref(),
+            Some("1200000000000")
+        );
+        // 従来どおり: additive / 概数 / 並びの崩れた大数
+        assert_eq!(kansuji_to_arabic("三万").as_deref(), Some("30000"));
+        assert_eq!(kansuji_to_arabic("千二百万").as_deref(), Some("12000000"));
+        assert_ne!(kansuji_to_arabic("二三万").as_deref(), Some("230000"));
+        assert!(sectioned_positional(&"五億万".chars().collect::<Vec<_>>()).is_none());
     }
 }
