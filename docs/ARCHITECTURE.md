@@ -117,10 +117,17 @@ let f = Furigana::builder()
     .overrides_file("/path/to/data/overrides.toml")  // 複数追加可
     .add_entry("追加語", "ツイカゴ")      // 最優先
     .estimate_accent(true)                // (option) to_accent で rule-based accent 推定
+    .accent_lexicon(false)                // (option) アクセント専用の表を読まない (default on、 0.5.1+)
+    .exclude_dict_path("works")           // (option) 分野の辞書を外す、 複数可 (0.5.1+)
     .build()?;
 ```
 
 accent (0.2.0+): `f.to_accent(text)` が `AccentResult` (token ごとの読み + `AccentPhrase`) を返す。
+accent の決め方は ① dict の bracket 記法 → ② dict のアクセント専用の表 (`[meta] role = "accent"` の TOML、
+表記 + 読みが一致する token に付ける。 動詞の た形 / ない形 と形容詞の過去形 / く形 は辞書形の値から規則で推定) →
+③ `estimate_accent` の rule-based 推定、 の順。 ② ③ 由来の句は `"estimated": true` (② の表そのままの値は false)。
+`exclude_dict_path` は core dict dir からの相対 path (dir なら配下全部) で、 読み / 外来語 / 異体字 / アクセント表の全部に効く
+(rules_dir と overrides file には効かない)。
 engine 固有の記号列は adapter crate (`ja_furigana_voicevox::to_aques_kana` /
 `ja_furigana_aquestalk::to_aquestalk`) で変換する。
 

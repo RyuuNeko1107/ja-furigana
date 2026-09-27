@@ -12,6 +12,8 @@ furigana serve                                 # 127.0.0.1:8000
 furigana serve --bind 0.0.0.0:8000             # 外部からも叩く
 FURIGANA_TOKEN=<secret> furigana serve         # 認証有効
 furigana serve --estimate-accent               # accent 系 mode で rule-based accent 推定を有効化
+furigana serve --exclude-dict works            # 分野の辞書 (作品名など) を外す、 複数回指定可 (0.5.1+)
+furigana serve --no-accent-lexicon             # アクセント専用の表を読まない (読みだけ使う時の節約、 0.5.1+)
 ```
 
 `--estimate-accent` は `mode=accent` / `voicevox-aques` / `aquestalk` で、 dict bracket を持たない

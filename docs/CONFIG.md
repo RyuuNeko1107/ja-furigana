@@ -114,6 +114,8 @@ furigana --data-dir /var/lib/furigana \
 | `serve --bind <addr>` | listen address を上書き | (なし) |
 | `serve --token <t>` | 一般 token を 1 件追加 | `FURIGANA_TOKEN` |
 | `serve --auto-pull` | 起動時に GitHub Releases から最新辞書を取得 (alpha.5+) | (なし) |
+| `serve` / `lookup` `--exclude-dict <path>` | dict のこの相対 path (dir なら配下全部) を読まない。 複数回指定可、 serve は reload 後も維持 (0.5.1+) | (なし) |
+| `serve` / `lookup` `--no-accent-lexicon` | dict のアクセント専用の表 (`role = "accent"`) を読まない。 読み出力は変わらず、 読み込み時間と常駐メモリを節約 (0.5.1+) | (なし) |
 
 CLI flag → env → `config.toml` → default の優先順位で評価される。
 

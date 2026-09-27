@@ -46,8 +46,10 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
 > ProtectToken (URL/Email/絵文字) / Alphabet passthrough / DictBridge (熟語 / unihan /
 > `[[kanji]]` block の match) / NumberCandidate (数字 + 助数詞 / 大数 / SI / 日付) /
 > Odoriji (踊り字 「々」 連濁) / LinderaFallback (band 50 safety net)。
-> accent は dict の bracket 記法由来 (`--mode=accent`) + opt-in の rule-based 推定
-> (`--estimate-accent`)。 TTS 記号列の共有コアは lib 側 (`furigana::accent_symbols`)。
+> accent は dict の bracket 記法由来 (`--mode=accent`) → dict のアクセント専用の表 (`role = "accent"`、
+> 0.5.1+、 動詞・形容詞の活用途中は規則で推定) → opt-in の rule-based 推定 (`--estimate-accent`) の順。
+> TTS 記号列の共有コアは lib 側 (`furigana::accent_symbols`)。
+> 用途に合わない分野の辞書は `exclude_dict_path` / `--exclude-dict` で外せる (0.5.1+)。
 >
 > 精度:
 > - [`ja-furigana-dict`](https://github.com/RyuuNeko1107/ja-furigana-dict) の回帰 corpus
