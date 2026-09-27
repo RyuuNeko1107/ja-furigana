@@ -147,6 +147,17 @@ fn sectioned_positional(chars: &[char]) -> Option<String> {
     let mut total: u128 = 0;
     let mut digits = String::new();
     let mut last_unit: u128 = u128::MAX;
+    // 概数 (二三万 = 2〜3 万) とみなすのは 2 桁の連続数字だけで数が終わる時 (六七万八九〇〇 = 67 万 8900 は位取り)
+    let whole_approx = {
+        let d: String = chars
+            .iter()
+            .filter_map(|&c| digit_of_kansuji(c).map(|d| char::from(b'0' + d)))
+            .collect();
+        d.len() == 2 && is_approx_pair(&d) && !chars.iter().any(|&c| matches!(c, '〇' | '零'))
+    };
+    if whole_approx {
+        return None;
+    }
     for &c in chars {
         let unit: u128 = match c {
             '万' => 10_000,
@@ -162,14 +173,14 @@ fn sectioned_positional(chars: &[char]) -> Option<String> {
             }
         };
         // 大数は大きい順に 1 回ずつ、 各部分は 1〜4 桁 (五億万 のような並びは解さない)
-        if unit >= last_unit || digits.is_empty() || digits.len() > 4 || is_approx_pair(&digits) {
+        if unit >= last_unit || digits.is_empty() || digits.len() > 4 {
             return None;
         }
         total = total.checked_add(digits.parse::<u128>().ok()?.checked_mul(unit)?)?;
         digits.clear();
         last_unit = unit;
     }
-    if digits.len() > 4 || is_approx_pair(&digits) {
+    if digits.len() > 4 {
         return None;
     }
     if !digits.is_empty() {
@@ -409,5 +420,10 @@ mod tests {
         assert_eq!(kansuji_to_arabic("千二百万").as_deref(), Some("12000000"));
         assert_ne!(kansuji_to_arabic("二三万").as_deref(), Some("230000"));
         assert!(sectioned_positional(&"五億万".chars().collect::<Vec<_>>()).is_none());
+        // 後ろに桁が続けば連続数字も位取り (六七万八九〇〇 = 678900)
+        assert_eq!(
+            kansuji_to_arabic("六七万八九〇〇").as_deref(),
+            Some("678900")
+        );
     }
 }

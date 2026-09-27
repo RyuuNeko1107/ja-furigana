@@ -24,7 +24,7 @@ const DATE_NUM_PAT: &str = r"(?:[0-9０-９]{1,4}|[一二三四五六七八九�
 /// 漢数字 pattern (= 末尾再帰助数詞 「N 個目」 の漢数字版用)。 `kansuji_to_arabic` が
 /// 解釈できる範囲 (一〜九十百千万億 additive + 〇零 positional)。 「一個目」 「十二回目」
 /// 「三百回目」 「一万回目」 等を catch する。
-const KANJI_NUM_PAT: &str = r"[一二三四五六七八九十百千万億〇零]{1,9}";
+const KANJI_NUM_PAT: &str = r"[一二三四五六七八九十百千万億〇零]{1,16}";
 
 pub(super) static TIME_COLON_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"([0-9０-９]{1,2})[:：]([0-9０-９]{2})(?:[:：]([0-9０-９]{2}))?")
@@ -206,7 +206,7 @@ pub(super) fn at_start<'h>(re: &Regex, hay: &'h str) -> Option<Captures<'h>> {
 }
 
 /// 読点区切りの漢数字 + 助数詞 (`一、〇〇〇円` / `三、五〇〇円` / `一二、三四五人`)。 法令・判例の金額表記。
-/// 先頭は 1〜3 桁、 読点の後ろは **ちょうど 3 桁** の位取り漢数字 (〇〜九) の繰り返し。 counter が空なら `None`
+/// 先頭は 1〜3 桁 (1 桁目は 一〜九、 2 桁目以降は 〇 も可 = 一〇、〇〇〇)、 読点の後ろは **ちょうど 3 桁** の位取り漢数字 (〇〜九) の繰り返し。 counter が空なら `None`
 pub(super) fn build_grouped_kanji_counter_regex(counters: &CountersData) -> Option<Regex> {
     let mut base: Vec<String> = counters.simple.keys().cloned().collect();
     for (key, rule) in &counters.counter {
@@ -224,7 +224,7 @@ pub(super) fn build_grouped_kanji_counter_regex(counters: &CountersData) -> Opti
         .collect::<Vec<_>>()
         .join("|");
     Some(
-        Regex::new(&format!(r"([一二三四五六七八九]{{1,3}}(?:、[〇一二三四五六七八九]{{3}})+)([万億兆])?({base_joined})"))
+        Regex::new(&format!(r"([一二三四五六七八九][〇一二三四五六七八九]{{0,2}}(?:、[〇一二三四五六七八九]{{3}})+)([万億兆千])?({base_joined})"))
             .expect("scoring grouped kanji counter regex build failed"),
     )
 }

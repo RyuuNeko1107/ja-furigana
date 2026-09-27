@@ -820,3 +820,19 @@ fn counter_kanji_does_not_start_with_large_unit() {
     let p = provider();
     assert!(find(&p.candidates_vec(&ctx("万件"), 0), "万件").is_none());
 }
+
+#[test]
+fn grouped_kanji_numeral_allows_zero_in_head_and_thousand_unit() {
+    // 先頭の 2 桁目以降の 〇 (二九〇、〇〇〇年) と、 千単位 (一〇、〇〇〇千年 = 10,000 千年) を読む
+    let p = provider();
+    let c = p.candidates_vec(&ctx("二九〇、〇〇〇年"), 0);
+    assert_eq!(
+        find(&c, "二九〇、〇〇〇年")
+            .expect("head with zero")
+            .reading,
+        "ニジュウキュウマンネン"
+    );
+    let c = p.candidates_vec(&ctx("一〇、〇〇〇千年"), 0);
+    let r = &find(&c, "一〇、〇〇〇千年").expect("thousand unit").reading;
+    assert!(r.starts_with("イチマンセン"), "{r}");
+}

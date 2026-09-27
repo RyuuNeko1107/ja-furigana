@@ -680,18 +680,28 @@ impl NumberCandidateProvider {
                 .filter_map(|c| "〇一二三四五六七八九".chars().position(|d| d == c))
                 .map(|d| char::from(b'0' + d as u8))
                 .collect();
-            if let Some(scale) = caps.get(2) {
-                num.push_str(match scale.as_str() {
+            let base = caps.get(3).unwrap().as_str();
+            if self.counter_blocked(base, &rest[m_end..]) {
+                return;
+            }
+            let scale = caps.get(2).map(|m| m.as_str());
+            if let Some(scale) = scale.filter(|s| *s != "千") {
+                num.push_str(match scale {
                     "万" => "0000",
                     "億" => "00000000",
                     _ => "000000000000",
                 });
             }
-            let base = caps.get(3).unwrap().as_str();
-            if self.counter_blocked(base, &rest[m_end..]) {
-                return;
-            }
-            let reading = self.read_counter(&num, base);
+            // 千円単位の表記 (一〇、〇〇〇千円 = 10,000 千円 = いちまんせんえん) は 数 + 「千 + 助数詞」 と読む (2026-09-27)
+            let reading = if scale == Some("千") {
+                format!(
+                    "{}{}",
+                    number_to_katakana(&num),
+                    self.read_counter("1000", base)
+                )
+            } else {
+                self.read_counter(&num, base)
+            };
             out.push(self.make(input, pos, m_end, reading));
         }
     }
@@ -720,6 +730,21 @@ impl NumberCandidateProvider {
             // 万 / 億 / 兆 から始まる数は 「一万」 ではなく前の語 (数万件 / 何万円 / 3桁万円) の一部なので counter にしない
             // (数万件 = すういちまんけん になっていた、 2026-09-27)。 大数の読みは 万 / 億 の漢字側に任せる
             if num.starts_with(['万', '億', '兆']) {
+                return;
+            }
+            // 算用数字に直せない並び (八億二七〇〇〇万 のような崩れた表記) は候補にしない。
+            // read_counter は直せないと漢数字をそのまま読みに使うので、 漢字が読みに残っていた (2026-09-27)
+            if kansuji_to_arabic(num).is_none() {
+                return;
+            }
+            // 数の途中 (一・九六億円 の 九六億円 / 一〇八六億円 の 〇八六億円) からは出さない
+            let mut before = input[..pos].chars().rev();
+            let prev = before.next();
+            let prev2 = before.next();
+            let is_digit = |c: char| "〇一二三四五六七八九十百千".contains(c);
+            if prev.is_some_and(is_digit)
+                || (matches!(prev, Some('・' | '、' | '．')) && prev2.is_some_and(is_digit))
+            {
                 return;
             }
             let counter = if let Some(rec) = caps.get(3) {
