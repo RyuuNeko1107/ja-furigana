@@ -5,9 +5,9 @@ ja-furigana の中長期計画。 **完了履歴は [CHANGELOG.md](../CHANGELOG.
 
 > 戻る: [README](../README.md)
 
-## ステータス概観 (2026-09-27 更新)
+## ステータス概観 (2026-09-28 更新)
 
-**最新 release は v0.5.0 (2026-09-24)**。 0.2.0 以降の主な節目 (詳細は CHANGELOG):
+**最新 release は v0.5.3 (2026-09-28)**。 0.2.0 以降の主な節目 (詳細は CHANGELOG):
 
 - **0.2.0 (2026-07-06)**: intonation milestone — accent core (bracket parse + `AccentResult` +
   `--mode=accent`)、 opt-in の rule-based accent 推定、 OOV 促音便 join、 VOICEVOX adapter crate
@@ -23,10 +23,12 @@ ja-furigana の中長期計画。 **完了履歴は [CHANGELOG.md](../CHANGELOG.
   位取り漢数字 / 行き止まり補完)、 確保削減、 コスト lattice engine (opt-in 実験)
 - **0.5.0 (2026-09-24)**: 助数詞 `not_before` / `scale_trailing` (破壊的: `rules::CounterRule` の
   `#[non_exhaustive]` 化)、 辞書保持の軽量化 (ピークメモリ 87 → 75 MB)
+- **0.5.1〜0.5.3 (2026-09-27〜28)**: dict のアクセント専用の表 (`role = "accent"`、 UniDic aType 由来) と動詞の活用途中の推定、
+  分野の除外 (`exclude_dict_path`)、 数字 (位取り漢数字 / 読点区切り / 大数区切り / 法令の金額表記 / 分数 / °C)、 々 と連濁、 C++ / C#
 
 runtime 形態素辞書は IPADIC 据え置き (2026-06-11 A/B 評価で IPADIC 100% vs UniDic 95.9%、
-詳細は [ARCHITECTURE.md](./ARCHITECTURE.md) 設計判断メモ)。 UniDic aType → bracket 注釈は
-dict repo 側の offline 生成 tool で活用。
+詳細は [ARCHITECTURE.md](./ARCHITECTURE.md) 設計判断メモ)。 UniDic aType は dict repo 側の offline 生成 tool で
+アクセント専用の表 (`core/accent/unidic.toml`) にして活用 (0.5.1+)。
 
 次の主なテーマは dict 側の継続改善と、 運用で発覚した lib 改善の随時 sweep。
 
@@ -279,7 +281,7 @@ dict 規模が 50k → 200k → 500k と育つにつれ、 Lindera が貢献す�
 - license obligation 減 (Lindera は MIT、 IPADIC は BSD だが、 撤廃で完全 control)
 
 必要条件:
-- dict が 200k+ entries (現在 50k)
+- dict が 200k+ entries (現在 読み 約 6.8 万 + アクセント表 約 12.8 万)
 - 動詞活用 rule layer
 - 助詞 boundary detector
 - 形態素解析無しで品質保てる corpus regression
