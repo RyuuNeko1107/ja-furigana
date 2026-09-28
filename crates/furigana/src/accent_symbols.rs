@@ -199,6 +199,15 @@ fn masu_nucleus_offset(surface: &str) -> Option<usize> {
     }
 }
 
+/// 断定の です 系 token の核が、 連結先の句末から何モーラ目に来るか (です / でし = デ、 でしょ = ショ)
+fn desu_nucleus_offset(surface: &str) -> Option<usize> {
+    match surface {
+        "です" | "でし" => Some(1),
+        "でしょ" => Some(2),
+        _ => None,
+    }
+}
+
 /// モーラがイ段 / エ段で終わるか (動詞の連用形の末尾)
 fn ends_with_ie_row(mora: &str) -> bool {
     mora.chars()
@@ -283,6 +292,13 @@ pub fn to_mora_phrases(result: &AccentResult) -> MoraPhrases {
                         p.nucleus = Some(before + offset);
                     }
                 }
+                // 平板 (核の無い) 句に です が付くと です 側に核: 学生です = ガクセイデ'ス / 学生でしょう = ガクセイデショ'ー。
+                // 起伏の句 (雨です = ア'メデス) は元の核のまま (2026-09-28)
+                if p.nucleus.is_none() {
+                    if let Some(offset) = desu_nucleus_offset(&token.surface) {
+                        p.nucleus = Some(before + offset);
+                    }
+                }
                 p.morae.extend(mora_split(&reading));
                 continue;
             }
@@ -347,6 +363,16 @@ mod tests {
         assert_eq!(nuc("食べます"), ("タベマス".to_string(), 3), "タベマ'ス");
         assert_eq!(nuc("行きました").1, 3, "イキマ'シタ");
         assert_eq!(nuc("食べません").1, 4, "タベマセ'ン");
+    }
+
+    #[test]
+    fn desu_puts_nucleus_on_de_only_after_heiban() {
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("学生", "ガ[クセイ");
+        f.add_reading("雨", "ア]メ");
+        let nuc = |s: &str| phrases(&f, s).phrases[0].nucleus_pos();
+        assert_eq!(nuc("学生です"), 5, "ガクセイデ'ス");
+        assert_eq!(nuc("雨です"), 1, "起伏は元の核 (ア'メデス)");
     }
 
     #[test]
