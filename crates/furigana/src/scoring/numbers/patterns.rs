@@ -67,6 +67,12 @@ pub(super) static KANJI_DECIMAL_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("scoring KANJI_DECIMAL regex build failed")
 });
 
+/// 小数部 1 桁の漢数字の小数 (三八・四)。 整数部が位取り 2 桁の時だけ使う (try_kanji_decimal)
+pub(super) static KANJI_DECIMAL_SHORT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new("^([〇一二三四五六七八九]{2})・([〇一二三四五六七八九])")
+        .expect("scoring KANJI_DECIMAL_SHORT regex build failed")
+});
+
 pub(super) static DIGIT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
 

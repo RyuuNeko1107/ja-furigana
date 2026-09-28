@@ -873,3 +873,25 @@ fn kanji_time_with_minutes() {
         .is_none_or(|c| !c.reading.contains("フン")));
     assert!(find(&p.candidates_vec(&ctx("三時七十分"), 0), "三時七十分").is_none());
 }
+
+#[test]
+fn two_digit_positional_kansuji() {
+    // 位取りで書いた 2 桁 (五三人 / 三〇キロ / 三八・四) は数として読む
+    let p = provider();
+    let c = p.candidates_vec(&ctx("五三人"), 0);
+    assert_eq!(
+        find(&c, "五三人").expect("counter").reading,
+        "ゴジュウサンニン"
+    );
+    let c = p.candidates_vec(&ctx("三〇キロ"), 0);
+    assert_eq!(find(&c, "三〇").expect("bare").reading, "サンジュウ");
+    let c = p.candidates_vec(&ctx("三八・四％"), 0);
+    assert_eq!(
+        find(&c, "三八・四").expect("decimal").reading,
+        "サンジュウハチテンヨン"
+    );
+    // 1 つ違いで上がる並び (二三 / 七八 = 概数) と 〇 始まり (〇〇) は数にしない
+    assert!(find(&p.candidates_vec(&ctx("七八人"), 0), "七八人").is_none());
+    assert!(find(&p.candidates_vec(&ctx("〇〇の"), 0), "〇〇").is_none());
+    assert!(find(&p.candidates_vec(&ctx("三・四％"), 0), "三・四").is_none());
+}

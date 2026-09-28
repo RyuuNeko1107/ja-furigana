@@ -62,7 +62,7 @@ use crate::scoring::candidate::{
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE,
+    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE,
 };
 use regex::Regex;
 
@@ -584,7 +584,15 @@ impl NumberCandidateProvider {
             return;
         }
         let has_unit = chars.iter().any(|&c| UNITS.contains(c));
-        let positional = !has_unit && chars.len() >= 3 && chars.contains(&'〇');
+        // 2 桁は 同じ字の繰り返し (二二 / 三三 = 顔文字・効果線) と カタカナに挟まった字 (ラ三一ヌ) を除く。
+        // 助数詞の付く形 (二二年 / 三三％) は counter 側で読む
+        let two_digit = two_digit_positional(&run)
+            && chars[0] != chars[1]
+            && !input[..pos]
+                .chars()
+                .next_back()
+                .is_some_and(crate::kana::is_katakana_char);
+        let positional = !has_unit && ((chars.len() >= 3 && chars.contains(&'〇')) || two_digit);
         if !(has_unit || positional) {
             return;
         }
@@ -626,7 +634,11 @@ impl NumberCandidateProvider {
         rest: &str,
         out: &mut Vec<RawCandidate<'_>>,
     ) {
-        let Some(caps) = at_start(&KANJI_DECIMAL_RE, rest) else {
+        let Some(caps) = at_start(&KANJI_DECIMAL_RE, rest).or_else(|| {
+            // 小数部 1 桁 (三八・四％) は 整数部が位取り 2 桁の時だけ。 一・二 / 三・四 は並列の列挙
+            at_start(&KANJI_DECIMAL_SHORT_RE, rest)
+                .filter(|c| two_digit_positional(c.get(1).unwrap().as_str()))
+        }) else {
             return;
         };
         if input[..pos]
@@ -842,6 +854,7 @@ impl NumberCandidateProvider {
                                 | '九'
                         )
                     });
+                let positional = positional || two_digit_positional(num);
                 if !(opted_in || positional) || self.counter_blocked(base, &rest[m_end..]) {
                     return None;
                 }
@@ -986,6 +999,21 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_kanji_bare_number(input, pos, rest, out);
         self.emit_symbol(input, pos, rest, out);
         self.try_digit(input, pos, rest, out);
+    }
+}
+
+/// 位取りで書いた 2 桁の漢数字 (三五 / 三〇 / 一七 = 35 / 30 / 17)。 2026-09-28
+///
+/// 並んだ数の概数 (二三 / 七八 = 2〜3 / 7〜8) と区別するため、 1 つ違いで上がる並びは除く。
+/// 先頭が 〇 (〇〇 = まるまる / 〇一) も除く
+fn two_digit_positional(num: &str) -> bool {
+    let mut it = num.chars().map(kanji_digit);
+    match (it.next(), it.next(), it.next()) {
+        (Some(Some(a)), Some(Some(b)), None) => {
+            let (a, b) = (a.to_digit(10).unwrap_or(0), b.to_digit(10).unwrap_or(0));
+            a != 0 && (b == 0 || b != a + 1)
+        }
+        _ => false,
     }
 }
 
