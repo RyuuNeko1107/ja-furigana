@@ -22,8 +22,9 @@
 //! | チ / ツ | ハ行 | チ/ツ → ッ + ハ行 → パ行 (一+杯 → イッパイ) |
 //!
 //! キ は含めない (的確 = テキカク のように gemination しない例が多い)。
-//! 前 token が 七 (シチ) のときも促音化しない (七章 = シチショウ / 七席 = シチセキ。
-//! 一 / 八 と違い 七 は促音便形を持たない)。
+//! 前 token が 七 / 各、 後 token が 接尾 (等 / 的 / 化 / 系 / 区) / 漢数字 のときも促音化しない (七章 = シチショウ /
+//! 各港 = カクコウ / 危険物等 = キケンブツトウ / 約九 = ヤクキュウ)。 ただし数の中 (一千 = イッセン / 八百) と
+//! 漢数字 + 接尾 (第一区 = ダイイック / 万世一系) は促音化する。
 //! 連濁・ン+ハ行 の音変化も含めない (語彙依存で規則化できない、 ADR-0008)。
 
 use crate::char_class::is_kanji_char;
@@ -77,6 +78,33 @@ fn is_katakana_reading(reading: &str) -> bool {
     !reading.is_empty() && reading.chars().all(|c| matches!(c, 'ァ'..='ヶ' | 'ー'))
 }
 
+/// 前 token がこの字なら促音化しない。 七 は促音便形を持たない (七章 = シチショウ)。
+/// 各 は接頭辞で、 OOV に落ちる 各港 / 各期 / 各件 は カクコウ / カクキ (各国 / 各界 のような
+/// 促音の語は IPADIC に載っていて OOV chain にならない)
+const NO_GEMINATE_LEFT: &[&str] = &["七", "各"];
+
+/// 後 token が接尾の 等 / 的 / 化 / 系 / 区 なら促音化しない (危険物等 = キケンブツトウ / 罰的 / 学系 / 緑区。
+/// 旧 ブットウ / バッテキ / ガッケイ / リョック)。 促音の語 (物的 / 悪化 / 学区) は IPADIC に載っていて
+/// OOV chain にならない。 前が漢数字なら数と助数詞なので促音便を残す (第一区 = ダイイック / 万世一系)
+const NO_GEMINATE_SUFFIX: &[&str] = &["等", "的", "化", "系", "区"];
+
+const KANJI_NUMERALS: &str = "〇一二三四五六七八九十百千万億";
+
+fn is_kanji_numeral(s: &str) -> bool {
+    let mut it = s.chars();
+    matches!((it.next(), it.next()), (Some(c), None) if KANJI_NUMERALS.contains(c))
+}
+
+/// 後 token の字で促音化を止めるか。 漢数字は前の語と別の語 (約九 = ヤクキュウ / 百九 = ヒャクキュウ) だが、
+/// 数の中の 一千 = イッセン / 八百 = ハッピャク / 八千 = ハッセン は残す
+fn no_geminate_right(a: &str, b: &str) -> bool {
+    if is_kanji_numeral(b) {
+        return !(matches!(a, "一" | "八") && matches!(b, "百" | "千"));
+    }
+    // 的 は数の後でも接尾 (第一的 = ダイイチテキ)
+    NO_GEMINATE_SUFFIX.contains(&b) && (!is_kanji_numeral(a) || b == "的")
+}
+
 /// OOV 漢字 chain の隣接 join に促音便を適用する post-pass (ADR-0008)。
 pub struct SokuonJoinPass;
 
@@ -88,8 +116,9 @@ impl ReadingPostPass for SokuonJoinPass {
                 (&mut left[i], &right[0])
             };
             if !is_single_real_kanji(&a.surface)
-                || a.surface == "七"
+                || NO_GEMINATE_LEFT.contains(&a.surface.as_str())
                 || !is_single_real_kanji(&b.surface)
+                || no_geminate_right(&a.surface, &b.surface)
                 || a.range.end != b.range.start
                 || !is_katakana_reading(&a.reading)
                 || !is_katakana_reading(&b.reading)
@@ -207,6 +236,40 @@ mod tests {
         let mut tokens = chain(&[("七", "シチ"), ("章", "ショウ")]);
         SokuonJoinPass.apply(&mut tokens);
         assert_eq!(readings(&tokens), vec!["シチ", "ショウ"]);
+    }
+
+    #[test]
+    fn suffix_and_numeral_do_not_geminate() {
+        // 等 (など) / 漢数字 の前、 各 の後は促音化しない
+        for (a, ar, b, br) in [
+            ("物", "ブツ", "等", "トウ"),
+            ("約", "ヤク", "九", "キュウ"),
+            ("各", "カク", "港", "コウ"),
+            ("百", "ヒャク", "九", "キュウ"),
+        ] {
+            let mut tokens = chain(&[(a, ar), (b, br)]);
+            SokuonJoinPass.apply(&mut tokens);
+            assert_eq!(readings(&tokens), vec![ar, br]);
+        }
+    }
+
+    #[test]
+    fn numeral_hundred_thousand_still_geminates() {
+        // 一千 = イッセン / 八百 = ハッピャク は数の中の促音便
+        let mut tokens = chain(&[("一", "イチ"), ("千", "セン")]);
+        SokuonJoinPass.apply(&mut tokens);
+        assert_eq!(readings(&tokens), vec!["イッ", "セン"]);
+        let mut tokens = chain(&[("八", "ハチ"), ("百", "ヒャク")]);
+        SokuonJoinPass.apply(&mut tokens);
+        assert_eq!(readings(&tokens), vec!["ハッ", "ピャク"]);
+    }
+
+    #[test]
+    fn numeral_before_suffix_still_geminates() {
+        // 第一区 = ダイイック / 万世一系 = バンセイイッケイ (数 + 助数詞)
+        let mut tokens = chain(&[("一", "イチ"), ("区", "ク")]);
+        SokuonJoinPass.apply(&mut tokens);
+        assert_eq!(readings(&tokens), vec!["イッ", "ク"]);
     }
 
     #[test]
