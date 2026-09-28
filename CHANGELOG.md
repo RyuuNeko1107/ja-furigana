@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-09-28
+
 ### Added
 
 - **丁寧の ます 系の核を ます 側に置く** (TTS 記号列 = `accent_symbols` 経由の VOICEVOX / AquesTalk 出力)。 食べます = タベマ'ス /
