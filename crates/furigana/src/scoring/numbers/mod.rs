@@ -62,7 +62,7 @@ use crate::scoring::candidate::{
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, TIME_COLON_RE, TIME_JP_FULL_RE,
+    KANJI_DECIMAL_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE,
 };
 use regex::Regex;
 
@@ -382,6 +382,46 @@ impl NumberCandidateProvider {
             }
             out.push(self.make(input, pos, m_end, reading));
         }
+        self.try_time_jp_kanji(input, pos, rest, out);
+    }
+
+    /// 漢数字の和式時刻 (`午後三時五分` = さんじごふん)。 時 0〜24 / 分・秒 0〜59 の時だけ
+    fn try_time_jp_kanji(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        let Some(caps) = at_start(&TIME_JP_KANJI_RE, rest) else {
+            return;
+        };
+        let num = |i: usize| caps.get(i).and_then(|m| kansuji_to_arabic(m.as_str()));
+        let (Some(h), Some(mi)) = (num(1), num(2)) else {
+            return;
+        };
+        let se = caps.get(3).map(|_| num(3));
+        let in_range = |s: &str, max: u32| s.parse::<u32>().is_ok_and(|v| v <= max);
+        if !in_range(&h, 24)
+            || !in_range(&mi, 59)
+            || se
+                .as_ref()
+                .is_some_and(|s| !s.as_deref().is_some_and(|s| in_range(s, 59)))
+        {
+            return;
+        }
+        let m_end = caps.get(0).unwrap().end();
+        // 直後が の (三時四十五分の事件) は Lindera の 分の (分数) に続けられず行き止まりになるので出さない
+        // (従来の経路で よんじゅうごふん と読める)
+        if rest[m_end..].starts_with('の') {
+            return;
+        }
+        let mut reading = self.read_counter(&h, "時");
+        reading.push_str(&self.read_counter(&mi, "分"));
+        if let Some(Some(s)) = se {
+            reading.push_str(&self.read_counter(&s, "秒"));
+        }
+        out.push(self.make(input, pos, m_end, reading));
     }
 
     /// section 3: 時刻 HH:MM(:SS)。

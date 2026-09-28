@@ -36,6 +36,14 @@ pub(super) static TIME_JP_FULL_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("scoring TIME_JP regex build failed")
 });
 
+/// 漢数字の和式時刻 `三時五分` / `零時三十分二十秒`。 分 を必須にする (`三時` 単独は 時 の助数詞側、
+/// `十分` / `五分` / `三分の一` は前に 時 が無いので当たらない)。 議事録の 「午後零時三分散会」 が
+/// 三 + 分 (ぶん) + 散会 に割れていた (2026-09-28)
+pub(super) static TIME_JP_KANJI_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"([〇零一二三四五六七八九十]{1,3})時([〇一二三四五六七八九十]{1,4})分(?:([〇一二三四五六七八九十]{1,4})秒)?")
+        .expect("scoring TIME_JP_KANJI regex build failed")
+});
+
 pub(super) static DATE_KANJI_FULL_RE: Lazy<Regex> = Lazy::new(|| {
     let pat = format!(r"({DATE_NUM_PAT})年({DATE_NUM_PAT})月({DATE_NUM_PAT})日");
     Regex::new(&pat).expect("scoring DATE_KANJI_FULL regex build failed")

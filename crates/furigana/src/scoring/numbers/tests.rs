@@ -853,3 +853,23 @@ fn counter_kanji_starts_at_nan_with_rendaku() {
     // 何 の後が 百 / 千 でなければ 何 の位置では出さない (何回目 は別経路)
     assert!(p.candidates_vec(&ctx("何回目"), 0).is_empty());
 }
+
+#[test]
+fn kanji_time_with_minutes() {
+    // 議事録の 午後零時三分散会 / 午前十時一分開議。 分 必須、 時 24 / 分 59 まで
+    let p = provider();
+    let c = p.candidates_vec(&ctx("零時三分散会"), 0);
+    assert_eq!(
+        find(&c, "零時三分").expect("kanji time").reading,
+        "レイジサンプン"
+    );
+    let c = p.candidates_vec(&ctx("十時一分"), 0);
+    assert_eq!(
+        find(&c, "十時一分").expect("kanji time").reading,
+        "ジュウジイップン"
+    );
+    // 分 が無い / 範囲外は出さない
+    assert!(find(&p.candidates_vec(&ctx("三時"), 0), "三時")
+        .is_none_or(|c| !c.reading.contains("フン")));
+    assert!(find(&p.candidates_vec(&ctx("三時七十分"), 0), "三時七十分").is_none());
+}
