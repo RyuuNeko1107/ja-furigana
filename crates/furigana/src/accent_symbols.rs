@@ -190,6 +190,22 @@ impl Builder {
     }
 }
 
+/// 丁寧の ます 系 token の核が、 連結先の句末から何モーラ目に来るか (ます / まし = マ、 ませ / ましょ = セ / ショ)
+fn masu_nucleus_offset(surface: &str) -> Option<usize> {
+    match surface {
+        "ます" | "まし" => Some(1),
+        "ませ" | "ましょ" => Some(2),
+        _ => None,
+    }
+}
+
+/// モーラがイ段 / エ段で終わるか (動詞の連用形の末尾)
+fn ends_with_ie_row(mora: &str) -> bool {
+    mora.chars()
+        .next_back()
+        .is_some_and(|c| "イキギシジチヂニヒビピミリエケゲセゼテデネヘベペメレ".contains(c))
+}
+
 /// [`AccentResult`] を 「モーラ列 + 核位置 + 区切り」 の列へ落とす。
 ///
 /// 変換規則:
@@ -257,6 +273,16 @@ pub fn to_mora_phrases(result: &AccentResult) -> MoraPhrases {
             if let Some(p) = b.open.as_mut() {
                 // 直前句へ連結。 核確定済みなら位置維持 (アメ + ガ で核は 1 のまま)、
                 // 平板 / 不明は `None` のままなので核が句末へ動く
+                let before = p.morae.len();
+                // 丁寧の ます は動詞の型によらず ます 側に核 (東京式、 2026-09-28):
+                // 食べ + ます = タベマ'ス / 行き + まし + た = イキマ'シタ / 食べ + ませ + ん = タベマセ'ン /
+                // 行き + ましょ + う = イキマショ'ー。 直前がイ段 / エ段 (動詞の連用形) の時だけ
+                // (「こっちが + まし」 のような形容動詞 まし を避ける)
+                if let Some(offset) = masu_nucleus_offset(&token.surface) {
+                    if p.morae.last().is_some_and(|m| ends_with_ie_row(m)) {
+                        p.nucleus = Some(before + offset);
+                    }
+                }
                 p.morae.extend(mora_split(&reading));
                 continue;
             }
@@ -307,6 +333,20 @@ mod tests {
             shape(&p),
             [("アメガ".to_string(), Some(1), PhraseBreak::None)]
         );
+    }
+
+    #[test]
+    fn masu_puts_nucleus_on_masu() {
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("食べ", "タ]ベ");
+        f.add_reading("行き", "イ[キ");
+        let nuc = |s: &str| {
+            let p = phrases(&f, s);
+            (p.phrases[0].morae.concat(), p.phrases[0].nucleus_pos())
+        };
+        assert_eq!(nuc("食べます"), ("タベマス".to_string(), 3), "タベマ'ス");
+        assert_eq!(nuc("行きました").1, 3, "イキマ'シタ");
+        assert_eq!(nuc("食べません").1, 4, "タベマセ'ン");
     }
 
     #[test]
