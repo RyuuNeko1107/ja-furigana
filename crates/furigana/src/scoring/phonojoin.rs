@@ -22,6 +22,8 @@
 //! | チ / ツ | ハ行 | チ/ツ → ッ + ハ行 → パ行 (一+杯 → イッパイ) |
 //!
 //! キ は含めない (的確 = テキカク のように gemination しない例が多い)。
+//! 前 token が 七 (シチ) のときも促音化しない (七章 = シチショウ / 七席 = シチセキ。
+//! 一 / 八 と違い 七 は促音便形を持たない)。
 //! 連濁・ン+ハ行 の音変化も含めない (語彙依存で規則化できない、 ADR-0008)。
 
 use crate::char_class::is_kanji_char;
@@ -86,6 +88,7 @@ impl ReadingPostPass for SokuonJoinPass {
                 (&mut left[i], &right[0])
             };
             if !is_single_real_kanji(&a.surface)
+                || a.surface == "七"
                 || !is_single_real_kanji(&b.surface)
                 || a.range.end != b.range.start
                 || !is_katakana_reading(&a.reading)
@@ -196,6 +199,14 @@ mod tests {
         let mut tokens = chain(&[("的", "テキ"), ("確", "カク")]);
         SokuonJoinPass.apply(&mut tokens);
         assert_eq!(readings(&tokens), vec!["テキ", "カク"]);
+    }
+
+    #[test]
+    fn shichi_does_not_geminate() {
+        // 七 は促音便形を持たない (七章 = シチショウ、 シッショウ にしない)
+        let mut tokens = chain(&[("七", "シチ"), ("章", "ショウ")]);
+        SokuonJoinPass.apply(&mut tokens);
+        assert_eq!(readings(&tokens), vec!["シチ", "ショウ"]);
     }
 
     #[test]
