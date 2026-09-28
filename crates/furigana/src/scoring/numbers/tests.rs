@@ -894,4 +894,14 @@ fn two_digit_positional_kansuji() {
     assert!(find(&p.candidates_vec(&ctx("七八人"), 0), "七八人").is_none());
     assert!(find(&p.candidates_vec(&ctx("〇〇の"), 0), "〇〇").is_none());
     assert!(find(&p.candidates_vec(&ctx("三・四％"), 0), "三・四").is_none());
+    // 第 の後ろは概数にならないので 1 つ違いの並びも桁で読む (第一二回 = 12 回)
+    let c = p.candidates_vec(&ctx("第一二回"), "第".len());
+    assert_eq!(find(&c, "一二回").expect("ordinal").reading, "ジュウニカイ");
+    // 同じ字の繰り返しは 顔文字・効果線 (⊂二二) では数にせず、 第 の後なら数
+    assert!(find(&p.candidates_vec(&ctx("⊂二二("), "⊂".len()), "二二").is_none());
+    let c = p.candidates_vec(&ctx("第一一　"), "第".len());
+    assert_eq!(
+        find(&c, "一一").expect("ordinal repeat").reading,
+        "ジュウイチ"
+    );
 }

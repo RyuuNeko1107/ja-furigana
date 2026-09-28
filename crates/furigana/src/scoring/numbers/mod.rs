@@ -584,10 +584,32 @@ impl NumberCandidateProvider {
             return;
         }
         let has_unit = chars.iter().any(|&c| UNITS.contains(c));
-        // 2 桁は 同じ字の繰り返し (二二 / 三三 = 顔文字・効果線) と カタカナに挟まった字 (ラ三一ヌ) を除く。
+        // 2 桁は カタカナに挟まった字 (ラ三一ヌ) を除く。 同じ字の繰り返し (⊂二二 / 三三 / 八八ノ = 顔文字・効果線) は
+        // 第一一 / （一一） / 一一―四 / 二二キロワット のように 第 の後・括弧で閉じた番号・ダッシュの前後・単位 (キロ / GHz) の前だけ数にする。
         // 助数詞の付く形 (二二年 / 三三％) は counter 側で読む
-        let two_digit = two_digit_positional(&run)
-            && chars[0] != chars[1]
+        let dai = after_dai(input, pos);
+        let after = &rest[run.len()..];
+        let numeric_repeat = dai
+            || after.starts_with(['―', '－', '-'])
+            || input[..pos].ends_with(['―', '－', '-'])
+            || after.starts_with(|c: char| c.is_ascii_alphabetic())
+            || (after.starts_with(['）', ')']) && input[..pos].ends_with(['（', '(']))
+            || [
+                "キロ",
+                "メートル",
+                "ミリ",
+                "センチ",
+                "グラム",
+                "トン",
+                "ワット",
+                "ボルト",
+                "ヘルツ",
+                "パーセント",
+            ]
+            .iter()
+            .any(|u| after.starts_with(u));
+        let two_digit = two_digit_positional(&run, dai)
+            && (chars[0] != chars[1] || numeric_repeat)
             && !input[..pos]
                 .chars()
                 .next_back()
@@ -619,7 +641,12 @@ impl NumberCandidateProvider {
         {
             return;
         }
-        let Some(arabic) = crate::numbers::helpers::kansuji_to_arabic(&run) else {
+        let arabic = if two_digit {
+            positional_digits(&run)
+        } else {
+            crate::numbers::helpers::kansuji_to_arabic(&run)
+        };
+        let Some(arabic) = arabic else {
             return;
         };
         out.push(self.make(input, pos, run.len(), number_to_katakana(&arabic)));
@@ -637,7 +664,7 @@ impl NumberCandidateProvider {
         let Some(caps) = at_start(&KANJI_DECIMAL_RE, rest).or_else(|| {
             // 小数部 1 桁 (三八・四％) は 整数部が位取り 2 桁の時だけ。 一・二 / 三・四 は並列の列挙
             at_start(&KANJI_DECIMAL_SHORT_RE, rest)
-                .filter(|c| two_digit_positional(c.get(1).unwrap().as_str()))
+                .filter(|c| two_digit_positional(c.get(1).unwrap().as_str(), false))
         }) else {
             return;
         };
@@ -854,13 +881,20 @@ impl NumberCandidateProvider {
                                 | '九'
                         )
                     });
-                let positional = positional || two_digit_positional(num);
+                let positional = positional || two_digit_positional(num, prev == Some('第'));
                 if !(opted_in || positional) || self.counter_blocked(base, &rest[m_end..]) {
                     return None;
                 }
                 base.to_string()
             };
-            Some((m_end, self.read_counter(num, &counter)))
+            // 第一二号 のような 1 つ違いの並びは kansuji_to_arabic が概数として扱うので、 桁を並べた数で渡す
+            let digits = (prev == Some('第') && two_digit_positional(num, true))
+                .then(|| positional_digits(num))
+                .flatten();
+            Some((
+                m_end,
+                self.read_counter(digits.as_deref().unwrap_or(num), &counter),
+            ))
         }
     }
 
@@ -1004,17 +1038,28 @@ impl CandidateProvider for NumberCandidateProvider {
 
 /// 位取りで書いた 2 桁の漢数字 (三五 / 三〇 / 一七 = 35 / 30 / 17)。 2026-09-28
 ///
-/// 並んだ数の概数 (二三 / 七八 = 2〜3 / 7〜8) と区別するため、 1 つ違いで上がる並びは除く。
+/// 並んだ数の概数 (二三 / 七八 = 2〜3 / 7〜8) と区別するため、 1 つ違いで上がる並びは除く
+/// (`ordinal` = 直前が 第 の時は概数にならないので除かない: 第一二号 / 第二三条)。
 /// 先頭が 〇 (〇〇 = まるまる / 〇一) も除く
-fn two_digit_positional(num: &str) -> bool {
+fn two_digit_positional(num: &str, ordinal: bool) -> bool {
     let mut it = num.chars().map(kanji_digit);
     match (it.next(), it.next(), it.next()) {
         (Some(Some(a)), Some(Some(b)), None) => {
             let (a, b) = (a.to_digit(10).unwrap_or(0), b.to_digit(10).unwrap_or(0));
-            a != 0 && (b == 0 || b != a + 1)
+            a != 0 && (ordinal || b == 0 || b != a + 1)
         }
         _ => false,
     }
+}
+
+/// 〇〜九 だけの列を桁を並べた算用数字に (一二 = 12)
+fn positional_digits(num: &str) -> Option<String> {
+    num.chars().map(kanji_digit).collect()
+}
+
+/// 直前の字が 第 か
+fn after_dai(input: &str, pos: usize) -> bool {
+    input[..pos].ends_with('第')
 }
 
 /// 漢数字 1 字 (〇〜九) を算用数字 1 字に
