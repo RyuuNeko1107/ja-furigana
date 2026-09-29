@@ -905,3 +905,24 @@ fn two_digit_positional_kansuji() {
         "ジュウイチ"
     );
 }
+
+#[test]
+fn positional_in_numeric_context() {
+    // ％ の前は 1 つ違いでも数 (四五％ = 45%)、 〇 を含む数は後ろが漢字でも数 (一〇以上)
+    let p = provider();
+    let c = p.candidates_vec(&ctx("四五％"), 0);
+    assert_eq!(
+        find(&c, "四五％").expect("percent").reading,
+        "ヨンジュウゴパーセント"
+    );
+    let c = p.candidates_vec(&ctx("一〇以上"), 0);
+    assert_eq!(find(&c, "一〇").expect("zero").reading, "ジュウ");
+    // 3 桁で英字の単位が続く (一四二MHz)
+    let c = p.candidates_vec(&ctx("一四二MHz"), 0);
+    assert_eq!(
+        find(&c, "一四二").expect("latin unit").reading,
+        "ヒャクヨンジュウニ"
+    );
+    // 〇 の無い 2 桁の後ろが漢字 (八五郎) は出さない
+    assert!(find(&p.candidates_vec(&ctx("八五郎"), 0), "八五").is_none());
+}

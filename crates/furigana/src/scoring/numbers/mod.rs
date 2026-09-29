@@ -614,7 +614,13 @@ impl NumberCandidateProvider {
                 .chars()
                 .next_back()
                 .is_some_and(crate::kana::is_katakana_char);
-        let positional = !has_unit && ((chars.len() >= 3 && chars.contains(&'〇')) || two_digit);
+        // 3 桁以上で英字の単位が続く (一四二MHz / 二一五ｋＨｚ) なら 〇 が無くても位取り。 2026-09-29
+        let before_latin = rest[run.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || matches!(c, 'Ａ'..='Ｚ' | 'ａ'..='ｚ'));
+        let positional = !has_unit
+            && ((chars.len() >= 3 && (chars.contains(&'〇') || before_latin)) || two_digit);
         if !(has_unit || positional) {
             return;
         }
@@ -634,11 +640,15 @@ impl NumberCandidateProvider {
         }
         // 直後が漢字なら助数詞 (年 / 兆 / 項 / 号 …) として既存の読み (促音・特殊読み: じゅういっちょう /
         // じゅうにがつ / じゅういっこう) に任せる。 後ろがかな・カタカナ・記号・行末の数だけを対象にする
-        if rest[run.len()..]
-            .chars()
-            .next()
-            .is_some_and(crate::kana::is_kanji_char)
-        {
+        // ただし 〇 を含む位取り (一〇以上 / 二〇平方メートル) は 1 字ずつ読むと いちれい になるだけなので出す。 2026-09-29
+        // 型式 (九〇式 = きゅうまるしき) / 〇 始まり / 小数部 (秒・〇八三〇東経) は従来どおり
+        let next = rest[run.len()..].chars().next();
+        let zero_positional = positional
+            && chars.contains(&'〇')
+            && chars[0] != '〇'
+            && next != Some('式')
+            && !input[..pos].ends_with(['・', '．', '.']);
+        if !zero_positional && next.is_some_and(crate::kana::is_kanji_char) {
             return;
         }
         let arabic = if two_digit {
@@ -881,14 +891,15 @@ impl NumberCandidateProvider {
                                 | '九'
                         )
                     });
-                let positional = positional || two_digit_positional(num, prev == Some('第'));
+                let positional =
+                    positional || two_digit_positional(num, ordinal_context(prev, base));
                 if !(opted_in || positional) || self.counter_blocked(base, &rest[m_end..]) {
                     return None;
                 }
                 base.to_string()
             };
             // 第一二号 のような 1 つ違いの並びは kansuji_to_arabic が概数として扱うので、 桁を並べた数で渡す
-            let digits = (prev == Some('第') && two_digit_positional(num, true))
+            let digits = (ordinal_context(prev, base) && two_digit_positional(num, true))
                 .then(|| positional_digits(num))
                 .flatten();
             Some((
@@ -1055,6 +1066,12 @@ fn two_digit_positional(num: &str, ordinal: bool) -> bool {
 /// 〇〜九 だけの列を桁を並べた算用数字に (一二 = 12)
 fn positional_digits(num: &str) -> Option<String> {
     num.chars().map(kanji_digit).collect()
+}
+
+/// 1 つ違いの 2 桁 (一二 / 四五) を概数でなく数として読む文脈: 第 の後 (第一二号) と ％ の前 (四五％)。
+/// ％ の概数表記はほぼ無く、 国会・白書では 四五％ = 45% (2026-09-29)
+fn ordinal_context(prev: Option<char>, base: &str) -> bool {
+    prev == Some('第') || matches!(base, "%" | "％")
 }
 
 /// 直前の字が 第 か
