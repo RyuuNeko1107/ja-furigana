@@ -6,7 +6,7 @@
 //! あっても負ける (= bare 「白上」 「戌神ころね」 は正読なのに suffix 付きだけ化ける)。
 //!
 //! matcher (1 token 窓) では 「path が既に割れている」 ことを観測できないため、
-//! ADR-0005 に従い path 確定後の post-pass で補正する。 対象は 2 形:
+//! ADR-0005 に従い path 確定後の post-pass で補正する。 対象は 3 形:
 //!
 //! - **合成 suffix 形** 「白 | 上さん」: `t[i]` = 「漢字列 X + 敬称 S」。 直前 token と
 //!   X を結合して照会し、 hit すれば `t[i-1] = prev+X` / `t[i] = S` に書き換え
@@ -14,6 +14,10 @@
 //! - **bare suffix 形** 「白 | 上 | 氏」: `t[i]` = 敬称そのもので、 直前 2 token が
 //!   漢字。 2 token の結合 surface を照会し、 hit して **読みが現状と異なる** 場合
 //!   のみ 1 token に merge する (= 読みが同じなら構造を触らない)
+//! - **分断 suffix 形** 「耕 | 介さ | ん」: 敬称が 2 token にまたがる (IPADIC が 介さ /
+//!   太く を活用形として切る)。 直前 token と X を結合して照会し、 hit すれば
+//!   「耕介 | さん」 に組み直す。 敬称の直後が だ / で / じゃ / や なら動詞 + のだ
+//!   (焼くんだ / 行くんや) とみて触らない
 //!
 //! 結合 surface の読み source は (a) dict 熟語 (works 含む) exact hit、
 //! (b) IPADIC で単一 token かつ 固有名詞、 の順。
@@ -41,6 +45,9 @@ pub(crate) const SUFFIXES: &[(&str, &str)] = &[
     ("様", "サマ"),
     ("氏", "シ"),
 ];
+
+/// 分断 suffix 形で、 敬称の直後にこれが来たら動詞 + 「のだ」 (焼くんだ / 行くんや) とみて組み直さない。
+const SPLIT_SUFFIX_VERB_FOLLOWERS: &[&str] = &["だ", "で", "じゃ", "や"];
 
 /// 名前側 (直前 token / 結合部 X) として許す最大文字数。
 ///
@@ -141,6 +148,87 @@ impl NameBoundaryPass<'_> {
         true
     }
 
+    /// 分断 suffix 形 「耕 | 介さ | ん」 → 「耕介 | さん」。 敬称が 2 token にまたがる
+    /// (IPADIC が 介さ = 介す / 太く = 太い の活用形として切る)。 `t[i]` = 「漢字列 X +
+    /// 敬称の前半」、 `t[i+1]` が敬称の後半で始まる形。 補正したら true。
+    fn try_split_suffix(&self, tokens: &mut Vec<Token>, i: usize) -> bool {
+        if i + 1 >= tokens.len() {
+            return false;
+        }
+        let surface = tokens[i].surface.as_str();
+        let next = tokens[i + 1].surface.as_str();
+        let Some((head, suffix, suffix_reading, tail_len)) =
+            SUFFIXES.iter().find_map(|&(suffix, reading)| {
+                let (kanji_end, _) = surface.char_indices().find(|(_, c)| !is_kanji_char(*c))?;
+                let (head, rest) = surface.split_at(kanji_end);
+                let tail = suffix.strip_prefix(rest)?;
+                (!tail.is_empty() && next.starts_with(tail))
+                    .then(|| (head.to_string(), suffix, reading, tail.len()))
+            })
+        else {
+            return false;
+        };
+        if head.is_empty() || head.chars().count() > MAX_NAME_CHARS {
+            return false;
+        }
+        let prev = &tokens[i - 1];
+        if !all_kanji(&prev.surface)
+            || prev.surface.chars().count() > MAX_NAME_CHARS
+            || prev.range.end != tokens[i].range.start
+            || tokens[i].range.end != tokens[i + 1].range.start
+        {
+            return false;
+        }
+        // 敬称の直後が 「のだ」 の形 (焼くんだ / 行くんや / 話さんで) なら動詞の活用で、 名前ではない
+        let after = tokens[i + 1].surface[tail_len..].to_string()
+            + tokens.get(i + 2).map_or("", |t| t.surface.as_str());
+        if SPLIT_SUFFIX_VERB_FOLLOWERS
+            .iter()
+            .any(|f| after.starts_with(f))
+        {
+            return false;
+        }
+        let combined = format!("{}{}", prev.surface, head);
+        let Some(raw_reading) = self.combined_reading(&combined) else {
+            return false;
+        };
+        let parsed = parse_bracket_notation(&raw_reading);
+        let split_at = tokens[i].range.start + head.len();
+        let suffix_end = tokens[i + 1].range.start + tail_len;
+
+        let prev = &mut tokens[i - 1];
+        prev.surface = combined;
+        prev.reading = parsed.reading;
+        prev.range = prev.range.start..split_at;
+        prev.accent_phrases = parsed.accent_phrases;
+        prev.ambiguous = false;
+        prev.alternatives.clear();
+        prev.is_name = true;
+
+        let cur = &mut tokens[i];
+        cur.surface = suffix.to_string();
+        cur.reading = suffix_reading.to_string();
+        cur.range = split_at..suffix_end;
+        cur.accent_phrases = Vec::new();
+        cur.ambiguous = false;
+        cur.alternatives.clear();
+
+        let next = &mut tokens[i + 1];
+        if next.range.end == suffix_end {
+            tokens.remove(i + 1);
+        } else {
+            // 敬称の後ろに続くかな (さんが 等) は読みも同じ字数だけ落とす
+            let rest = next.surface[tail_len..].to_string();
+            let drop = next.surface[..tail_len].chars().count();
+            next.reading = next.reading.chars().skip(drop).collect();
+            next.surface = rest;
+            next.range = suffix_end..next.range.end;
+            next.accent_phrases = Vec::new();
+            next.alternatives.clear();
+        }
+        true
+    }
+
     /// bare suffix 形 「白 | 上 | 氏」 → 「白上 | 氏」 (t[i-1] を t[i-2] に merge)。
     /// 補正したら true (= token が 1 つ減る)。
     fn try_bare_suffix(&self, tokens: &mut Vec<Token>, i: usize) -> bool {
@@ -197,7 +285,10 @@ impl ReadingPostPass for NameBoundaryPass<'_> {
     fn apply(&self, tokens: &mut Vec<Token>) {
         let mut i = 1;
         while i < tokens.len() {
-            if !self.try_merged_suffix(tokens, i) && self.try_bare_suffix(tokens, i) {
+            if !self.try_merged_suffix(tokens, i)
+                && !self.try_split_suffix(tokens, i)
+                && self.try_bare_suffix(tokens, i)
+            {
                 // merge で後続が 1 つ左に詰まったので、 i は据え置きで次の token を見る
                 continue;
             }
@@ -225,6 +316,85 @@ mod tests {
 
     fn analyzer() -> Analyzer {
         Analyzer::new().expect("Analyzer init failed")
+    }
+
+    #[test]
+    fn split_suffix_resegmented_via_dict() {
+        // 耕 | 介さ | ん → (dict 耕介=こうすけ) → 耕介 | さん
+        let mut dict = Dict::new();
+        dict.insert("耕介", "こうすけ");
+        let a = analyzer();
+        let pass = NameBoundaryPass::new(&dict, &a);
+        let mut t = vec![
+            token("耕", "コウ", 0..3),
+            token("介さ", "カイサ", 3..9),
+            token("ん", "ン", 9..12),
+        ];
+        pass.apply(&mut t);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].surface, "耕介");
+        assert_eq!(t[0].reading, "こうすけ");
+        assert_eq!(t[0].range, 0..6);
+        assert!(t[0].is_name);
+        assert_eq!(t[1].surface, "さん");
+        assert_eq!(t[1].reading, "サン");
+        assert_eq!(t[1].range, 6..12);
+    }
+
+    #[test]
+    fn split_suffix_keeps_trailing_kana_of_next_token() {
+        // 啓 | 太く | んが (後半の token に敬称の続きが残る) → 啓太 | くん | が
+        let mut dict = Dict::new();
+        dict.insert("啓太", "けいた");
+        let a = analyzer();
+        let pass = NameBoundaryPass::new(&dict, &a);
+        let mut t = vec![
+            token("啓", "ケイ", 0..3),
+            token("太く", "フトク", 3..9),
+            token("んが", "ンガ", 9..15),
+        ];
+        pass.apply(&mut t);
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[0].surface, "啓太");
+        assert_eq!(t[1].surface, "くん");
+        assert_eq!(t[1].range, 6..12);
+        assert_eq!(t[2].surface, "が");
+        assert_eq!(t[2].reading, "ガ");
+        assert_eq!(t[2].range, 12..15);
+    }
+
+    #[test]
+    fn split_suffix_untouched_without_name_hit() {
+        // 結合 surface が dict にも固有名詞にも無ければ触らない
+        let dict = Dict::new();
+        let a = analyzer();
+        let pass = NameBoundaryPass::new(&dict, &a);
+        let mut t = vec![
+            token("意", "イ", 0..3),
+            token("介さ", "カイサ", 3..9),
+            token("ん", "ン", 9..12),
+        ];
+        pass.apply(&mut t);
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1].surface, "介さ");
+    }
+
+    #[test]
+    fn split_suffix_untouched_before_explanatory_da() {
+        // 朝 | 焼く | ん | だ は 「焼くんだ」 (動詞 + のだ)。 朝焼 が dict にあっても触らない
+        let mut dict = Dict::new();
+        dict.insert("朝焼", "あさやけ");
+        let a = analyzer();
+        let pass = NameBoundaryPass::new(&dict, &a);
+        let mut t = vec![
+            token("朝", "アサ", 0..3),
+            token("焼く", "ヤク", 3..9),
+            token("ん", "ン", 9..12),
+            token("だ", "ダ", 12..15),
+        ];
+        pass.apply(&mut t);
+        assert_eq!(t.len(), 4);
+        assert_eq!(t[1].surface, "焼く");
     }
 
     #[test]
