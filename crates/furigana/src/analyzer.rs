@@ -180,6 +180,8 @@ impl Analyzer {
                 is_particle: false,
                 is_prefix: false,
                 is_pronoun: false,
+                is_noun: false,
+                is_place: false,
             },
             |surface, details| {
                 let is_proper_noun =
@@ -208,6 +210,8 @@ impl Analyzer {
                     is_prefix: details.first() == Some(&"接頭詞"),
                     is_pronoun: details.first() == Some(&"名詞")
                         && detail_at(details, 1) == Some("代名詞"),
+                    is_noun: details.first() == Some(&"名詞"),
+                    is_place: is_proper_noun && detail_at(details, 2) == Some("地域"),
                 }
             },
         )
@@ -281,6 +285,10 @@ pub(crate) struct LightMorph {
     pub is_prefix: bool,
     /// 品詞 = 名詞 / 代名詞 (これ / それ / ここ)
     pub is_pronoun: bool,
+    /// 品詞 = 名詞 (細分類は問わない)
+    pub is_noun: bool,
+    /// 品詞 = 名詞 / 固有名詞 / 地域
+    pub is_place: bool,
 }
 
 /// details[i] を返す。 `*` と空文字は `None` に正規化する。

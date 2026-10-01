@@ -6,7 +6,7 @@
 //! あっても負ける (= bare 「白上」 「戌神ころね」 は正読なのに suffix 付きだけ化ける)。
 //!
 //! matcher (1 token 窓) では 「path が既に割れている」 ことを観測できないため、
-//! ADR-0005 に従い path 確定後の post-pass で補正する。 対象は 3 形:
+//! ADR-0005 に従い path 確定後の post-pass で補正する。 対象は 4 形:
 //!
 //! - **合成 suffix 形** 「白 | 上さん」: `t[i]` = 「漢字列 X + 敬称 S」。 直前 token と
 //!   X を結合して照会し、 hit すれば `t[i-1] = prev+X` / `t[i] = S` に書き換え
@@ -18,6 +18,9 @@
 //!   太く を活用形として切る)。 直前 token と X を結合して照会し、 hit すれば
 //!   「耕介 | さん」 に組み直す。 敬称の直後が だ / で / じゃ / や なら動詞 + のだ
 //!   (焼くんだ / 行くんや) とみて触らない
+//! - **助詞巻き込み形** 「政 | 宗と」: IPADIC の 「漢字 1 字 + 助詞」 の名詞 (宗と) が辞書語を
+//!   割る。 巻き込んだ token が単独で名詞 (+ 助詞) の時だけ組み直し、 副詞・接続詞
+//!   (又は / 次に / 実に) と数の後 (五 | 分の) は触らない
 //!
 //! 結合 surface の読み source は (a) dict 熟語 (works 含む) exact hit、
 //! (b) IPADIC で単一 token かつ 固有名詞、 の順。
@@ -48,6 +51,12 @@ pub(crate) const SUFFIXES: &[(&str, &str)] = &[
 
 /// 分断 suffix 形で、 敬称の直後にこれが来たら動詞 + 「のだ」 (焼くんだ / 行くんや) とみて組み直さない。
 const SPLIT_SUFFIX_VERB_FOLLOWERS: &[&str] = &["だ", "で", "じゃ", "や"];
+
+/// 助詞巻き込み形で token 末尾に来る助詞。
+const PARTICLES: &[char] = &['と', 'は', 'が', 'の', 'を', 'に', 'も', 'へ'];
+
+/// 助詞巻き込み形で直前 token に含まれたら組み直さない字 (分数 五分の / 数分の / 何分の)。
+const NUMBER_CHARS: &str = "〇一二三四五六七八九十百千万億数何幾半";
 
 /// 名前側 (直前 token / 結合部 X) として許す最大文字数。
 ///
@@ -229,6 +238,86 @@ impl NameBoundaryPass<'_> {
         true
     }
 
+    /// 助詞巻き込み形 「政 | 宗と」 → 「政宗 | と」。 IPADIC に 宗と (名詞 ムネト) のような
+    /// 「漢字 1 字 + 助詞」 の名詞があり、 辞書語 (政宗 / 集中力) が割れる。 `t[i]` = 漢字 1 字 +
+    /// 助詞 1 字で、 単独で読ませて 「名詞 1 語」 か 「名詞 + 助詞」 になる時だけ、 直前 token と
+    /// 漢字を結合した語が dict か IPADIC 固有名詞に当たれば組み直す。 副詞・接続詞
+    /// (又は / 次に / 実に / 時に) と動詞 (呑も) は本物の 1 語なので触らない。
+    /// 直前が数 (五 | 分の) なら分数、 次が う なら意志形 (積も | う)。 補正したら true。
+    fn try_particle_split(&self, tokens: &mut [Token], i: usize) -> bool {
+        let mut chars = tokens[i].surface.chars();
+        let (Some(kanji), Some(particle), None) = (chars.next(), chars.next(), chars.next()) else {
+            return false;
+        };
+        if !is_kanji_char(kanji) || !PARTICLES.contains(&particle) {
+            return false;
+        }
+        let prev = &tokens[i - 1];
+        if !all_kanji(&prev.surface)
+            || prev.surface.chars().count() > MAX_NAME_CHARS
+            || prev.range.end != tokens[i].range.start
+            || prev.surface.chars().any(|c| NUMBER_CHARS.contains(c))
+            || tokens
+                .get(i + 1)
+                .is_some_and(|t| t.surface.starts_with('う'))
+        {
+            return false;
+        }
+        let noun_like = match self.analyzer.tokenize_light(&tokens[i].surface).as_slice() {
+            [m] => m.is_noun,
+            [m, p] => m.is_noun && p.is_particle,
+            _ => false,
+        };
+        if !noun_like {
+            return false;
+        }
+        let combined = format!("{}{kanji}", prev.surface);
+        // IPADIC の固有名詞のうち地名は使わない (吾平 = アイラ が 吾平が を割る)。
+        // 漢字列の途中 (鄧 | 小 | 平が) では IPADIC を使わず dict だけ見る
+        let mid_run = i >= 2
+            && tokens[i - 2].range.end == prev.range.start
+            && tokens[i - 2]
+                .surface
+                .chars()
+                .next_back()
+                .is_some_and(is_kanji_char);
+        let raw_reading = self
+            .dict
+            .lookup_jukugo(&combined)
+            .map(str::to_string)
+            .or_else(|| {
+                if mid_run {
+                    return None;
+                }
+                match self.analyzer.tokenize_light(&combined).as_slice() {
+                    [m] if m.is_proper_noun && !m.is_place => m.reading.clone(),
+                    _ => None,
+                }
+            });
+        let Some(raw_reading) = raw_reading else {
+            return false;
+        };
+        let parsed = parse_bracket_notation(&raw_reading);
+        let split_at = tokens[i].range.start + kanji.len_utf8();
+
+        let prev = &mut tokens[i - 1];
+        prev.surface = combined;
+        prev.reading = parsed.reading;
+        prev.range = prev.range.start..split_at;
+        prev.accent_phrases = parsed.accent_phrases;
+        prev.ambiguous = false;
+        prev.alternatives.clear();
+
+        let cur = &mut tokens[i];
+        cur.surface = particle.to_string();
+        cur.reading = hira_to_kata(&cur.surface);
+        cur.range = split_at..cur.range.end;
+        cur.accent_phrases = Vec::new();
+        cur.ambiguous = false;
+        cur.alternatives.clear();
+        true
+    }
+
     /// bare suffix 形 「白 | 上 | 氏」 → 「白上 | 氏」 (t[i-1] を t[i-2] に merge)。
     /// 補正したら true (= token が 1 つ減る)。
     fn try_bare_suffix(&self, tokens: &mut Vec<Token>, i: usize) -> bool {
@@ -287,6 +376,7 @@ impl ReadingPostPass for NameBoundaryPass<'_> {
         while i < tokens.len() {
             if !self.try_merged_suffix(tokens, i)
                 && !self.try_split_suffix(tokens, i)
+                && !self.try_particle_split(tokens, i)
                 && self.try_bare_suffix(tokens, i)
             {
                 // merge で後続が 1 つ左に詰まったので、 i は据え置きで次の token を見る
@@ -395,6 +485,47 @@ mod tests {
         pass.apply(&mut t);
         assert_eq!(t.len(), 4);
         assert_eq!(t[1].surface, "焼く");
+    }
+
+    #[test]
+    fn particle_split_resegmented_via_dict() {
+        // 政 | 宗と (IPADIC 名詞 ムネト) → (dict 政宗=まさむね) → 政宗 | と
+        let mut dict = Dict::new();
+        dict.insert("政宗", "まさむね");
+        let a = analyzer();
+        let pass = NameBoundaryPass::new(&dict, &a);
+        let mut t = vec![token("政", "セイ", 0..3), token("宗と", "ムネト", 3..9)];
+        pass.apply(&mut t);
+        assert_eq!(t[0].surface, "政宗");
+        assert_eq!(t[0].reading, "まさむね");
+        assert_eq!(t[0].range, 0..6);
+        assert_eq!(t[1].surface, "と");
+        assert_eq!(t[1].reading, "ト");
+        assert_eq!(t[1].range, 6..9);
+    }
+
+    #[test]
+    fn particle_split_untouched_for_conjunction_number_and_volitional() {
+        // 長 | 又は (接続詞) / 五 | 分の (分数) / 徳 | 積も | う (意志形) は触らない
+        let mut dict = Dict::new();
+        dict.insert("長又", "ながまた");
+        dict.insert("五分", "ごぶ");
+        dict.insert("徳積", "とくづみ");
+        let a = analyzer();
+        let pass = NameBoundaryPass::new(&dict, &a);
+        let mut t = vec![token("長", "チョウ", 0..3), token("又は", "マタハ", 3..9)];
+        pass.apply(&mut t);
+        assert_eq!(t[1].surface, "又は");
+        let mut t = vec![token("五", "ゴ", 0..3), token("分の", "ブンノ", 3..9)];
+        pass.apply(&mut t);
+        assert_eq!(t[1].surface, "分の");
+        let mut t = vec![
+            token("徳", "トク", 0..3),
+            token("積も", "ツモ", 3..9),
+            token("う", "ウ", 9..12),
+        ];
+        pass.apply(&mut t);
+        assert_eq!(t[1].surface, "積も");
     }
 
     #[test]
