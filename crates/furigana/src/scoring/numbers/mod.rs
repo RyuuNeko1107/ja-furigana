@@ -863,6 +863,12 @@ impl NumberCandidateProvider {
             if prev == Some('何') && num.starts_with(['百', '千']) {
                 return None;
             }
+            // 概数 (二三日 / 四五回 = 2〜3 日 / 4〜5 回) は 1 つの数ではない。 read_counter に渡すと
+            // 後ろの桁だけ残って みっか / ごかい / さんけん になっていた (2026-10-02)。
+            // 第 の後・％ の前・条 / 項 / 号 の前は番号なので従来どおり (第二三条 / 八九条)
+            if approx_pair(num) && !ordinal_context(prev, base) {
+                return None;
+            }
             let counter = if let Some(rec) = caps.get(3) {
                 // recursive 形 (「目」) は常に採用
                 format!("{base}{}", rec.as_str())
@@ -1063,15 +1069,28 @@ fn two_digit_positional(num: &str, ordinal: bool) -> bool {
     }
 }
 
+/// 1 つ違いで上がる 2 桁の漢数字 (二三 / 七八 / 八九) = 並んだ数の概数の形
+fn approx_pair(num: &str) -> bool {
+    let mut it = num.chars().map(kanji_digit);
+    match (it.next(), it.next(), it.next()) {
+        (Some(Some(a)), Some(Some(b)), None) => {
+            let (a, b) = (a.to_digit(10).unwrap_or(0), b.to_digit(10).unwrap_or(0));
+            a != 0 && b == a + 1
+        }
+        _ => false,
+    }
+}
+
 /// 〇〜九 だけの列を桁を並べた算用数字に (一二 = 12)
 fn positional_digits(num: &str) -> Option<String> {
     num.chars().map(kanji_digit).collect()
 }
 
-/// 1 つ違いの 2 桁 (一二 / 四五) を概数でなく数として読む文脈: 第 の後 (第一二号) と ％ の前 (四五％)。
+/// 1 つ違いの 2 桁 (一二 / 四五) を概数でなく数として読む文脈: 第 の後 (第一二号)、 ％ の前 (四五％)、 条 / 項 / 号 の前 (八九条)。
 /// ％ の概数表記はほぼ無く、 国会・白書では 四五％ = 45% (2026-09-29)
 fn ordinal_context(prev: Option<char>, base: &str) -> bool {
-    prev == Some('第') || matches!(base, "%" | "％")
+    // 条 / 項 / 号 の前は条番号 (民訴法八九条 = 89 条)。 概数の 二三条 はほぼ無い (2026-10-02)
+    prev == Some('第') || matches!(base, "%" | "％" | "条" | "項" | "号")
 }
 
 /// 直前の字が 第 か

@@ -926,3 +926,11 @@ fn positional_in_numeric_context() {
     // 〇 の無い 2 桁の後ろが漢字 (八五郎) は出さない
     assert!(find(&p.candidates_vec(&ctx("八五郎"), 0), "八五").is_none());
 }
+
+#[test]
+fn approx_pair_counter_not_read_as_last_digit() {
+    // 概数 (二三件 / 四五回) を 1 つの数として助数詞に渡すと後ろの桁だけ残る (さんけん / ごかい) ので出さない
+    let p = provider();
+    assert!(find(&p.candidates_vec(&ctx("二三件"), 0), "二三件").is_none());
+    assert!(find(&p.candidates_vec(&ctx("四五回"), 0), "四五回").is_none());
+}
