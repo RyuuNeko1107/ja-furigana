@@ -40,6 +40,8 @@ pub enum ProtectedKind {
     Email,
     /// 絵文字 (Unicode emoji range)
     Emoji,
+    /// 括弧で囲んだ顔文字 ((´・ω・`) / (;´Д`) / ヽ(^o^)ノ)。 読みは空 (丸ごと除外)
+    Kaomoji,
 }
 
 /// 入力中の保護対象 1 件 (range + 種別)。
@@ -64,6 +66,66 @@ static EMAIL_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
         .expect("scoring email regex build failed")
 });
+
+/// 括弧 1 組 (前後に腕 ヽ ＼ ノ ／ が付くことがある)。 中身が顔かどうかは [`is_kaomoji_inner`] で見る
+static KAOMOJI_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"[ヽヾ＼\\]?[(（]([^()（）\s]{1,14})[)）][ノﾉ／/]?")
+        .expect("scoring kaomoji regex build failed")
+});
+
+/// 顔文字の中身か。 かな・漢字を含まず、 顔のパーツ (目・口・頬) を含み、 英数字は 2 つまで。
+/// 点 (`・`) や記号だけのものは、 英数字が無い時だけ顔とみなす ((A・B) は顔ではない)
+fn is_kaomoji_inner(inner: &str) -> bool {
+    let mut strong = false;
+    let mut weak = false;
+    let mut alnum = 0;
+    for c in inner.chars() {
+        let kana_or_kanji = crate::char_class::is_kanji_char(c)
+            || crate::char_class::is_hiragana_char(c)
+            || (crate::char_class::is_katakana_loose_char(c)
+                && !matches!(c, 'ロ' | 'ー' | 'ノ' | 'ツ' | 'ン'));
+        if kana_or_kanji {
+            return false;
+        }
+        if c.is_ascii_alphanumeric() {
+            alnum += 1;
+        }
+        if matches!(
+            c,
+            '´' | '｀'
+                | '`'
+                | 'ω'
+                | '∀'
+                | 'Д'
+                | 'д'
+                | '°'
+                | '▽'
+                | '∇'
+                | 'ﾟ'
+                | '゜'
+                | '≧'
+                | '≦'
+                | '◕'
+                | '＾'
+                | '^'
+                | '_'
+                | '＿'
+                | ';'
+                | '；'
+                | '‿'
+                | '⌒'
+                | 'ᴗ'
+                | '˘'
+                | '′'
+        ) {
+            strong = true;
+        }
+        if matches!(c, '・' | '･' | 'ｰ' | '＞' | '＜') {
+            weak = true;
+        }
+    }
+    alnum <= 2 && (strong || (weak && alnum == 0))
+}
 
 // ─── 絵文字判定 (char-based) ─────────────────────────────────────────────────
 
@@ -94,6 +156,17 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
             range: m.range(),
             kind: ProtectedKind::Email,
         });
+    }
+
+    // 顔文字
+    for caps in KAOMOJI_RE.captures_iter(input) {
+        if is_kaomoji_inner(&caps[1]) {
+            let m = caps.get(0).unwrap();
+            tokens.push(ProtectedToken {
+                range: m.range(),
+                kind: ProtectedKind::Kaomoji,
+            });
+        }
     }
 
     // 絵文字 (連続範囲を 1 つの token に集約)
@@ -179,8 +252,14 @@ impl CandidateProvider for ProtectTokenProvider {
                 let surface = &ctx.input[token.range.clone()];
                 let char_count = surface.chars().count();
                 let length = u8::try_from(char_count).unwrap_or(u8::MAX);
+                // 顔文字は読みを空にして丸ごと除外、 それ以外は surface のまま素通し
+                let reading = if token.kind == ProtectedKind::Kaomoji {
+                    ""
+                } else {
+                    surface
+                };
                 out.push(RawCandidate::new(
-                    surface, // reading = surface (passthrough)
+                    reading,
                     token.range.clone(),
                     Score::new(BAND_PROTECTED, length, 0),
                 ));
@@ -1038,6 +1117,69 @@ mod tests {
             .into_iter()
             .map(|c| (c.surface.to_string(), c.reading.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn kaomoji_in_parentheses_is_protected_with_empty_reading() {
+        for kao in [
+            "(´・ω・`)",
+            "(;´Д`)",
+            "(^o^)",
+            "(≧▽≦)",
+            "(T_T)",
+            "ヽ(´ー｀)ノ",
+            "＼(^o^)／",
+            "(^^)/",
+        ] {
+            let input = format!("あ{kao}い");
+            let tokens = extract_protected_tokens(&input);
+            assert_eq!(tokens.len(), 1, "{kao}");
+            assert_eq!(tokens[0].kind, ProtectedKind::Kaomoji, "{kao}");
+            assert_eq!(&input[tokens[0].range.clone()], kao, "{kao}");
+        }
+        let input = "(´・ω・`)";
+        let provider = ProtectTokenProvider::new(input);
+        let cands = provider.candidates_vec(&ctx(input), 0);
+        assert_eq!(cands.len(), 1);
+        assert_eq!(cands[0].reading, "");
+    }
+
+    #[test]
+    fn parentheses_that_are_not_faces_are_left_alone() {
+        for text in [
+            "(笑)",
+            "(株)",
+            "(A・B)",
+            "(1)",
+            "(abc)",
+            "(あ・い)",
+            "(a_b_c)",
+            "()",
+        ] {
+            let tokens = extract_protected_tokens(text);
+            assert!(
+                tokens.iter().all(|t| t.kind != ProtectedKind::Kaomoji),
+                "{text}"
+            );
+        }
+        // 中身が長すぎるものは顔ではない (15 文字)
+        let long = format!("({})", "^".repeat(15));
+        assert!(extract_protected_tokens(&long)
+            .iter()
+            .all(|t| t.kind != ProtectedKind::Kaomoji));
+        // 14 文字までは顔
+        let ok = format!("({})", "^".repeat(14));
+        assert!(extract_protected_tokens(&ok)
+            .iter()
+            .any(|t| t.kind == ProtectedKind::Kaomoji));
+    }
+
+    #[test]
+    fn url_is_not_replaced_by_kaomoji_reading() {
+        let input = "https://a.com/(^o^)";
+        let provider = ProtectTokenProvider::new(input);
+        let cands = provider.candidates_vec(&ctx(input), 0);
+        assert!(cands.iter().all(|c| !c.reading.is_empty()));
     }
 
     fn w_lookup() -> Arc<HashMap<String, String>> {

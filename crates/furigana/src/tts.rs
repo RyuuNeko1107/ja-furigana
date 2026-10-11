@@ -225,8 +225,24 @@ pub fn silence_flags(surfaces: &[&str]) -> Vec<bool> {
         })
         .collect();
 
+    // 数字 (や 時分秒) にはさまれた 〜 ~ - は範囲の 「から」 なので落とさない
+    // (1~3位 / 10〜20人 / 9時-17時)。 長音や顔文字パーツの 〜 は読みが空 / 装飾なので従来どおり
+    let range_mark: Vec<bool> = (0..surfaces.len())
+        .map(|i| {
+            matches!(surfaces[i], "~" | "〜" | "～" | "-" | "－")
+                && i > 0
+                && surfaces[i - 1].chars().last().is_some_and(|c| {
+                    c.is_ascii_digit() || matches!(c, '０'..='９' | '時' | '分' | '秒')
+                })
+                && surfaces
+                    .get(i + 1)
+                    .and_then(|n| n.chars().next())
+                    .is_some_and(|c| c.is_ascii_digit() || matches!(c, '０'..='９'))
+        })
+        .collect();
+
     (0..surfaces.len())
-        .map(|i| dropped[i] || kaomoji_letter[i] || laugh[i])
+        .map(|i| (dropped[i] && !range_mark[i]) || kaomoji_letter[i] || laugh[i])
         .collect()
 }
 
@@ -256,9 +272,8 @@ pub fn normalize_for_tts(text: &str, opts: &TtsOptions) -> String {
 
     // 句読点統一
     static COMMA: Lazy<Regex> = Lazy::new(|| Regex::new(r"[，,]+").unwrap());
-    static PERIOD: Lazy<Regex> = Lazy::new(|| Regex::new(r"[。．\.]+").unwrap());
     s = COMMA.replace_all(&s, "、").to_string();
-    s = PERIOD.replace_all(&s, "。").to_string();
+    s = unify_periods(&s);
 
     // 句読点前後の空白除去
     static PUNCT_SPACE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*([、。！？!?])\s*").unwrap());
@@ -286,6 +301,37 @@ pub fn normalize_for_tts(text: &str, opts: &TtsOptions) -> String {
     s
 }
 
+/// 英数字に挟まれた記号 (example.com の `.` / path?q=1 の `?`) は文の区切りではない
+fn between_ascii_alnum(chars: &[char], i: usize) -> bool {
+    i > 0
+        && chars[i - 1].is_ascii_alphanumeric()
+        && chars.get(i + 1).is_some_and(|c| c.is_ascii_alphanumeric())
+}
+
+/// `。` `．` `.` の連続を `。` 1 つにそろえる。 英数字に挟まれた 1 つの `.` (example.com / Node.js) は残す
+fn unify_periods(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if matches!(chars[i], '。' | '．' | '.') {
+            let start = i;
+            while i < chars.len() && matches!(chars[i], '。' | '．' | '.') {
+                i += 1;
+            }
+            if i - start == 1 && chars[start] == '.' && between_ascii_alnum(&chars, start) {
+                out.push('.');
+            } else {
+                out.push('。');
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// 指定文字セットの直後 (空白が続かない場合) にポーズを挿入
 fn insert_pause_after(text: &str, targets: &[char], pause: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
@@ -294,7 +340,7 @@ fn insert_pause_after(text: &str, targets: &[char], pause: &str) -> String {
         out.push(c);
         if targets.contains(&c) {
             if let Some(next) = chars.get(i + 1) {
-                if !next.is_whitespace() {
+                if !next.is_whitespace() && !(c.is_ascii() && between_ascii_alnum(&chars, i)) {
                     out.push_str(pause);
                 }
             }
@@ -395,6 +441,23 @@ mod tests {
     // (TtsOptions::default() の各 field 値を読み戻すだけの写経 test は削除。
     //  default の振る舞いは normalize_inserts_pauses / normalize_drops_period_when_disabled
     //  が観測可能な出力で検証している。)
+
+    #[test]
+    fn dots_and_marks_between_ascii_alnum_are_not_sentence_breaks() {
+        let opts = TtsOptions::default();
+        assert_eq!(normalize_for_tts("example.com", &opts), "example.com");
+        assert_eq!(normalize_for_tts("Node.js", &opts), "Node.js");
+        assert_eq!(
+            normalize_for_tts("https://a.com/p?q=1&r=2", &opts),
+            "https://a.com/p?q=1&r=2"
+        );
+        // 文の区切りは従来どおり
+        assert_eq!(normalize_for_tts("終わり.次", &opts), "終わり。 次");
+        assert_eq!(normalize_for_tts("a. b", &opts), "a。 b");
+        assert_eq!(normalize_for_tts("a..b", &opts), "a。 b");
+        assert_eq!(normalize_for_tts("1.", &opts), "1。");
+        assert_eq!(normalize_for_tts(".a", &opts), "。 a");
+    }
 
     #[test]
     fn insert_pause_after_respects_next_char() {
@@ -554,6 +617,25 @@ mod kaomoji_tests {
             .into_iter()
             .map(|t| t.reading.unwrap_or_default())
             .collect()
+    }
+
+    #[test]
+    fn range_marks_between_digits_are_kept_because_they_carry_kara() {
+        // 1~3位 の ~ は 「から」 と読むので、 装飾として落とさない (flag = 落とすか)
+        for mark in ["~", "〜", "～", "-", "－"] {
+            assert_eq!(silence_flags(&["1", mark, "3位"]), [false, false, false]);
+            assert_eq!(silence_flags(&["１", mark, "３"]), [false, false, false]);
+        }
+        assert_eq!(silence_flags(&["9", "時", "-", "17", "時"]), [false; 5]);
+        assert_eq!(silence_flags(&["10", "分", "〜", "２０", "分"]), [false; 5]);
+        // 数字にはさまれていない 〜 や、 装飾は従来どおり落ちる
+        assert_eq!(silence_flags(&["がんばれ", "〜"]), [false, true]);
+        assert_eq!(silence_flags(&["1", "〜", "あ"]), [false, true, false]);
+        assert_eq!(silence_flags(&["あ", "〜", "3"]), [false, true, false]);
+        assert_eq!(silence_flags(&["〜", "3"]), [true, false]);
+        assert_eq!(silence_flags(&["1", "★", "3"]), [false, true, false]);
+        assert_eq!(silence_flags(&["1", "〜〜", "3"]), [false, true, false]);
+        assert_eq!(silence_flags(&["時", "-", "あ"]), [false, true, false]);
     }
 
     #[test]

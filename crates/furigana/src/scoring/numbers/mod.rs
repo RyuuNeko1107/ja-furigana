@@ -62,8 +62,8 @@ use crate::scoring::candidate::{
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE,
-    VERSION_RE,
+    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, RATIO_RE, TIME_COLON_RE, TIME_JP_FULL_RE,
+    TIME_JP_KANJI_RE, VERSION_RE,
 };
 use regex::Regex;
 
@@ -312,7 +312,31 @@ fn range_marker_in_numeric_context(input: &str, pos: usize, ch: char) -> bool {
         .chars()
         .next()
         .is_some_and(is_digit_like_char);
-    prev_is_digit || next_is_digit
+    prev_is_digit || next_is_digit || between_single_capitals(input, pos, ch)
+}
+
+/// `A〜Z` のように、 単独の英大文字ではさまれているか (Hello〜World は対象外)
+fn between_single_capitals(input: &str, pos: usize, ch: char) -> bool {
+    let mut before = input[..pos].chars().rev();
+    let mut after = input[pos + ch.len_utf8()..].chars();
+    let (p1, p2) = (before.next(), before.next());
+    let (n1, n2) = (after.next(), after.next());
+    p1.is_some_and(|c| c.is_ascii_uppercase())
+        && n1.is_some_and(|c| c.is_ascii_uppercase())
+        && !p2.is_some_and(|c| c.is_ascii_alphabetic())
+        && !n2.is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+/// `9時-17時` の `-`: 時 / 分 / 秒の直後で、 数字が続く時は範囲の区切り (から)
+fn hyphen_is_time_range(input: &str, pos: usize, ch: char) -> bool {
+    input[..pos]
+        .chars()
+        .next_back()
+        .is_some_and(|c| matches!(c, '時' | '分' | '秒'))
+        && input[pos + ch.len_utf8()..]
+            .chars()
+            .next()
+            .is_some_and(is_digit_like_char)
 }
 
 /// `-` が **負の符号** か (= 「マイナス」 と読むべきか)。
@@ -330,7 +354,20 @@ fn minus_is_sign(input: &str, pos: usize, ch: char) -> bool {
         .chars()
         .next()
         .is_some_and(is_digit_like_char);
-    next_is_digit && !prev_is_digit && !prev_is_latin
+    let prev_is_time_unit = prev.is_some_and(|c| matches!(c, '時' | '分' | '秒'));
+    next_is_digit && !prev_is_digit && !prev_is_latin && !prev_is_time_unit
+}
+
+/// 全角数字を半角にする (時刻の範囲検査用)
+fn normalize_digits(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '０'..='９' => {
+                char::from(b'0' + u8::try_from(u32::from(c) - u32::from('０')).unwrap_or(0))
+            }
+            _ => c,
+        })
+        .collect()
 }
 
 /// 数字らしい char か (= ASCII 0-9 / 全角 0-9 / 漢数字 一〜十百千万億兆)。
@@ -456,19 +493,48 @@ impl NumberCandidateProvider {
         out.push(self.make(input, pos, m_end, reading));
     }
 
-    /// section 3: 時刻 HH:MM(:SS)。
+    /// section 3: 時刻 HH:MM(:SS)。 時は 0〜24、 分・秒は 0〜59 の時だけ時刻 (10:00 は 「じゅうじ」)。
+    /// 時刻にならない `数字:数字` (1:1 / 50:50 / 3:7) は比・スコアとして 「たい」 で読む
     fn try_time_colon(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(caps) = at_start(&TIME_COLON_RE, rest) {
             let m_end = caps.get(0).unwrap().end();
             let h = caps.get(1).unwrap().as_str();
             let mo = caps.get(2).unwrap().as_str();
             let se = caps.get(3).map(|m| m.as_str());
-            let mut reading = self.read_counter(h, "時");
-            reading.push_str(&self.read_counter(mo, "分"));
-            if let Some(s_str) = se {
-                reading.push_str(&self.read_counter(s_str, "秒"));
+            let in_range =
+                |s: &str, max: u32| normalize_digits(s).parse::<u32>().is_ok_and(|n| n <= max);
+            if in_range(h, 24) && in_range(mo, 59) && se.is_none_or(|s| in_range(s, 59)) {
+                let mut reading = self.read_counter(h, "時");
+                if se.is_some() || normalize_digits(mo) != "00" {
+                    reading.push_str(&self.read_counter(mo, "分"));
+                }
+                if let Some(s_str) = se {
+                    reading.push_str(&self.read_counter(s_str, "秒"));
+                }
+                out.push(self.make(input, pos, m_end, reading));
+                return;
             }
-            out.push(self.make(input, pos, m_end, reading));
+        }
+        // 比 / スコア。 前が数字・コロンなら途中なので出さない
+        let prev_blocks = input[..pos]
+            .chars()
+            .next_back()
+            .is_some_and(|c| is_digit_like_char(c) || matches!(c, ':' | '：'));
+        if prev_blocks {
+            return;
+        }
+        if let Some(caps) = at_start(&RATIO_RE, rest) {
+            let whole = caps.get(0).unwrap();
+            let after = &rest[whole.end()..];
+            if after.starts_with(|c: char| is_digit_like_char(c) || matches!(c, ':' | '：')) {
+                return;
+            }
+            let reading = format!(
+                "{}タイ{}",
+                number_to_katakana(caps.get(1).unwrap().as_str()),
+                number_to_katakana(caps.get(2).unwrap().as_str())
+            );
+            out.push(self.make(input, pos, whole.end(), reading));
         }
     }
 
@@ -969,7 +1035,9 @@ impl NumberCandidateProvider {
             // 2024-2025 (年範囲) ばかりで、 マイナス と読むべき例は無い。
             // 負数は -3 のように前が数字でない形で書かれるので、
             // 前が数字のときだけ読まない (区切りとして surface のみ消費する)。
-            let final_read = if (is_minus && !minus_is_sign(input, pos, ch))
+            let final_read = if is_minus && hyphen_is_time_range(input, pos, ch) {
+                "から".to_string()
+            } else if (is_minus && !minus_is_sign(input, pos, ch))
                 || (is_range_marker && !range_marker_in_numeric_context(input, pos, ch))
             {
                 String::new()
@@ -1147,10 +1215,11 @@ impl CandidateProvider for NumberCandidateProvider {
         // 記号 edge (読み無し) だけ出し、 数字は次の位置で読ませる。
         let sign_is_separator =
             matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
-                && input[..pos]
-                    .chars()
-                    .next_back()
-                    .is_some_and(|c| is_digit_like_char(c) || c.is_ascii_alphabetic());
+                && input[..pos].chars().next_back().is_some_and(|c| {
+                    is_digit_like_char(c)
+                        || c.is_ascii_alphabetic()
+                        || matches!(c, '時' | '分' | '秒')
+                });
         if !numeric_lead || sign_is_separator {
             // 何百件 / 何千円 は 何 の位置から 1 候補にする (try_counter_kanji、 2026-09-28)
             if first_char == '何' {

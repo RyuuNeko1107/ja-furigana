@@ -1065,3 +1065,115 @@ fn slash_unit_with_number_is_read_by_the_si_unit_rule() {
     let c = find(&cands, "60km/h").expect("数字つき");
     assert_eq!(c.reading, "ロクジュッキロメートルマイジ");
 }
+
+fn reading_at(input: &str, pos: usize, surface: &str) -> Option<String> {
+    let p = provider();
+    let cands = p.candidates_vec(&ctx(input), pos);
+    find(&cands, surface).map(|c| c.reading.to_string())
+}
+
+#[test]
+fn time_with_zero_minutes_reads_only_the_hour() {
+    assert_eq!(reading_at("10:00", 0, "10:00").as_deref(), Some("ジュウジ"));
+    assert_eq!(
+        reading_at("１０：００", 0, "１０：００").as_deref(),
+        Some("ジュウジ")
+    );
+    // 分があれば従来どおり。 秒つきは 00 分でも読む
+    assert!(reading_at("10:30", 0, "10:30").unwrap().ends_with("プン"));
+    assert!(reading_at("10:00:15", 0, "10:00:15")
+        .unwrap()
+        .contains("ビョウ"));
+    assert!(
+        reading_at("10:00:15", 0, "10:00:15")
+            .unwrap()
+            .contains("プン")
+            || reading_at("10:00:15", 0, "10:00:15")
+                .unwrap()
+                .contains("フン")
+    );
+}
+
+#[test]
+fn time_is_only_valid_hour_minute_second() {
+    // 24 時 59 分 59 秒まで時刻
+    assert!(!reading_at("24:59", 0, "24:59").unwrap().contains("タイ"));
+    assert!(reading_at("23:59:59", 0, "23:59:59")
+        .unwrap()
+        .contains("ビョウ"));
+    // 時 25 以上 / 分 60 以上 / 秒 60 以上は時刻ではなく比
+    assert_eq!(
+        reading_at("25:00", 0, "25:00").as_deref(),
+        Some("ニジュウゴタイゼロ")
+    );
+    assert!(reading_at("12:60", 0, "12:60").unwrap().contains("タイ"));
+    // 12:30:60 は時刻でも比でもない (途中の 12:30 も出さない)
+    assert!(reading_at("12:30:60", 0, "12:30").is_none());
+    assert!(reading_at("12:30:60", 0, "12:30:60").is_none());
+}
+
+#[test]
+fn ratio_reads_tai_and_ignores_longer_chains() {
+    assert_eq!(reading_at("1:1", 0, "1:1").as_deref(), Some("イチタイイチ"));
+    assert_eq!(reading_at("3:7", 0, "3:7").as_deref(), Some("サンタイナナ"));
+    assert_eq!(
+        reading_at("50:50", 0, "50:50").as_deref(),
+        Some("ゴジュウタイゴジュウ")
+    );
+    // 1:2:3 は比にしない
+    assert!(reading_at("1:2:3", 0, "1:2").is_none());
+    // 途中から (前が数字 / コロン) は出さない
+    assert!(reading_at("1:1:1", 2, "1:1").is_none());
+    assert!(reading_at("11:1", 1, "1:1").is_none());
+}
+
+#[test]
+fn hyphen_after_time_unit_is_kara() {
+    let p = provider();
+    let input = "9時-17時";
+    let cands = p.candidates_vec(&ctx(input), "9時".len());
+    let c = find(&cands, "-").expect("ハイフン");
+    assert_eq!(c.reading, "から");
+    // 時分秒以外の直後は従来どおり読まない / 符号
+    let cands = p.candidates_vec(&ctx("9日-17"), "9日".len());
+    assert!(cands
+        .iter()
+        .all(|c| c.surface != "-" || c.reading != "から"));
+    // 数字が続かなければ範囲ではない
+    let cands = p.candidates_vec(&ctx("9時-あ"), "9時".len());
+    assert!(cands.iter().all(|c| c.reading != "から"));
+}
+
+#[test]
+fn tilde_between_single_capitals_is_kara() {
+    let p = provider();
+    for (input, pos) in [("A〜Z", 1), ("A~C", 1)] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(cands.iter().any(|c| c.reading == "から"), "{input}");
+    }
+    // 単語どうし / 小文字 / 片側が複数文字 は長音・強調なので読まない
+    for (input, pos) in [("Hello〜World", 5), ("a〜z", 1), ("AB〜C", 2), ("A〜BC", 1)] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(cands.iter().all(|c| c.reading != "から"), "{input}");
+    }
+}
+
+#[test]
+fn normalize_digits_maps_fullwidth_only() {
+    assert_eq!(normalize_digits("０１２３４５６７８９"), "0123456789");
+    assert_eq!(normalize_digits("a1９"), "a19");
+}
+
+#[test]
+fn slash_unit_key_starting_with_a_symbol_is_not_read_bare() {
+    let mut r = rules();
+    r.units = toml::from_str(
+        r#"
+        [entries]
+        "°/s" = { kana = "ドマイビョウ" }
+        "#,
+    )
+    .unwrap();
+    let p = NumberCandidateProvider::new(&r);
+    assert!(find(&p.candidates_vec(&ctx("°/s"), 0), "°/s").is_none());
+}

@@ -31,6 +31,12 @@ pub(super) static TIME_COLON_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("scoring TIME_COLON regex build failed")
 });
 
+/// 比 / スコア (1:1 / 50:50 / 3:7)。 時刻として読めない `数字:数字`
+pub(super) static RATIO_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"([0-9０-９]{1,3})[:：]([0-9０-９]{1,3})")
+        .expect("scoring RATIO regex build failed")
+});
+
 pub(super) static TIME_JP_FULL_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"([0-9０-９]{1,2})時(?:([0-9０-９]{1,2})分)?(?:([0-9０-９]{1,2})秒)?")
         .expect("scoring TIME_JP regex build failed")
