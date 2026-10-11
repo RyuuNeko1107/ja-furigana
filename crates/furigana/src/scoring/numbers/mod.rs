@@ -99,6 +99,8 @@ pub struct NumberCandidateProvider {
     /// SI 単位記号 (小文字化済) の集合。 構築時に 1 度だけ作り、 解析毎の
     /// 再構築 (= units 全 entry の `to_ascii_lowercase` + `HashSet` alloc) を避ける。
     unit_symbols: std::sync::Arc<std::collections::HashSet<String>>,
+    /// `/` を含む単位記号 (km/h 等)。 数字なしの単独表記を読むために長い順に持つ
+    slash_units: Vec<String>,
 }
 
 impl NumberCandidateProvider {
@@ -136,6 +138,15 @@ impl NumberCandidateProvider {
             .map(|k| k.to_ascii_lowercase())
             .collect();
 
+        let mut slash_units: Vec<String> = rules
+            .units
+            .entries
+            .keys()
+            .filter(|k| k.contains('/'))
+            .cloned()
+            .collect();
+        slash_units.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+
         Self {
             counters: rules.counters.clone(),
             scales: rules.scales.clone(),
@@ -149,6 +160,7 @@ impl NumberCandidateProvider {
             scale_re,
             si_unit_re,
             unit_symbols: std::sync::Arc::new(unit_symbols),
+            slash_units,
         }
     }
 
@@ -1046,6 +1058,50 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// 数字なしの `km/h` / `m/s` (units に `/` 付きで登録した単位)。 語頭で、 直後が英数字でない時だけ。
+    /// 数字つき (60km/h) は si_unit の regex が読む
+    fn try_slash_unit(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        first_char: char,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        if self.slash_units.is_empty() || !first_char.is_ascii_alphabetic() {
+            return;
+        }
+        // URL / パス / メールの一部 (a.com/km/h、 ?v=m/s、 foo@m/s) は読まない
+        if input[..pos].chars().next_back().is_some_and(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '/' | '.' | '_' | '-' | ':' | '@' | '=' | '?' | '&' | '%' | '#' | '~'
+                )
+        }) {
+            return;
+        }
+        for key in &self.slash_units {
+            let Some(head) = rest.get(..key.len()) else {
+                continue;
+            };
+            if !head.eq_ignore_ascii_case(key) {
+                continue;
+            }
+            if rest[key.len()..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-'))
+            {
+                continue;
+            }
+            if let Some(kana) = self.units.lookup(head) {
+                out.push(self.make_hit(input, pos, key.len(), kana.to_string()));
+                return;
+            }
+        }
+    }
+
     /// section 8: 素の数字。
     fn try_digit(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(m) = at_start(&DIGIT_RE, rest) {
@@ -1073,6 +1129,7 @@ impl CandidateProvider for NumberCandidateProvider {
         // numeric lead 判定より前に評価する (非 hit 位置は HashMap lookup 1 回)。
         self.try_phrase(input, pos, rest, first_char, out);
         self.try_currency_prefix(input, pos, rest, first_char, out);
+        self.try_slash_unit(input, pos, rest, first_char, out);
 
         // ─── 先頭文字 dispatch (hot path 最適化) ─────────────────────────────
         // 数値系正規表現は全て **数字系の先頭文字** を要求する (NUM_PAT = 任意符号 +

@@ -998,3 +998,70 @@ fn version_rule_skips_dotted_dates() {
     // 日が 32 以上はバージョン
     assert!(find(&p.candidates_vec(&ctx("2026.1.32"), 0), "2026.1.32").is_some());
 }
+
+fn slash_provider() -> NumberCandidateProvider {
+    let mut r = rules();
+    let units: UnitsData = toml::from_str(
+        r#"
+        [entries]
+        "km" = { kana = "キロメートル" }
+        "km/h" = { kana = "キロメートルマイジ" }
+        "m/s" = { kana = "メートルマイビョウ", ci = false }
+        "#,
+    )
+    .unwrap();
+    r.units = units;
+    NumberCandidateProvider::new(&r)
+}
+
+#[test]
+fn slash_unit_alone_is_read_at_a_word_start() {
+    let p = slash_provider();
+    for (input, surface, reading) in [
+        ("km/h", "km/h", "キロメートルマイジ"),
+        ("KM/H", "KM/H", "キロメートルマイジ"),
+        ("時速km/hです", "km/h", "キロメートルマイジ"),
+        ("m/s", "m/s", "メートルマイビョウ"),
+    ] {
+        let pos = input.find(surface).unwrap();
+        let cands = p.candidates_vec(&ctx(input), pos);
+        let c = find(&cands, surface).unwrap_or_else(|| panic!("{input} の候補"));
+        assert_eq!(c.reading, reading, "{input}");
+    }
+    // ci = false の m/s は大文字では読まない
+    assert!(find(&p.candidates_vec(&ctx("M/S"), 0), "M/S").is_none());
+}
+
+#[test]
+fn slash_unit_is_not_read_inside_urls_paths_or_words() {
+    let p = slash_provider();
+    for (input, pos) in [
+        ("a.com/km/h", 6),
+        ("/km/h", 1),
+        ("x?v=km/h", 4),
+        ("foo@km/h", 4),
+        ("a_km/h", 2),
+        ("1km/h", 1),
+        ("km/h/x", 0),
+        ("km/h_x", 0),
+        ("km/h-x", 0),
+        ("km/hx", 0),
+        ("km/h2", 0),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(
+            cands
+                .iter()
+                .all(|c| c.surface != "km/h" && c.surface != "m/s"),
+            "{input} は読まない"
+        );
+    }
+}
+
+#[test]
+fn slash_unit_with_number_is_read_by_the_si_unit_rule() {
+    let p = slash_provider();
+    let cands = p.candidates_vec(&ctx("60km/h"), 0);
+    let c = find(&cands, "60km/h").expect("数字つき");
+    assert_eq!(c.reading, "ロクジュッキロメートルマイジ");
+}

@@ -499,6 +499,16 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                 strip_alphabet_connectors(&normalized).and_then(|k| self.lookup.get(&k))
             });
 
+            // 単独の w の直後が助詞 (キーwを押す / wは小文字) なら、 笑いではなく文字そのもの。
+            // 笑いの w は文末・読点・絵文字の前など助詞の前には来ない。 外来語表の ワラ を使わず
+            // 文字名で読む。 www... や ww は従来どおり笑い
+            let letter_name = (normalized == "w"
+                && ctx.input[range.end..].chars().next().is_some_and(|c| {
+                    matches!(c, 'は' | 'を' | 'が' | 'の' | 'も' | 'に' | 'で' | 'と')
+                }))
+            .then_some("ダブリュー");
+            let hit = if letter_name.is_some() { None } else { hit };
+
             // 「3km」 のような 数字 + 単位 は NumberCandidateProvider の責務。
             // ただし辞書に完全一致がある語 (5G = ファイブジー。 G は SI 単位のグラムでもある) は
             // 辞書を優先する。 小文字を含む表記 (4g = 4 グラム) は単位として読むので除く。
@@ -520,11 +530,13 @@ impl CandidateProvider for AlphabetPassthroughProvider {
             } else {
                 None
             };
-            let (reading, band): (std::borrow::Cow<'_, str>, _) = match (hit, with_digits) {
-                (Some(r), _) => (r.as_str().into(), BAND_DICT_EXACT),
-                (None, Some(r)) => (r.into(), BAND_DICT_EXACT),
-                (None, None) => (surface.into(), BAND_KANJI), // passthrough miss は fallback band
-            };
+            let (reading, band): (std::borrow::Cow<'_, str>, _) =
+                match (letter_name, hit, with_digits) {
+                    (Some(r), _, _) => (r.into(), BAND_DICT_EXACT),
+                    (None, Some(r), _) => (r.as_str().into(), BAND_DICT_EXACT),
+                    (None, None, Some(r)) => (r.into(), BAND_DICT_EXACT),
+                    (None, None, None) => (surface.into(), BAND_KANJI), // passthrough miss は fallback band
+                };
 
             out.push(RawCandidate::new(
                 reading,
@@ -1026,6 +1038,40 @@ mod tests {
             .into_iter()
             .map(|c| (c.surface.to_string(), c.reading.to_string()))
             .collect()
+    }
+
+    fn w_lookup() -> Arc<HashMap<String, String>> {
+        let mut m = HashMap::new();
+        m.insert("w".to_string(), "ワラ".to_string());
+        m.insert("ww".to_string(), "ワラワラ".to_string());
+        Arc::new(m)
+    }
+
+    fn w_reading(input: &str, pos: usize) -> String {
+        let provider = AlphabetPassthroughProvider::new(input, w_lookup());
+        provider
+            .candidates_vec(&ctx(input), pos)
+            .into_iter()
+            .next()
+            .map(|c| c.reading.to_string())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn single_w_before_a_particle_is_the_letter_not_laughter() {
+        for p in ["は", "を", "が", "の", "も", "に", "で", "と"] {
+            let input = format!("キーw{p}押す");
+            assert_eq!(w_reading(&input, "キー".len()), "ダブリュー", "{input}");
+        }
+        assert_eq!(w_reading("W は小文字", 0), "ワラ");
+        assert_eq!(w_reading("Wは小文字", 0), "ダブリュー");
+    }
+
+    #[test]
+    fn w_at_the_end_or_repeated_stays_laughter() {
+        assert_eq!(w_reading("ゆっくりw", "ゆっくり".len()), "ワラ");
+        assert_eq!(w_reading("ゆっくりw。", "ゆっくり".len()), "ワラ");
+        assert_eq!(w_reading("ゆっくりwwを", "ゆっくり".len()), "ワラワラ");
     }
 
     #[test]
