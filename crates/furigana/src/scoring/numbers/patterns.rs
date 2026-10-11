@@ -85,6 +85,22 @@ pub(super) static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"[0-9０-９]+(?:\.[0-9０-９]+){2,}").expect("scoring VERSION regex build failed")
 });
 
+/// 電話番号の形。 区切りは `-` か空白。
+/// - 国際: `+81-90-1234-5678` / `+1 555-123-4567` / `+44 7911 123456` (桁数の検査は呼び出し側)
+/// - 国内: `03-1234-5678` / `090 1234 5678` / `0120-123-456`
+/// - ハイフンなしの携帯: `09012345678`
+pub(super) static PHONE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"\+[0-9]{1,3}[- ]?[0-9]{1,5}(?:[- ][0-9]{1,6}){1,3}|0[0-9]{1,3}[- ][0-9]{1,4}[- ][0-9]{3,4}|0[5789]0[0-9]{8}",
+    )
+    .expect("scoring PHONE regex build failed")
+});
+
+/// `N/M` (日付 12/25 か分数 1/2 か。 文脈で決める)
+pub(super) static SLASH_PAIR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"([0-9]{1,2})/([0-9]{1,2})").expect("scoring SLASH_PAIR regex build failed")
+});
+
 pub(super) static DIGIT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
 

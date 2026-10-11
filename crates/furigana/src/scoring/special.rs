@@ -401,6 +401,15 @@ pub fn normalize_alphabet(s: &str) -> String {
 /// lookup map 内で `[digits]` table の項目 (語 → 数字の読み方) を区別する key 接頭辞。
 /// `#` は英字 range に入らないので surface の key とは衝突しない。
 pub const DIGITS_KEY_PREFIX: &str = "#digits:";
+
+/// 英文の中でだけ使う語 (loanwords の `[sentence_words]`) の lookup key 接頭辞。
+pub const SENTENCE_KEY_PREFIX: &str = "#sw:";
+
+/// 区切りを探す語の最大長 / 連結を試す英字の最大長
+const MAX_WORD_LEN: usize = 20;
+const MAX_SEGMENT_INPUT: usize = 40;
+/// 連結を試す英字の最小長 (これ未満は区切らない)
+const MIN_SEGMENT_INPUT: usize = 6;
 /// `[digits]` の値で 「読み方」 と 「語 + 数字の時だけ使う読み」 を区切る文字。
 pub const DIGITS_SEP: char = '\u{1F}';
 
@@ -462,17 +471,93 @@ impl AlphabetPassthroughProvider {
         }
     }
 
+    /// 1 語の読み。 外来語表の語か、 英文の中でだけ使う語 (a / is / to …)。
+    /// 2 文字以下の外来語表の語は 「英文の語」 としては使わない (表にある語でも短いものは語の一部になりやすい)
+    fn word_reading(&self, norm: &str) -> Option<&str> {
+        self.lookup
+            .get(norm)
+            .or_else(|| self.lookup.get(&format!("{SENTENCE_KEY_PREFIX}{norm}")))
+            .map(String::as_str)
+    }
+
+    /// 空白なしでつながった英単語 (thankyou / iloveyou / GameOver) を、 辞書の語に区切って読む。
+    ///
+    /// 全部の部分が辞書 (3 文字以上の外来語表の語) か英文の語表にあり、 2 部分以上に分かれ、
+    /// 辞書の語を 1 つ以上含む時だけ。 全部大文字 (略語) / 数字や記号を含むものは対象外。
+    /// 部分の数が最も少ない区切りを選ぶ
+    fn segmented_reading(&self, surface: &str) -> Option<String> {
+        let n = surface.len();
+        if !(MIN_SEGMENT_INPUT..=MAX_SEGMENT_INPUT).contains(&n)
+            || !surface.bytes().all(|b| b.is_ascii_alphabetic())
+            || surface.bytes().all(|b| b.is_ascii_uppercase())
+        {
+            return None;
+        }
+        let mut out = String::new();
+        let mut parts = 0;
+        let mut content = 0;
+        for chunk in camel_chunks(surface) {
+            let (reading, p, c) = self.word_break(&chunk.to_ascii_lowercase())?;
+            out.push_str(&reading);
+            parts += p;
+            content += c;
+        }
+        (parts >= 2 && content >= 1).then_some(out)
+    }
+
+    /// 小文字の英字列を辞書の語に区切る (部分の数が最少のもの)。 (読み, 部分の数, 辞書の語の数)
+    fn word_break(&self, s: &str) -> Option<(String, usize, usize)> {
+        let n = s.len();
+        // best[i] = s[..i] を区切った最良の (部分の数, 読み, 辞書の語の数)
+        let mut best: Vec<Option<(usize, String, usize)>> = vec![None; n + 1];
+        best[0] = Some((0, String::new(), 0));
+        for i in 0..n {
+            let Some((count, reading, content)) = best[i].clone() else {
+                continue;
+            };
+            for j in (i + 1)..=n.min(i + MAX_WORD_LEN) {
+                let word = &s[i..j];
+                let (piece, is_content) = match self.lookup.get(word) {
+                    Some(r) if word.len() >= 3 => (r.as_str(), true),
+                    _ => match self.lookup.get(&format!("{SENTENCE_KEY_PREFIX}{word}")) {
+                        Some(r) => (r.as_str(), false),
+                        None => continue,
+                    },
+                };
+                let cand = (
+                    count + 1,
+                    format!("{reading}{piece}"),
+                    content + usize::from(is_content),
+                );
+                if best[j].as_ref().is_none_or(|b| cand.0 < b.0) {
+                    best[j] = Some(cand);
+                }
+            }
+        }
+        best.pop()
+            .flatten()
+            .map(|(count, reading, content)| (reading, count, content))
+    }
+
     /// 空白区切りの 2 語以上で、 外来語表にある語を 「語の読み」 に置き換えて空白でつないだもの
     /// (末尾の空白は残す)。 全部の語が表にある時だけ。 `allow_partial` なら 1 語でもあれば読む
     fn known_words_reading(&self, surface: &str, allow_partial: bool) -> Option<String> {
         let body = surface.trim_end_matches(' ');
+        // 単独の語 (型番の前の 1 語) には英文用の語表を使わない (単独の so / to を読まない)
+        let sentence = body.contains(' ');
         let mut hits = 0;
         let mut out: Vec<&str> = Vec::new();
         for word in body.split(' ').filter(|w| !w.is_empty()) {
-            match self.lookup.get(&normalize_alphabet(word)) {
+            let norm = normalize_alphabet(word);
+            let found = if sentence {
+                self.word_reading(&norm)
+            } else {
+                self.lookup.get(&norm).map(String::as_str)
+            };
+            match found {
                 Some(r) => {
                     hits += 1;
-                    out.push(r.as_str());
+                    out.push(r);
                 }
                 None => out.push(word),
             }
@@ -656,6 +741,14 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                 } else {
                     None
                 }
+            })
+            // 空白なしの連結 (thankyou / GameOver) は、 辞書の語に区切れる時だけ読む
+            .or_else(|| {
+                if hit.is_none() && !surface.contains(' ') {
+                    self.segmented_reading(surface)
+                } else {
+                    None
+                }
             });
             let (reading, band): (std::borrow::Cow<'_, str>, _) =
                 match (letter_name, hit, with_digits) {
@@ -746,6 +839,22 @@ impl CandidateProvider for AlphabetPassthroughProvider {
 }
 
 /// surface が 「英字 + 数字だけ」 (例: `SSR3`) なら 英字部分の byte 長。
+/// camelCase / TitleCase の切れ目で分ける (`GameOver` → `Game` `Over`、 `iLoveYou` → `i` `Love` `You`)。
+/// 切れ目は 「小文字の直後の大文字」 だけ。 全部小文字ならそのまま 1 つ
+fn camel_chunks(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    for i in 1..bytes.len() {
+        if bytes[i].is_ascii_uppercase() && bytes[i - 1].is_ascii_lowercase() {
+            out.push(&s[start..i]);
+            start = i;
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
 fn letters_before_digits(surface: &str) -> Option<usize> {
     let letters_len = surface.find(|c: char| !is_alphabet_letter(c))?;
     let digits = &surface[letters_len..];
@@ -1301,6 +1410,131 @@ mod tests {
         assert_eq!(ranges(&[20]), vec![0..8]);
         // 複数あれば最初のもの
         assert_eq!(ranges(&[7, 6]), vec![0..6]);
+    }
+
+    fn sentence_lookup() -> Arc<HashMap<String, String>> {
+        let mut m = HashMap::new();
+        for (k, v) in [
+            ("thank", "サンク"),
+            ("love", "ラブ"),
+            ("game", "ゲーム"),
+            ("over", "オーバー"),
+            ("much", "マッチ"),
+            ("no", "ノー"),
+        ] {
+            m.insert(k.to_string(), v.to_string());
+        }
+        for (k, v) in [
+            ("you", "ユー"),
+            ("i", "アイ"),
+            ("so", "ソー"),
+            ("to", "トゥ"),
+            ("a", "ア"),
+        ] {
+            m.insert(format!("{SENTENCE_KEY_PREFIX}{k}"), v.to_string());
+        }
+        Arc::new(m)
+    }
+
+    fn sentence_readings(input: &str) -> Vec<(String, String)> {
+        let provider = AlphabetPassthroughProvider::new(input, sentence_lookup());
+        provider
+            .candidates_vec(&ctx(input), 0)
+            .into_iter()
+            .map(|c| (c.surface.to_string(), c.reading.to_string()))
+            .collect()
+    }
+
+    fn one(input: &str) -> String {
+        let r = sentence_readings(input);
+        assert_eq!(r.len(), 1, "{input}: {r:?}");
+        r[0].1.clone()
+    }
+
+    #[test]
+    fn sentence_words_are_used_only_inside_multi_word_english() {
+        // 全部の語が辞書か英文の語表にあれば語ごとに読む
+        assert_eq!(one("thank you so much"), "サンク ユー ソー マッチ");
+        assert_eq!(one("I love you"), "アイ ラブ ユー");
+        // 単独の so / to / a は引かない (従来どおり素通し)
+        assert_eq!(one("so"), "so");
+        assert_eq!(one("to"), "to");
+        // 英文の語表に無い語が混じれば素通し
+        assert_eq!(one("thank you very much"), "thank you very much");
+    }
+
+    #[test]
+    fn concatenated_words_are_split_into_known_words() {
+        assert_eq!(one("thankyou"), "サンクユー");
+        assert_eq!(one("iloveyou"), "アイラブユー");
+        assert_eq!(one("GameOver"), "ゲームオーバー");
+        assert_eq!(one("gameover"), "ゲームオーバー");
+        assert_eq!(one("iLoveYou"), "アイラブユー");
+        assert_eq!(one("thankyousomuch"), "サンクユーソーマッチ");
+    }
+
+    #[test]
+    fn concatenation_needs_every_part_known_and_a_real_word() {
+        // 1 部分でも未知なら素通し
+        assert_eq!(one("thankyoux"), "thankyoux");
+        assert_eq!(one("gamexover"), "gamexover");
+        // 英文の語だけ (辞書の語を含まない) は読まない
+        assert_eq!(one("itisto"), "itisto");
+        assert_eq!(one("youtoso"), "youtoso");
+        // 1 語で辞書にある物は区切らず辞書どおり
+        assert_eq!(one("thank"), "サンク");
+    }
+
+    #[test]
+    fn concatenation_skips_short_acronyms_digits_and_long_inputs() {
+        // 5 文字以下は区切らない / 6 文字からは区切る
+        assert_eq!(one("noyou"), "noyou");
+        assert_eq!(one("noyous"), "noyous");
+        assert_eq!(one("loveyou"), "ラブユー");
+        // 全部大文字 (略語) は対象外
+        assert_eq!(one("THANKYOU"), "THANKYOU");
+        // 数字・記号まじりは対象外 (英字 range に数字が入る)
+        assert_eq!(one("thankyou2"), "thankyou2");
+        // 長すぎる入力は試さない
+        let long = "thank".repeat(9);
+        assert_eq!(one(&long), long);
+        let max = "thank".repeat(8);
+        assert_eq!(one(&max), "サンク".repeat(8));
+    }
+
+    #[test]
+    fn word_break_prefers_fewest_parts() {
+        let provider = AlphabetPassthroughProvider::new("x", sentence_lookup());
+        let (r, parts, content) = provider.word_break("thankyou").unwrap();
+        assert_eq!((r.as_str(), parts, content), ("サンクユー", 2, 1));
+        // 3 字以上の辞書の語は内容語、 1〜2 字や英文の語は数えない
+        let (_, _, content) = provider.word_break("iloveyou").unwrap();
+        assert_eq!(content, 1);
+        assert!(provider.word_break("zzzz").is_none());
+        assert!(provider
+            .word_break("")
+            .map_or(true, |(r, p, _)| r.is_empty() && p == 0));
+        // 辞書の 2 字の語 (no) は内容語として使わない: noyou は 英文の語表に no が無いので区切れない
+        assert!(provider.word_break("noyou").is_none());
+    }
+
+    #[test]
+    fn camel_chunks_split_after_lowercase_before_uppercase() {
+        assert_eq!(camel_chunks("GameOver"), vec!["Game", "Over"]);
+        assert_eq!(camel_chunks("iLoveYou"), vec!["i", "Love", "You"]);
+        assert_eq!(camel_chunks("gameover"), vec!["gameover"]);
+        assert_eq!(camel_chunks("ABC"), vec!["ABC"]);
+        assert_eq!(camel_chunks("aB"), vec!["a", "B"]);
+        assert_eq!(camel_chunks("Ab"), vec!["Ab"]);
+        assert_eq!(camel_chunks(""), vec![""]);
+    }
+
+    #[test]
+    fn word_reading_falls_back_to_sentence_words() {
+        let provider = AlphabetPassthroughProvider::new("x", sentence_lookup());
+        assert_eq!(provider.word_reading("thank"), Some("サンク"));
+        assert_eq!(provider.word_reading("you"), Some("ユー"));
+        assert_eq!(provider.word_reading("zzz"), None);
     }
 
     fn w_lookup() -> Arc<HashMap<String, String>> {

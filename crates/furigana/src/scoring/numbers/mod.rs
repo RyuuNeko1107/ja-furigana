@@ -59,12 +59,13 @@ use crate::rules::{CountersData, DaysData, RulesData, ScalesData, SymbolsData, U
 use crate::scoring::candidate::{
     CandidateProvider, RawCandidate, Score, ScoringContext, BAND_SPECIAL,
 };
+use crate::scoring::digit_reading::DigitStyle;
 use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, RATIO_RE, TIME_COLON_RE, TIME_JP_FULL_RE,
-    TIME_JP_KANJI_RE, VERSION_RE,
+    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, PHONE_RE, RATIO_RE, SLASH_PAIR_RE, TIME_COLON_RE,
+    TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
 };
 use regex::Regex;
 
@@ -1159,6 +1160,109 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// 電話番号 (`03-1234-5678` / `090 1234 5678` / `0120-123-456` / `+81-90-1234-5678` / `+1 555-123-4567` /
+    /// `09012345678`)。 桁を 1 つずつ読み、 区切りの位置は間 (空白) にする。 数 (さんぜん…) としては読まない。
+    /// 国内は 10〜11 桁、 国際 (`+` から) は 8〜15 桁 (E.164)
+    fn try_phone(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
+        let Some(m) = at_start(&PHONE_RE, rest) else {
+            return;
+        };
+        let text = m.get(0).unwrap().as_str();
+        let end = m.get(0).unwrap().end();
+        let digits = text.bytes().filter(u8::is_ascii_digit).count();
+        let international = text.starts_with('+');
+        let ok = if international {
+            (8..=15).contains(&digits)
+        } else {
+            (10..=11).contains(&digits)
+        };
+        // 長い数字列 / 区切りつなぎの途中 (日付 2024-03-1234 の後半など) は電話番号にしない。
+        // 国際の + は英数字の直後 (A+1234 5678) なら足し算なので除く
+        let prev = input[..pos].chars().next_back();
+        let prev_blocks = prev.is_some_and(|c| {
+            c.is_ascii_digit() || c == '-' || (international && c.is_ascii_alphabetic())
+        });
+        let next_blocks = rest[end..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit() || c == '-');
+        if !ok || prev_blocks || next_blocks {
+            return;
+        }
+        // ハイフンなしの携帯 (09012345678) は 3-4-4 に区切る
+        let spaced;
+        let text = if text.contains(['-', ' ']) {
+            text
+        } else {
+            spaced = format!("{}-{}-{}", &text[..3], &text[3..7], &text[7..]);
+            spaced.as_str()
+        };
+        let mut reading = String::new();
+        for (i, group) in text.split(['-', ' ']).enumerate() {
+            if i > 0 {
+                reading.push(' ');
+            }
+            let group = match group.strip_prefix('+') {
+                Some(g) => {
+                    reading.push_str("プラス");
+                    g
+                }
+                None => group,
+            };
+            reading.push_str(&DigitStyle::Each.render(group).unwrap_or_default());
+        }
+        out.push(self.make(input, pos, end, reading));
+    }
+
+    /// `N/M` を日付か分数か決める。 手がかりが無いもの (1/3 / 10/12) は曖昧なので触らない。
+    /// - 月 1〜12 / 日 13〜31 は日付 (12/25 = じゅうにがつにじゅうごにち)。 3 要素 (2024/10/12) の一部は除く
+    /// - 直後が 分数の言い方 (サイズ / 倍 / 割 / 以上 / 以下 / 程度 / ほど / くらい / 弱 / 強) なら分数
+    ///   (1/2サイズ = にぶんのいちさいず)
+    fn try_slash_pair(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
+        let Some(caps) = at_start(&SLASH_PAIR_RE, rest) else {
+            return;
+        };
+        let whole = caps.get(0).unwrap();
+        let (a, b) = (caps.get(1).unwrap().as_str(), caps.get(2).unwrap().as_str());
+        let (Ok(x), Ok(y)) = (a.parse::<u32>(), b.parse::<u32>()) else {
+            return;
+        };
+        let prev = input[..pos].chars().next_back();
+        let after = &rest[whole.end()..];
+        // 数字・スラッシュの途中 (2024/10/12 / 1/2/3) は触らない
+        if prev.is_some_and(|c| c.is_ascii_digit() || c == '/')
+            || after.starts_with(|c: char| c.is_ascii_digit() || c == '/')
+        {
+            return;
+        }
+        let fraction_word = [
+            "サイズ",
+            "倍",
+            "割",
+            "以上",
+            "以下",
+            "程度",
+            "ほど",
+            "くらい",
+            "弱",
+            "強",
+        ]
+        .iter()
+        .any(|w| after.starts_with(w));
+        let reading = if (1..=12).contains(&x) && (13..=31).contains(&y) {
+            format!(
+                "{}{}",
+                self.read_counter_in_date(a, "月"),
+                self.read_counter_in_date(b, "日")
+            )
+        } else if fraction_word && y > 0 {
+            format!("{}ブンノ{}", number_to_katakana(b), number_to_katakana(a))
+        } else {
+            return;
+        };
+        out.push(self.make(input, pos, whole.end(), reading));
+    }
+
     /// 数字なしの `km/h` / `m/s` (units に `/` 付きで登録した単位)。 語頭で、 直後が英数字でない時だけ。
     /// 数字つき (60km/h) は si_unit の regex が読む
     fn try_slash_unit(
@@ -1271,6 +1375,8 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_si_unit(input, pos, rest, out);
         self.try_fraction(input, pos, rest, out);
         self.try_kanji_decimal(input, pos, rest, out);
+        self.try_phone(input, pos, rest, out);
+        self.try_slash_pair(input, pos, rest, out);
         self.try_version(input, pos, rest, out);
         self.try_counter(input, pos, rest, out);
         self.try_counter_kanji_grouped(input, pos, rest, out);

@@ -1236,3 +1236,146 @@ fn model_starts_lists_every_word_start_that_matches() {
         .model_starts(input)
         .is_empty());
 }
+
+fn phone(input: &str) -> Option<String> {
+    reading_at(input, 0, input)
+}
+
+#[test]
+fn phone_numbers_are_read_digit_by_digit() {
+    assert_eq!(
+        phone("090-1234-5678").as_deref(),
+        Some("ゼロキュウゼロ イチニサンヨン ゴロクナナハチ")
+    );
+    assert_eq!(
+        phone("03-1234-5678").as_deref(),
+        Some("ゼロサン イチニサンヨン ゴロクナナハチ")
+    );
+    assert_eq!(
+        phone("0120-123-456").as_deref(),
+        Some("ゼロイチニゼロ イチニサン ヨンゴロク")
+    );
+    // 空白区切り / ハイフンなしの携帯 (3-4-4 に区切る)
+    assert_eq!(
+        phone("090 1234 5678").as_deref(),
+        Some("ゼロキュウゼロ イチニサンヨン ゴロクナナハチ")
+    );
+    assert_eq!(
+        phone("09012345678").as_deref(),
+        Some("ゼロキュウゼロ イチニサンヨン ゴロクナナハチ")
+    );
+}
+
+#[test]
+fn international_numbers_start_with_plus_and_allow_up_to_15_digits() {
+    assert_eq!(
+        phone("+81-90-1234-5678").as_deref(),
+        Some("プラスハチイチ キュウゼロ イチニサンヨン ゴロクナナハチ")
+    );
+    assert_eq!(
+        phone("+1 555-123-4567").as_deref(),
+        Some("プラスイチ ゴゴゴ イチニサン ヨンゴロクナナ")
+    );
+    // 8 桁 (下限) は読む。 7 桁以下は電話番号ではない
+    assert!(phone("+81 3 1234 5678").is_some());
+    assert!(phone("+12 345 678").is_some());
+    assert!(phone("+1 234 567").is_none());
+    // 15 桁 (上限) は読み、 16 桁は読まない
+    assert!(phone("+123 4567 8901 2345").is_some());
+    assert!(phone("+123 4567 8901 23456").is_none());
+}
+
+#[test]
+fn domestic_numbers_need_10_or_11_digits() {
+    // 9 桁 / 12 桁は国内の電話番号ではない
+    assert!(phone("03-123-4567").is_none());
+    assert!(phone("0120-1234-56789").is_none());
+    assert!(phone("090-12345-67890").is_none());
+    // 先頭が 0 でなければ対象外 (日付など)
+    assert!(phone("12-1234-5678").is_none());
+    assert!(phone("2024-10-12").is_none());
+}
+
+#[test]
+fn phone_is_not_matched_in_the_middle_of_a_longer_chain() {
+    let p = provider();
+    // 前が数字 / ハイフン、 後ろが数字 / ハイフンなら途中
+    assert!(find(
+        &p.candidates_vec(&ctx("1090-1234-5678"), 1),
+        "090-1234-5678"
+    )
+    .is_none());
+    assert!(find(&p.candidates_vec(&ctx("2024-03-1234"), 5), "03-1234").is_none());
+    assert!(find(
+        &p.candidates_vec(&ctx("090-1234-56789"), 0),
+        "090-1234-5678"
+    )
+    .is_none());
+    assert!(find(
+        &p.candidates_vec(&ctx("090-1234-5678-9"), 0),
+        "090-1234-5678"
+    )
+    .is_none());
+    // 国際の + は英数字の直後 (A+1234 5678) なら足し算
+    assert!(find(&p.candidates_vec(&ctx("A+1234 5678"), 1), "+1234 5678").is_none());
+    // 前が日本語や空白なら電話番号
+    assert!(find(
+        &p.candidates_vec(&ctx("電話090-1234-5678"), "電話".len()),
+        "090-1234-5678"
+    )
+    .is_some());
+    assert!(find(
+        &p.candidates_vec(&ctx("x +81-90-1234-5678"), 2),
+        "+81-90-1234-5678"
+    )
+    .is_some());
+}
+
+#[test]
+fn slash_pair_is_a_date_when_the_day_is_over_12() {
+    assert_eq!(
+        reading_at("12/25", 0, "12/25").as_deref(),
+        Some("ジュウニガツニジュウゴニチ")
+    );
+    assert!(reading_at("1/31", 0, "1/31").is_some());
+    // 月 13 以上 / 日 12 以下 / 日 32 以上 は日付にしない
+    assert!(reading_at("13/25", 0, "13/25").is_none());
+    assert!(reading_at("10/12", 0, "10/12").is_none());
+    assert!(reading_at("12/32", 0, "12/32").is_none());
+    assert!(reading_at("0/25", 0, "0/25").is_none());
+}
+
+#[test]
+fn slash_pair_is_a_fraction_before_a_measure_word() {
+    assert_eq!(
+        reading_at("1/2サイズ", 0, "1/2").as_deref(),
+        Some("ニブンノイチ")
+    );
+    assert_eq!(
+        reading_at("3/4以上", 0, "3/4").as_deref(),
+        Some("ヨンブンノサン")
+    );
+    for w in ["倍", "割", "以下", "程度", "ほど", "くらい", "弱", "強"] {
+        let input = format!("1/3{w}");
+        assert_eq!(
+            reading_at(&input, 0, "1/3").as_deref(),
+            Some("サンブンノイチ"),
+            "{input}"
+        );
+    }
+    // 手がかりが無ければ触らない
+    assert!(reading_at("1/3", 0, "1/3").is_none());
+    assert!(reading_at("2/3です", 0, "2/3").is_none());
+    // 分母 0 は分数にしない
+    assert!(reading_at("1/0倍", 0, "1/0").is_none());
+}
+
+#[test]
+fn slash_pair_ignores_longer_chains() {
+    let p = provider();
+    assert!(find(&p.candidates_vec(&ctx("2024/10/25"), 5), "10/25").is_none());
+    assert!(find(&p.candidates_vec(&ctx("2024/10/25"), 0), "20/24").is_none());
+    assert!(find(&p.candidates_vec(&ctx("1/2/25"), 0), "1/2").is_none());
+    assert!(find(&p.candidates_vec(&ctx("1/2/25"), 2), "2/25").is_none());
+    assert!(find(&p.candidates_vec(&ctx("a/12/25"), 2), "12/25").is_none());
+}
