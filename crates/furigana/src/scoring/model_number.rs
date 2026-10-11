@@ -431,6 +431,51 @@ mod tests {
     }
 
     #[test]
+    fn longer_match_wins_regardless_of_pattern_order() {
+        let short = r#"[[model]]
+pattern = 'GT\s?([0-9]{3})'
+reading = "ジーティー{1:each}"
+"#;
+        let long = r#"[[model]]
+pattern = 'GT\s?([0-9]{3})\s?Ti'
+reading = "ジーティー{1:each}ティーアイ"
+"#;
+        for order in [
+            format!(
+                "{short}
+{long}"
+            ),
+            format!(
+                "{long}
+{short}"
+            ),
+        ] {
+            let m = models(&order);
+            let (end, r) = read(&m, "GT 710 Ti").unwrap();
+            assert_eq!(end, "GT 710 Ti".len());
+            assert!(r.ends_with("ティーアイ"), "{r}");
+            // 短い方だけ当たる入力では短い方
+            let (end, r) = read(&m, "GT 710").unwrap();
+            assert_eq!(end, "GT 710".len());
+            assert!(!r.ends_with("ティーアイ"), "{r}");
+        }
+        // 同じ長さなら先に書いた方
+        let a = r#"[[model]]
+pattern = 'GT([0-9]{3})'
+reading = "ア{1:each}"
+"#;
+        let b = r#"[[model]]
+pattern = 'GT([0-9]{3})'
+reading = "イ{1:each}"
+"#;
+        let m = models(&format!(
+            "{a}
+{b}"
+        ));
+        assert!(read(&m, "GT710").unwrap().1.starts_with('ア'));
+    }
+
+    #[test]
     fn empty_models_match_nothing() {
         let m = CompiledModels::new(&ModelsData::default());
         assert!(m.is_empty());
@@ -494,7 +539,11 @@ mod tests {
             first_chars(&spec("([A-Z])", Some("ZB-"))).unwrap(),
             vec!['z', 'b']
         );
-        assert!(first_chars(&spec("([A-Z])", None)).is_err());
+        // 先頭が英字でない時は、 first の指定が無いと 「先頭が英字ではない」 で弾く
+        let err = first_chars(&spec("([A-Z])", None)).unwrap_err();
+        assert!(err.contains("先頭が英字ではない"), "{err}");
+        let err = first_chars(&spec("1RTX", None)).unwrap_err();
+        assert!(err.contains("先頭が英字ではない"), "{err}");
         assert!(first_chars(&spec("([A-Z])", Some("12"))).is_err());
     }
 }
