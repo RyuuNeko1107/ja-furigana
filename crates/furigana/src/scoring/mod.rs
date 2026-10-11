@@ -41,6 +41,7 @@ pub mod bracket;
 pub mod candidate;
 pub mod contextual;
 pub mod dict_bridge;
+pub mod digit_reading;
 pub mod engine;
 pub mod format;
 pub mod inspect;

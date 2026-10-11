@@ -646,10 +646,48 @@ fn load_loanwords_into(
         struct LoanwordsToml {
             #[serde(default)]
             entries: HashMap<String, String>,
+            /// 語 → くっついた数字の読み方。 `"Windows" = "english"` か、 読みを上書きする
+            /// `"No" = { style = "place", reading = "ナンバー" }`。
+            #[serde(default)]
+            digits: HashMap<String, DigitsValue>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum DigitsValue {
+            Style(String),
+            Detail {
+                style: String,
+                reading: Option<String>,
+            },
         }
         let parsed: LoanwordsToml = crate::loader::parse_toml(content, from)?;
         for (surface, reading) in parsed.entries {
             out.insert(normalize_alphabet(&surface), reading);
+        }
+        for (surface, value) in parsed.digits {
+            let (style, reading) = match value {
+                DigitsValue::Style(s) => (s, None),
+                DigitsValue::Detail { style, reading } => (style, reading),
+            };
+            if crate::scoring::digit_reading::DigitStyle::parse(&style).is_none() {
+                return Err(crate::FuriganaError::Validation(format!(
+                    "{from}: [digits] '{surface}' の読み方 '{style}' は未知 \
+                     (place / each / each_en / english / pair / pair_en)"
+                )));
+            }
+            // 「読み方」 と (あれば) 「語 + 数字の時だけ使う読み」 を 1 文字列に畳む。
+            let encoded = match reading {
+                Some(r) => format!("{style}{}{r}", crate::scoring::special::DIGITS_SEP),
+                None => style,
+            };
+            out.insert(
+                format!(
+                    "{}{}",
+                    crate::scoring::special::DIGITS_KEY_PREFIX,
+                    normalize_alphabet(&surface)
+                ),
+                encoded,
+            );
         }
         Ok(())
     })
@@ -1892,5 +1930,71 @@ weight = 30
         let r = f.to_accent("上手");
         assert!(r.tokens[0].ambiguous);
         assert_eq!(r.tokens[0].alternatives[0].reading, "カミテ");
+    }
+
+    #[test]
+    fn loanwords_digits_table_is_loaded_from_core_dict_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_digits_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("loanwords")).unwrap();
+        std::fs::write(
+            dir.join("loanwords/digits.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"loanwords\"
+
+[entries]
+\"Windows\" = \"ウィンドウズ\"
+\"no\" = \"ノー\"
+
+[digits]
+\"Windows\" = \"english\"
+\"No\" = { style = \"english\", reading = \"ナンバー\" }
+",
+        )
+        .unwrap();
+        let f = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        // [entries] の読みと [digits] の読み方が使われる
+        assert_eq!(f.to_hiragana("Windows11"), "ウィンドウズイレブン");
+        assert_eq!(f.to_hiragana("Windows 10"), "ウィンドウズテン");
+        // 読みの上書きは 「語 + 数字」 の時だけ。 単独の No は [entries] の読み
+        assert_eq!(f.to_hiragana("No.1"), "ナンバーワン");
+        assert_eq!(f.to_hiragana("no"), "ノー");
+        // [digits] に無い語は素通し
+        assert_eq!(f.to_hiragana("Linux11"), "Linux11");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loanwords_digits_table_rejects_unknown_style() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_digits_bad_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("loanwords")).unwrap();
+        std::fs::write(
+            dir.join("loanwords/digits.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"loanwords\"
+
+[digits]
+\"Windows\" = \"nope\"
+",
+        )
+        .unwrap();
+        let err = Furigana::builder().core_dict_dir(&dir).build().err();
+        assert!(err.is_some_and(|e| e.to_string().contains("未知")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

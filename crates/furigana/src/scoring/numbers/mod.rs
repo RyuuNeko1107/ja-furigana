@@ -63,6 +63,7 @@ use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
     KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE,
+    VERSION_RE,
 };
 use regex::Regex;
 
@@ -234,6 +235,25 @@ impl NumberCandidateProvider {
 }
 
 /// 読み上げない終端記号 (= 記号候補に巻き取ってよい文字)。
+/// `2026.1.16` のような 西暦 4 桁 + 月 + 日 のドット区切り。 バージョンとも日付とも取れるので
+/// バージョン規則の対象にしない (従来どおり)。
+fn looks_like_dotted_date(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    let [y, m, d] = parts[..] else {
+        return false;
+    };
+    let num = |p: &str| {
+        p.chars()
+            .filter_map(|c| c.to_digit(10))
+            .fold(0u32, |a, d| a * 10 + d)
+    };
+    y.chars().count() == 4
+        && (1..=2).contains(&m.chars().count())
+        && (1..=2).contains(&d.chars().count())
+        && (1..=12).contains(&num(m))
+        && (1..=31).contains(&num(d))
+}
+
 fn is_trailing_punctuation(c: char) -> bool {
     matches!(c, '。' | '、' | '！' | '？' | '…' | '!' | '?' | ',' | '.')
 }
@@ -980,6 +1000,52 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// バージョン表記 / IP (`1.2.3`): 各要素を数として読み 「テン」 で繋ぐ。
+    fn try_version(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
+        if let Some(m) = at_start(&VERSION_RE, rest) {
+            let whole = m.get(0).unwrap();
+            if looks_like_dotted_date(whole.as_str()) {
+                return;
+            }
+            let reading = whole
+                .as_str()
+                .split('.')
+                .map(number_to_katakana)
+                .collect::<Vec<_>>()
+                .join("テン");
+            out.push(self.make_hit(input, pos, whole.end(), reading));
+        }
+    }
+
+    /// 通貨記号が数字の前に付く形 (`¥1000` / `$100` / `€5`)。 数字 + 通貨名の語順に直して読む
+    /// (¥1000 → センエン / $100 → ヒャクドル)。 記号が無ければ何もしない。
+    fn try_currency_prefix(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        first_char: char,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        let unit = match first_char {
+            '¥' | '￥' => "エン",
+            '$' | '＄' => "ドル",
+            '€' => "ユーロ",
+            '£' => "ポンド",
+            _ => return,
+        };
+        let after = &rest[first_char.len_utf8()..];
+        if let Some(m) = at_start(&DIGIT_RE, after) {
+            let whole = m.get(0).unwrap();
+            // 符号付き (¥-5) は扱わない。 数字で始まる時だけ。
+            if !after.starts_with(|c: char| c.is_ascii_digit() || ('０'..='９').contains(&c)) {
+                return;
+            }
+            let reading = format!("{}{unit}", number_to_katakana(whole.as_str()));
+            out.push(self.make_hit(input, pos, first_char.len_utf8() + whole.end(), reading));
+        }
+    }
+
     /// section 8: 素の数字。
     fn try_digit(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(m) = at_start(&DIGIT_RE, rest) {
@@ -1006,6 +1072,7 @@ impl CandidateProvider for NumberCandidateProvider {
         // section 0: 数詞慣用語句。 「明後日」 等 数字以外の先頭もあるため
         // numeric lead 判定より前に評価する (非 hit 位置は HashMap lookup 1 回)。
         self.try_phrase(input, pos, rest, first_char, out);
+        self.try_currency_prefix(input, pos, rest, first_char, out);
 
         // ─── 先頭文字 dispatch (hot path 最適化) ─────────────────────────────
         // 数値系正規表現は全て **数字系の先頭文字** を要求する (NUM_PAT = 任意符号 +
@@ -1044,6 +1111,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_si_unit(input, pos, rest, out);
         self.try_fraction(input, pos, rest, out);
         self.try_kanji_decimal(input, pos, rest, out);
+        self.try_version(input, pos, rest, out);
         self.try_counter(input, pos, rest, out);
         self.try_counter_kanji_grouped(input, pos, rest, out);
         self.try_counter_kanji(input, pos, rest, out);
