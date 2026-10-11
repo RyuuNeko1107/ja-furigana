@@ -611,6 +611,23 @@ mod tests {
     }
 
     #[test]
+    fn load_rules_dir_infers_models_role_from_file_name() {
+        // role を書かない古い形式でも、 ファイル名 models.toml なら型番パターンとして読む
+        let src = r#"[meta]
+schema_version = "2"
+
+[[model]]
+pattern = 'PS([2-5])'
+reading = "ピーエス{1:english}"
+"#;
+        let dir = fresh_temp_dir("models_by_name");
+        std::fs::write(dir.join("models.toml"), src).unwrap();
+        let data = load_rules_dir(&dir).unwrap();
+        assert_eq!(data.models.model.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn load_rules_dir_loads_and_validates_models() {
         let good = r#"[meta]
 schema_version = "2"
