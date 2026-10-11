@@ -235,6 +235,25 @@ impl NumberCandidateProvider {
 }
 
 /// 読み上げない終端記号 (= 記号候補に巻き取ってよい文字)。
+/// `2026.1.16` のような 西暦 4 桁 + 月 + 日 のドット区切り。 バージョンとも日付とも取れるので
+/// バージョン規則の対象にしない (従来どおり)。
+fn looks_like_dotted_date(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    let [y, m, d] = parts[..] else {
+        return false;
+    };
+    let num = |p: &str| {
+        p.chars()
+            .filter_map(|c| c.to_digit(10))
+            .fold(0u32, |a, d| a * 10 + d)
+    };
+    y.chars().count() == 4
+        && (1..=2).contains(&m.chars().count())
+        && (1..=2).contains(&d.chars().count())
+        && (1..=12).contains(&num(m))
+        && (1..=31).contains(&num(d))
+}
+
 fn is_trailing_punctuation(c: char) -> bool {
     matches!(c, '。' | '、' | '！' | '？' | '…' | '!' | '?' | ',' | '.')
 }
@@ -985,6 +1004,9 @@ impl NumberCandidateProvider {
     fn try_version(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(m) = at_start(&VERSION_RE, rest) {
             let whole = m.get(0).unwrap();
+            if looks_like_dotted_date(whole.as_str()) {
+                return;
+            }
             let reading = whole
                 .as_str()
                 .split('.')

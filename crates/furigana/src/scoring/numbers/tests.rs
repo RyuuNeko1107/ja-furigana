@@ -986,3 +986,15 @@ fn currency_prefix_needs_a_digit_right_after_the_symbol() {
         .iter()
         .all(|c| c.surface == "¥"));
 }
+
+#[test]
+fn version_rule_skips_dotted_dates() {
+    let p = provider();
+    // 西暦 + 月 + 日の形 (2026.1.16) はバージョン扱いしない
+    assert!(find(&p.candidates_vec(&ctx("2026.1.16"), 0), "2026.1.16").is_none());
+    // 月が 13 以上 / 西暦が 4 桁でなければバージョン
+    assert!(find(&p.candidates_vec(&ctx("2026.13.16"), 0), "2026.13.16").is_some());
+    assert!(find(&p.candidates_vec(&ctx("12.1.16"), 0), "12.1.16").is_some());
+    // 日が 32 以上はバージョン
+    assert!(find(&p.candidates_vec(&ctx("2026.1.32"), 0), "2026.1.32").is_some());
+}
