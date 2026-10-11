@@ -195,6 +195,8 @@ runtime 形態素辞書は IPADIC 据え置き (2026-06-11 A/B 評価で IPADIC 
 - **顔文字 TTS skip / silent 化**
   - 「・」 → 「なかぐろ」、 「ω」 → 「おめが」 等の 1 字 phonetic 化が TTS で違和感
   - protect token / 顔文字 chunk を TTS 出力で **silent** にする option (= `--include-emoji-tts=false`)
+  - ✅ **出荷済**: 0.3.0 で `TtsOptions::silence_symbols` / `--silence-symbols` (旧案の flag 名は使われていない)。
+    括弧の顔文字は 0.5.8 で保護トークン化して全 mode で読みを空にした
 - **半角 space normalize の正式化** (= 0.1.0 では `preprocess_input()` で 全角 space に変換、 0.2.0 で path 構築 logic に proper 統合)
 
 ##### corpus regression

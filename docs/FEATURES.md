@@ -17,13 +17,12 @@ ja-furigana が **何をするか** をまとめたもの。 内部の作りは 
 
 | `mode` | 出力 | 例 (`灰桜の散る道`) |
 |---|---|---|
-| `hiragana` | ひらがな (漢字 → ひらがな、 英字・数字・記号の読みはカタカナ) | `はいざくらのちるみち` |
+| `hiragana` | プレーンひらがな (ポーズなし。 漢字 → ひらがな、 英字・数字・記号の読みはカタカナ) | `はいざくらのちるみち` |
 | `ruby` | `{漢字\|よみ}` 形式 | `{灰桜\|はいざくら}の{散る\|ちる}{道\|みち}` |
-| `kanji` | 漢字かな交じりのまま (読みを付けない) | `灰桜の散る道` |
-| `tts` (default) | 読み上げ用。 句読点の間 (ポーズ) を整える。 `--silence-symbols` で絵文字・顔文字を外す | `はいざくらのちるみち` |
+| `kanji` | 入力をそのまま返す (no-op) | `灰桜の散る道` |
+| `tts` (default、 別名 `bouyomi`) | 読み上げ用。 句読点の間 (ポーズ) を整える。 `--silence-symbols` で絵文字・顔文字を外す | `はいざくらのちるみち` |
 | `accent` | アクセント付きの JSON (アクセント句・モーラ・型) | `{"schema_version": "1", …}` |
 | `voicevox-aques` / `aquestalk` | VOICEVOX / AquesTalk のアクセント記号列 | `ハイザクラノ'/チル'/ミチ'` |
-| `bouyomi` | 棒読みちゃん向け | `はいざくらのちるみち` |
 | `romaji` / `romaji-kunrei` | ローマ字 (ヘボン式 / 訓令式) | `haizakuranochirumichi` / `haizakuranotirumiti` |
 | `analyze` | 候補・採用 path・各 band を JSON で | デバッグ用 |
 
