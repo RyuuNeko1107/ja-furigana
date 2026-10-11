@@ -646,10 +646,48 @@ fn load_loanwords_into(
         struct LoanwordsToml {
             #[serde(default)]
             entries: HashMap<String, String>,
+            /// 語 → くっついた数字の読み方。 `"Windows" = "english"` か、 読みを上書きする
+            /// `"No" = { style = "place", reading = "ナンバー" }`。
+            #[serde(default)]
+            digits: HashMap<String, DigitsValue>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum DigitsValue {
+            Style(String),
+            Detail {
+                style: String,
+                reading: Option<String>,
+            },
         }
         let parsed: LoanwordsToml = crate::loader::parse_toml(content, from)?;
         for (surface, reading) in parsed.entries {
             out.insert(normalize_alphabet(&surface), reading);
+        }
+        for (surface, value) in parsed.digits {
+            let (style, reading) = match value {
+                DigitsValue::Style(s) => (s, None),
+                DigitsValue::Detail { style, reading } => (style, reading),
+            };
+            if crate::scoring::digit_reading::DigitStyle::parse(&style).is_none() {
+                return Err(crate::FuriganaError::Validation(format!(
+                    "{from}: [digits] '{surface}' の読み方 '{style}' は未知 \
+                     (place / each / each_en / english / pair / pair_en)"
+                )));
+            }
+            // 「読み方」 と (あれば) 「語 + 数字の時だけ使う読み」 を 1 文字列に畳む。
+            let encoded = match reading {
+                Some(r) => format!("{style}{}{r}", crate::scoring::special::DIGITS_SEP),
+                None => style,
+            };
+            out.insert(
+                format!(
+                    "{}{}",
+                    crate::scoring::special::DIGITS_KEY_PREFIX,
+                    normalize_alphabet(&surface)
+                ),
+                encoded,
+            );
         }
         Ok(())
     })

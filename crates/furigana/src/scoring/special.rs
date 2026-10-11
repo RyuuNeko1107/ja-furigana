@@ -21,6 +21,7 @@ use crate::scoring::candidate::{
     CandidateProvider, RawCandidate, Score, ScoringContext, BAND_DICT_EXACT, BAND_KANJI,
     BAND_PROTECTED,
 };
+use crate::scoring::digit_reading::DigitStyle;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
@@ -318,6 +319,12 @@ pub fn normalize_alphabet(s: &str) -> String {
     out
 }
 
+/// lookup map 内で `[digits]` table の項目 (語 → 数字の読み方) を区別する key 接頭辞。
+/// `#` は英字 range に入らないので surface の key とは衝突しない。
+pub const DIGITS_KEY_PREFIX: &str = "#digits:";
+/// `[digits]` の値で 「読み方」 と 「語 + 数字の時だけ使う読み」 を区切る文字。
+pub const DIGITS_SEP: char = '\u{1F}';
+
 /// 英字 token の lookup と passthrough を扱う [`CandidateProvider`]。
 ///
 /// 構築時に input を scan して英字 range を pre-compute。 各 range で:
@@ -385,6 +392,67 @@ impl AlphabetPassthroughProvider {
         !rest.is_empty() && self.unit_symbols.contains(&rest.to_ascii_lowercase())
     }
 
+    /// 正規化済 surface が 「英字 + ASCII 数字」 で、 英字部分に reading と `[digits]` の
+    /// 読み方がどちらも登録されていれば、 連結した reading を返す。
+    fn letters_with_digits_reading(&self, normalized: &str) -> Option<String> {
+        let letters_len = normalized.find(|c: char| !c.is_ascii_alphabetic())?;
+        let (letters, digits) = normalized.split_at(letters_len);
+        if letters.is_empty() {
+            return None;
+        }
+        let (style, base) = self.digits_style_and_base(letters)?;
+        Some(format!("{base}{}", style.render(digits)?))
+    }
+
+    /// `[digits]` に載った語の (読み方, 語の読み)。 語の読みは `reading` の上書きが
+    /// あればそれ、 無ければ `[entries]` の読み。
+    fn digits_style_and_base(&self, letters: &str) -> Option<(DigitStyle, &str)> {
+        let raw = self.lookup.get(&format!("{DIGITS_KEY_PREFIX}{letters}"))?;
+        let (style, over) = match raw.split_once(DIGITS_SEP) {
+            Some((s, r)) => (s, Some(r)),
+            None => (raw.as_str(), None),
+        };
+        let base = over.or_else(|| self.lookup.get(letters).map(String::as_str))?;
+        Some((DigitStyle::parse(style)?, base))
+    }
+
+    /// 英字だけの range の直後が 「区切り (空白 / ハイフン) + 数字」 で、 その語が `[digits]` に
+    /// 載っていれば (数字の終端の byte 位置, 連結 reading) を返す。 数字の直後が `.数字`
+    /// (iOS 17.2) の時は小数として別に読むので対象外。
+    fn separated_digits_reading(
+        &self,
+        input: &str,
+        range: &Range<usize>,
+        normalized: &str,
+    ) -> Option<(usize, String)> {
+        if !normalized.chars().all(|c| c.is_ascii_alphabetic()) {
+            return None;
+        }
+        let (style, base) = self.digits_style_and_base(normalized)?;
+        let rest = &input[range.end..];
+        let sep = rest.chars().next()?;
+        if !matches!(
+            sep,
+            ' ' | '-' | '.' | '\u{2010}' | '\u{2011}' | '\u{2212}' | '\u{FF0D}' | '\u{3000}'
+        ) {
+            return None;
+        }
+        let after_sep = &rest[sep.len_utf8()..];
+        let digits_len = after_sep
+            .find(|c: char| !is_digit_char(c))
+            .unwrap_or(after_sep.len());
+        if digits_len == 0 {
+            return None;
+        }
+        let tail = &after_sep[digits_len..];
+        if tail.starts_with('.') && tail[1..].chars().next().is_some_and(is_digit_char) {
+            return None;
+        }
+        let digits = normalize_alphabet(&after_sep[..digits_len]);
+        let reading = format!("{base}{}", style.render(&digits)?);
+        Some((range.end + sep.len_utf8() + digits_len, reading))
+    }
+
     /// lookup 不要 (= 全 passthrough) で構築。 test / 簡易用途。
     #[cfg(test)]
     #[must_use]
@@ -422,11 +490,6 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                 continue;
             }
 
-            // 「3km」 のような 数字 + 単位 は NumberCandidateProvider の責務。
-            if self.is_number_with_unit(surface) {
-                continue;
-            }
-
             let char_count = surface.chars().count();
             let length = u8::try_from(char_count).unwrap_or(u8::MAX);
 
@@ -435,9 +498,32 @@ impl CandidateProvider for AlphabetPassthroughProvider {
             let hit = self.lookup.get(&normalized).or_else(|| {
                 strip_alphabet_connectors(&normalized).and_then(|k| self.lookup.get(&k))
             });
-            let (reading, band) = match hit {
-                Some(r) => (r.as_str(), BAND_DICT_EXACT),
-                None => (surface, BAND_KANJI), // passthrough miss は fallback band
+
+            // 「3km」 のような 数字 + 単位 は NumberCandidateProvider の責務。
+            // ただし辞書に完全一致がある語 (5G = ファイブジー。 G は SI 単位のグラムでもある) は
+            // 辞書を優先する。 小文字を含む表記 (4g = 4 グラム) は単位として読むので除く。
+            let dict_wins = hit.is_some() && !surface.chars().any(|c| c.is_ascii_lowercase());
+            if !dict_wins && self.is_number_with_unit(surface) {
+                continue;
+            }
+            // 「Windows11」 「RTX4090」 のような 英字 + 数字 は全体が辞書に無いと丸ごと
+            // passthrough になる。 英字部分が loanwords の `[digits]` に載っている語だけ、
+            // 「英字の読み + 宣言された読み方での数字」 を読みにする (数字の読みは語ごとに
+            // 違うので、 未登録の語は従来どおり素通し)。 同じ range に素通し候補も重ねると
+            // 前が仮名の時 (とGPT5) に素通しが残るので、 どちらか 1 つだけ出す。
+            // 数字の直後が `.数字` (Ver2.0 / iOS17.2) なら小数 / バージョンとして別に読む。
+            let after_range = &ctx.input[range.end..];
+            let decimal_follows = after_range.starts_with('.')
+                && after_range[1..].chars().next().is_some_and(is_digit_char);
+            let with_digits = if hit.is_none() && !decimal_follows {
+                self.letters_with_digits_reading(&normalized)
+            } else {
+                None
+            };
+            let (reading, band): (std::borrow::Cow<'_, str>, _) = match (hit, with_digits) {
+                (Some(r), _) => (r.as_str().into(), BAND_DICT_EXACT),
+                (None, Some(r)) => (r.into(), BAND_DICT_EXACT),
+                (None, None) => (surface.into(), BAND_KANJI), // passthrough miss は fallback band
             };
 
             out.push(RawCandidate::new(
@@ -465,8 +551,66 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                     ));
                 }
             }
+
+            // 「Windows 10」 「GPT-5」 のように 空白 / ハイフンを挟んだ 語 + 数字。 語が `[digits]` に
+            // 載っていれば、 くっついた形 (Windows11) と同じ読みにする。
+            if let Some((end, reading)) =
+                self.separated_digits_reading(ctx.input, range, &normalized)
+            {
+                let l =
+                    u8::try_from(ctx.input[range.start..end].chars().count()).unwrap_or(u8::MAX);
+                out.push(RawCandidate::new(
+                    reading,
+                    range.start..end,
+                    Score::new(BAND_DICT_EXACT, l, 0),
+                ));
+            }
+
+            // 「SSR3体」 「CD2枚」 のように 英字 + 数字 + 日本語 が続く時、 全体を 1 つの
+            // passthrough が覆うと 数字 + 助数詞 を数値側が読めない (SSR3からだ)。 英字だけの
+            // passthrough も選べるようにして、 数字は NumberCandidateProvider に譲れる形にする。
+            if band == BAND_KANJI {
+                if let Some(letters_len) = letters_before_digits(surface) {
+                    let after = &ctx.input[range.end..];
+                    let counter_like = after.chars().next().is_some_and(|c| !c.is_ascii());
+                    // バージョン表記 (v1.2.3 / Ver2.0): 数字の続きが `.数字`。 この時だけ
+                    // 英字部分の辞書 reading も使う (v = ブイ / Ver = バージョン)。
+                    let version_like = after.starts_with('.')
+                        && after[1..].chars().next().is_some_and(is_digit_char);
+                    if counter_like || version_like {
+                        let l =
+                            u8::try_from(surface[..letters_len].chars().count()).unwrap_or(u8::MAX);
+                        let letters = &surface[..letters_len];
+                        let dict_reading = if version_like {
+                            self.lookup.get(&normalize_alphabet(letters))
+                        } else {
+                            None
+                        };
+                        out.push(RawCandidate::new(
+                            dict_reading.map_or(letters, String::as_str),
+                            range.start..range.start + letters_len,
+                            Score::new(
+                                if dict_reading.is_some() {
+                                    BAND_DICT_EXACT
+                                } else {
+                                    BAND_KANJI
+                                },
+                                l,
+                                0,
+                            ),
+                        ));
+                    }
+                }
+            }
         }
     }
+}
+
+/// surface が 「英字 + 数字だけ」 (例: `SSR3`) なら 英字部分の byte 長。
+fn letters_before_digits(surface: &str) -> Option<usize> {
+    let letters_len = surface.find(|c: char| !is_alphabet_letter(c))?;
+    let digits = &surface[letters_len..];
+    (letters_len > 0 && digits.chars().all(is_digit_char)).then_some(letters_len)
 }
 
 #[cfg(test)]
@@ -855,5 +999,119 @@ mod tests {
         let provider = AlphabetPassthroughProvider::passthrough_only(input);
         assert!(provider.ranges().is_empty());
         assert!(provider.candidates_vec(&ctx(input), 0).is_empty());
+    }
+
+    // ─── 英字 + 数字 ([digits]) ────────────────────────────────────────────
+
+    fn digits_lookup() -> Arc<HashMap<String, String>> {
+        let mut m = HashMap::new();
+        m.insert("windows".to_string(), "ウィンドウズ".to_string());
+        m.insert(format!("{DIGITS_KEY_PREFIX}windows"), "english".to_string());
+        m.insert("no".to_string(), "ノー".to_string());
+        m.insert(
+            format!("{DIGITS_KEY_PREFIX}no"),
+            format!("english{DIGITS_SEP}ナンバー"),
+        );
+        m.insert("rtx".to_string(), "アールティーエックス".to_string());
+        m.insert(format!("{DIGITS_KEY_PREFIX}rtx"), "each".to_string());
+        m.insert("max".to_string(), "マックス".to_string());
+        m.insert("5g".to_string(), "ファイブジー".to_string());
+        Arc::new(m)
+    }
+
+    fn readings(input: &str) -> Vec<(String, String)> {
+        let provider = AlphabetPassthroughProvider::new(input, digits_lookup());
+        provider
+            .candidates_vec(&ctx(input), 0)
+            .into_iter()
+            .map(|c| (c.surface.to_string(), c.reading.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn digits_word_glued_reads_word_and_number_as_one_candidate() {
+        assert_eq!(
+            readings("Windows11"),
+            vec![("Windows11".to_string(), "ウィンドウズイレブン".to_string())]
+        );
+        assert_eq!(
+            readings("RTX4090"),
+            vec![(
+                "RTX4090".to_string(),
+                "アールティーエックスヨンゼロキュウゼロ".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn digits_word_not_listed_stays_passthrough() {
+        // Max は [entries] にあるが [digits] には無い: Max5 を勝手に マックスファイブ にしない
+        assert_eq!(
+            readings("Max5"),
+            vec![("Max5".to_string(), "Max5".to_string())]
+        );
+    }
+
+    #[test]
+    fn digits_word_with_separator_extends_over_the_number() {
+        for (input, surface, reading) in [
+            ("Windows 10", "Windows 10", "ウィンドウズテン"),
+            ("Windows-11", "Windows-11", "ウィンドウズイレブン"),
+            ("No.1", "No.1", "ナンバーワン"),
+        ] {
+            let got = readings(input);
+            assert!(
+                got.contains(&(surface.to_string(), reading.to_string())),
+                "{input}: {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn digits_word_defers_to_decimal_and_version() {
+        // 数字の直後が `.数字` なら [digits] の連結を作らない (iOS 17.2 / Ver2.0 は別に読む)
+        assert!(!readings("Windows11.5")
+            .iter()
+            .any(|(_, r)| r == "ウィンドウズイレブン"));
+        assert!(!readings("Windows 10.5")
+            .iter()
+            .any(|(s, _)| s == "Windows 10"));
+    }
+
+    #[test]
+    fn digits_override_reading_applies_only_with_a_number() {
+        // 単独の No は [entries] の ノー のまま
+        assert_eq!(readings("No"), vec![("No".to_string(), "ノー".to_string())]);
+    }
+
+    #[test]
+    fn letters_before_digits_gives_a_letters_only_candidate_before_japanese() {
+        // SSR3体: 英字だけの passthrough も出し、 数字 + 助数詞を数値側に譲れるようにする
+        let got = readings("SSR3体");
+        assert!(got.contains(&("SSR3".to_string(), "SSR3".to_string())));
+        assert!(got.contains(&("SSR".to_string(), "SSR".to_string())));
+        // 日本語が続かない素の英数字には出さない
+        let got = readings("SSR3");
+        assert_eq!(got, vec![("SSR3".to_string(), "SSR3".to_string())]);
+    }
+
+    #[test]
+    fn letters_before_version_uses_the_dictionary_reading() {
+        // Max2.0: 数字の続きが `.数字` の時だけ 英字部分の辞書 reading を使う
+        let got = readings("Max2.0");
+        assert!(got.contains(&("Max".to_string(), "マックス".to_string())));
+        // 助数詞向けの切り出し (日本語が続く) では辞書 reading を使わない
+        let got = readings("Max5体");
+        assert!(got.contains(&("Max".to_string(), "Max".to_string())));
+    }
+
+    #[test]
+    fn dictionary_hit_wins_over_the_unit_skip_only_for_uppercase() {
+        // 5G は SI 単位 g と紛れる: 大文字表記は辞書 (ファイブジー)、 小文字 5g は単位側に譲る
+        let units: Arc<HashSet<String>> = Arc::new(["g".to_string()].into_iter().collect());
+        let upper = AlphabetPassthroughProvider::with_units("5G", digits_lookup(), units.clone());
+        assert_eq!(upper.candidates_vec(&ctx("5G"), 0).len(), 1);
+        let lower = AlphabetPassthroughProvider::with_units("5g", digits_lookup(), units);
+        assert!(lower.candidates_vec(&ctx("5g"), 0).is_empty());
     }
 }

@@ -934,3 +934,55 @@ fn approx_pair_counter_not_read_as_last_digit() {
     assert!(find(&p.candidates_vec(&ctx("二三件"), 0), "二三件").is_none());
     assert!(find(&p.candidates_vec(&ctx("四五回"), 0), "四五回").is_none());
 }
+
+// ─── バージョン表記 / 通貨記号の前置 ─────────────────────────────────────
+
+#[test]
+fn version_dotted_three_parts_reads_each_part_joined_by_ten() {
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("1.2.3"), 0);
+    let v = find(&cands, "1.2.3").expect("1.2.3 の候補");
+    assert_eq!(v.reading, "イチテンニテンサン");
+    assert_eq!(v.score.band, BAND_SPECIAL);
+}
+
+#[test]
+fn version_two_parts_is_a_decimal_not_a_version() {
+    let p = provider();
+    let cands = p.candidates_vec(&ctx("3.14"), 0);
+    assert!(cands
+        .iter()
+        .all(|c| c.reading != "サンテンイチヨン" || c.surface == "3.14"));
+    assert_eq!(find(&cands, "3.14").unwrap().reading, "サンテンイチヨン");
+}
+
+#[test]
+fn currency_prefix_reads_number_then_currency_name() {
+    let p = provider();
+    for (input, surface, reading) in [
+        ("¥1000", "¥1000", "センエン"),
+        ("￥1,500", "￥1,500", "センゴヒャクエン"),
+        ("$100", "$100", "ヒャクドル"),
+        ("€20", "€20", "ニジュウユーロ"),
+        ("£3", "£3", "サンポンド"),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), 0);
+        let c = find(&cands, surface).unwrap_or_else(|| panic!("{input} の候補"));
+        assert_eq!(c.reading, reading, "{input}");
+    }
+}
+
+#[test]
+fn currency_prefix_needs_a_digit_right_after_the_symbol() {
+    let p = provider();
+    assert!(find(&p.candidates_vec(&ctx("$abc"), 0), "$abc").is_none());
+    assert!(p
+        .candidates_vec(&ctx("$abc"), 0)
+        .iter()
+        .all(|c| c.surface == "$"));
+    // 符号付きは通貨として読まない
+    assert!(p
+        .candidates_vec(&ctx("¥-5"), 0)
+        .iter()
+        .all(|c| c.surface == "¥"));
+}

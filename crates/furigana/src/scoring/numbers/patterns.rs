@@ -73,6 +73,12 @@ pub(super) static KANJI_DECIMAL_SHORT_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("scoring KANJI_DECIMAL_SHORT regex build failed")
 });
 
+/// ドット区切り 3 要素以上の数字列 (バージョン `1.2.3` / IP `192.168.0.1`)。
+/// 小数としては読めない (1.2 と .3 に割れる) ので、 各要素を数として読み 「テン」 で繋ぐ。
+pub(super) static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"[0-9０-９]+(?:\.[0-9０-９]+){2,}").expect("scoring VERSION regex build failed")
+});
+
 pub(super) static DIGIT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
 
