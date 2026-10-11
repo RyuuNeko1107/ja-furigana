@@ -1114,4 +1114,15 @@ mod tests {
         let lower = AlphabetPassthroughProvider::with_units("5g", digits_lookup(), units);
         assert!(lower.candidates_vec(&ctx("5g"), 0).is_empty());
     }
+
+    #[test]
+    fn letters_before_digits_only_for_letters_then_digits() {
+        assert_eq!(letters_before_digits("SSR3"), Some(3));
+        assert_eq!(letters_before_digits("Windows11"), Some(7));
+        // 英字で始まらない / 数字だけ / 英字だけ / 数字の後に英字が続く形は対象外
+        assert_eq!(letters_before_digits("123"), None);
+        assert_eq!(letters_before_digits("5G"), None);
+        assert_eq!(letters_before_digits("abc"), None);
+        assert_eq!(letters_before_digits("H2A"), None);
+    }
 }

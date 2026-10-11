@@ -1931,4 +1931,70 @@ weight = 30
         assert!(r.tokens[0].ambiguous);
         assert_eq!(r.tokens[0].alternatives[0].reading, "カミテ");
     }
+
+    #[test]
+    fn loanwords_digits_table_is_loaded_from_core_dict_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_digits_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("loanwords")).unwrap();
+        std::fs::write(
+            dir.join("loanwords/digits.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"loanwords\"
+
+[entries]
+\"Windows\" = \"ウィンドウズ\"
+\"no\" = \"ノー\"
+
+[digits]
+\"Windows\" = \"english\"
+\"No\" = { style = \"english\", reading = \"ナンバー\" }
+",
+        )
+        .unwrap();
+        let f = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        // [entries] の読みと [digits] の読み方が使われる
+        assert_eq!(f.to_hiragana("Windows11"), "ウィンドウズイレブン");
+        assert_eq!(f.to_hiragana("Windows 10"), "ウィンドウズテン");
+        // 読みの上書きは 「語 + 数字」 の時だけ。 単独の No は [entries] の読み
+        assert_eq!(f.to_hiragana("No.1"), "ナンバーワン");
+        assert_eq!(f.to_hiragana("no"), "ノー");
+        // [digits] に無い語は素通し
+        assert_eq!(f.to_hiragana("Linux11"), "Linux11");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loanwords_digits_table_rejects_unknown_style() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_digits_bad_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("loanwords")).unwrap();
+        std::fs::write(
+            dir.join("loanwords/digits.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"loanwords\"
+
+[digits]
+\"Windows\" = \"nope\"
+",
+        )
+        .unwrap();
+        let err = Furigana::builder().core_dict_dir(&dir).build().err();
+        assert!(err.is_some_and(|e| e.to_string().contains("未知")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

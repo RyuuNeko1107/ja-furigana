@@ -115,13 +115,10 @@ fn each(digits: &str, table: &[&str; 10]) -> String {
 
 /// 位取り (1〜4 桁、 先頭 0 なし)。 範囲外は `None`。
 fn place(digits: &str) -> Option<String> {
-    if digits.len() > 4 || (digits.len() > 1 && digits.starts_with('0')) {
+    if digits.len() > 4 || digits.starts_with('0') {
         return None;
     }
     let n: u32 = digits.parse().ok()?;
-    if n == 0 {
-        return Some("ゼロ".to_string());
-    }
     let (th, hu, te, on) = (n / 1000, n / 100 % 10, n / 10 % 10, n % 10);
     let mut out = String::new();
     out.push_str(match th {
@@ -167,12 +164,11 @@ fn place_tail(te: u32, on: u32) -> String {
 
 /// 英語の数詞 (0〜99、 先頭 0 なし)。 範囲外は `None`。
 fn english(digits: &str) -> Option<String> {
-    if digits.len() > 2 || (digits.len() > 1 && digits.starts_with('0')) {
+    if digits.len() > 2 || digits.starts_with('0') {
         return None;
     }
     let n: usize = digits.parse().ok()?;
     Some(match n {
-        0..=9 => EN_DIGITS[n].to_string(),
         10..=19 => EN_TEENS[n - 10].to_string(),
         _ => match n % 10 {
             0 => EN_TENS[n / 10].to_string(),
@@ -181,19 +177,15 @@ fn english(digits: &str) -> Option<String> {
     })
 }
 
-/// 下から 2 桁ずつ区切って `f` で読み、 連結する。
+/// 下から 2 桁ずつ区切って `f` で読み、 連結する (奇数桁は先頭が 1 桁)。
 fn pairs(digits: &str, f: impl Fn(&str) -> String) -> String {
-    let first = digits.len() % 2;
-    let mut out = String::new();
-    if first == 1 {
-        out.push_str(&f(&digits[..1]));
-    }
-    let mut i = first;
-    while i < digits.len() {
-        out.push_str(&f(&digits[i..i + 2]));
-        i += 2;
-    }
-    out
+    let mut chunks: Vec<&str> = digits
+        .as_bytes()
+        .rchunks(2)
+        .map(|c| std::str::from_utf8(c).unwrap_or(""))
+        .collect();
+    chunks.reverse();
+    chunks.into_iter().map(f).collect()
 }
 
 #[cfg(test)]
@@ -211,6 +203,11 @@ mod tests {
         assert_eq!(r("place", "300"), "サンビャク");
         assert_eq!(r("place", "1999"), "センキュウヒャクキュウジュウキュウ");
         assert_eq!(r("place", "0"), "ゼロ");
+        assert_eq!(r("place", "10000"), "イチゼロゼロゼロゼロ");
+        assert_eq!(
+            r("place", "9999"),
+            "キュウセンキュウヒャクキュウジュウキュウ"
+        );
         // 先頭 0 / 5 桁以上は 1 桁ずつ
         assert_eq!(r("place", "05"), "ゼロゴ");
         assert_eq!(r("place", "12345"), "イチニサンヨンゴ");
@@ -227,6 +224,10 @@ mod tests {
         assert_eq!(r("english", "11"), "イレブン");
         assert_eq!(r("english", "10"), "テン");
         assert_eq!(r("english", "2"), "ツー");
+        assert_eq!(r("english", "0"), "ゼロ");
+        assert_eq!(r("english", "9"), "ナイン");
+        assert_eq!(r("english", "99"), "ナインティーナイン");
+        assert_eq!(r("english", "20"), "トゥエンティー");
         assert_eq!(r("english", "21"), "トゥエンティーワン");
         assert_eq!(r("english", "90"), "ナインティー");
         // 範囲外 / 先頭 0 は 1 桁ずつ英語
