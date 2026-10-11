@@ -156,10 +156,10 @@ engine 固有の記号列は adapter crate (`ja_furigana_voicevox::to_aques_kana
 
 | 優先 (band) | provider | 役割 | 例 |
 |---|---|---|---|
-| 2000 | `ProtectTokenProvider` | URL / Email / 絵文字 (= 読み付けず passthrough) | `https://example.com` / `a@b.jp` / 🦀 |
+| 2000 | `ProtectTokenProvider` | URL / Email / 絵文字 (= 読み付けず passthrough)、 括弧の顔文字 (= 読みを空にして除外) | `https://example.com` / `a@b.jp` / 🦀 / `(´・ω・`)` |
 | 1000 | `DictBridgeProvider` (熟語 entry) | dict surface ≥2 字 | `灰桜` → `ハイザクラ` |
-| 1000 / 100 | `AlphabetPassthroughProvider` | 英字 passthrough (lookup あり = band 1000、 無し = band 100) | `Kubernetes` |
-| 950 | `NumberCandidateProvider` | 数字 + 助数詞 / 大数 / SI / 日付 / 時刻 / 記号 / 数詞慣用語句 | `1万円` / `2025年10月30日` / `100km` / `二十歳` |
+| 1000 / 100 | `AlphabetPassthroughProvider` | 英字 passthrough (lookup あり = band 1000、 無し = band 100)。 英字 + 数字 (`[digits]`)、 空白区切りの複数語、 連結英語 (`thankyou`) の語ごと読み、 型番の頭での range 分割 | `Kubernetes` / `Windows11` / `Hello World` |
+| 950 | `NumberCandidateProvider` | 数字 + 助数詞 / 大数 / SI 単位 (`km/h` 含む) / 日付 / 時刻 / 比 / 電話番号 / バージョン / 通貨記号 / `N/M` / 型番 (`models.toml`) / 記号 / 数詞慣用語句 | `1万円` / `2025年10月30日` / `100km` / `090-1234-5678` / `RTX 4070 Ti` / `二十歳` |
 | 100 | `DictBridgeProvider` (unihan / `[[kanji]]`) | 1 字 surface fallback + 文脈分岐 | `米` (= 次がひらがな → こめ / 漢字 → ベイ) |
 | 100 | `OdorijiProvider` | 「々」 placeholder edge (post-pass で連濁適用) | `山々` → `やまやま` |
 | 150 / 50 | `LinderaFallbackProvider` | 上記 5 が一切覆わない位置の safety net (2 字以上の純漢字語は 150) | 助詞 / okurigana / dict 未登録 単語 |
@@ -190,6 +190,13 @@ token の **surface 文字種** で reading 表記を切り替える:
   (`hira_to_kata`、 alphabet loanword の phonetic reading 用)
   - 例: 「Kubernetes」 + クバネティス → 「クバネティス」
   - 例: 「C++」 + シープラスプラス → 「シープラスプラス」
+
+### 辞書・ルールの種類とロード
+
+`[meta] role = "..."` で loader が振り分ける (旧 file 名からの推定も残す)。 一覧と役割は [FEATURES.md](./FEATURES.md#6-辞書ルールの種類)。
+loanwords の追加 table (`[digits]` / `[sentence_words]`) は、 lookup map に接頭辞つき key (`#digits:` / `#sw:`) で同居させる。
+型番 (`models`) は `NumberCandidateProvider` が正規表現を先頭の英字で索引して持ち、 英字の語頭でだけ試す。
+型番の開始位置は pipeline が `AlphabetPassthroughProvider` に渡して、 前に付いた英単語の range を型番の頭で切る。
 
 ## Lindera の lazy init
 
