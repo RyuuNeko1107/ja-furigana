@@ -40,7 +40,7 @@
 //! ディレクトリ全体を読み込む高レベル API は [`load_rules_dir`]。
 
 use crate::error::{FuriganaError, Result};
-use crate::rules::{CountersData, PostProcessData, PostProcessSpec, RulesData};
+use crate::rules::{CountersData, ModelsData, PostProcessData, PostProcessSpec, RulesData};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -202,6 +202,7 @@ fn infer_role_from_path(path: &Path) -> Option<&'static str> {
         "days.toml" => Some("days"),
         "scales.toml" => Some("scales"),
         "units.toml" => Some("units"),
+        "models.toml" => Some("models"),
         "symbols.toml" => Some("symbols"),
         "numeric_phrases.toml" => Some("numeric_phrases"),
         "compat.toml" | "compat_map.toml" => Some("compat"),
@@ -384,6 +385,12 @@ pub fn load_rules_dir<P: AsRef<Path>>(dir: P) -> Result<RulesData> {
             Some("scales") => data.scales = parse_toml(content, from)?,
             Some("units") => data.units = parse_toml(content, from)?,
             Some("symbols") => data.symbols = parse_toml(content, from)?,
+            Some("models") => {
+                let part: ModelsData = parse_toml(content, from)?;
+                part.validate()
+                    .map_err(|e| FuriganaError::Validation(format!("{from}: {e}")))?;
+                data.models.merge(part);
+            }
             Some("numeric_phrases") => data.numeric_phrases = parse_toml(content, from)?,
             Some("compat") => data.compat = parse_toml(content, from)?,
             Some("postprocess") => {
@@ -600,6 +607,45 @@ mod tests {
         assert!(data.counters.simple.is_empty());
         assert!(data.scales.is_empty());
         assert!(data.compat.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_rules_dir_loads_and_validates_models() {
+        let good = r#"[meta]
+schema_version = "2"
+role = "models"
+
+[parts]
+"Ti" = "ティーアイ"
+
+[[model]]
+pattern = 'RTX\s?([0-9]{4})'
+reading = "アールティーエックス{1:each}"
+"#;
+        let dir = fresh_temp_dir("models_ok");
+        std::fs::write(dir.join("models.toml"), good).unwrap();
+        let data = load_rules_dir(&dir).unwrap();
+        assert_eq!(data.models.model.len(), 1);
+        assert_eq!(data.models.parts["Ti"], "ティーアイ");
+        std::fs::remove_dir_all(&dir).ok();
+
+        // 不正な pattern は load で Validation エラー (file 名つき)
+        let bad = r#"[meta]
+schema_version = "2"
+role = "models"
+
+[[model]]
+pattern = 'RTX(['
+reading = "ア"
+"#;
+        let dir = fresh_temp_dir("models_bad");
+        std::fs::write(dir.join("models.toml"), bad).unwrap();
+        let err = load_rules_dir(&dir).unwrap_err();
+        assert!(
+            matches!(err, FuriganaError::Validation(ref m) if m.contains("models.toml")),
+            "{err}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

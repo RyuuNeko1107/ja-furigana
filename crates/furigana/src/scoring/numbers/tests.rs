@@ -1177,3 +1177,62 @@ fn slash_unit_key_starting_with_a_symbol_is_not_read_bare() {
     let p = NumberCandidateProvider::new(&r);
     assert!(find(&p.candidates_vec(&ctx("°/s"), 0), "°/s").is_none());
 }
+
+fn model_provider() -> NumberCandidateProvider {
+    let mut r = rules();
+    r.models = toml::from_str(
+        r#"
+        [parts]
+        "Ti" = "ティーアイ"
+
+        [[model]]
+        pattern = 'RTX\s?([0-9]{4})(?:\s?(Ti))?'
+        reading = "アールティーエックス{1:each}{2:part}"
+
+        [[model]]
+        pattern = 'i([3579])-?([0-9]{4,5})([A-Z]?)'
+        reading = "アイ{1:english}{2:each}{3:part}"
+        "#,
+    )
+    .unwrap();
+    NumberCandidateProvider::new(&r)
+}
+
+#[test]
+fn model_candidate_covers_the_whole_model_number() {
+    let p = model_provider();
+    let cands = p.candidates_vec(&ctx("RTX 4070 Ti"), 0);
+    let c = find(&cands, "RTX 4070 Ti").expect("型番候補");
+    assert_eq!(c.reading, "アールティーエックスヨンゼロナナゼロティーアイ");
+    assert_eq!(c.score.band, BAND_SPECIAL);
+}
+
+#[test]
+fn model_candidate_is_not_emitted_without_a_match() {
+    let p = model_provider();
+    // 語の途中 / 英字以外の位置 / パターン外
+    assert!(find(&p.candidates_vec(&ctx("xRTX4090"), 1), "RTX4090").is_none());
+    assert!(find(&p.candidates_vec(&ctx("4090"), 0), "4090").is_some()); // 素の数字は従来どおり
+    assert!(p
+        .candidates_vec(&ctx("GTX1660"), 0)
+        .iter()
+        .all(|c| c.surface != "GTX1660"));
+    // 型番パターンが無い rules では出ない
+    let plain = NumberCandidateProvider::new(&rules());
+    assert!(plain
+        .candidates_vec(&ctx("RTX4090"), 0)
+        .iter()
+        .all(|c| c.surface != "RTX4090"));
+}
+
+#[test]
+fn model_starts_lists_every_word_start_that_matches() {
+    let p = model_provider();
+    let input = "Hello RTX 4090 とi9-13900K";
+    let starts = p.model_starts(input);
+    assert_eq!(starts, vec![6, input.find("i9").unwrap()]);
+    assert!(p.model_starts("ただの日本語").is_empty());
+    assert!(NumberCandidateProvider::new(&rules())
+        .model_starts(input)
+        .is_empty());
+}

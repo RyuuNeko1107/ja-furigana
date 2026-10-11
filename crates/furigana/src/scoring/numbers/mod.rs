@@ -59,6 +59,7 @@ use crate::rules::{CountersData, DaysData, RulesData, ScalesData, SymbolsData, U
 use crate::scoring::candidate::{
     CandidateProvider, RawCandidate, Score, ScoringContext, BAND_SPECIAL,
 };
+use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
@@ -101,6 +102,8 @@ pub struct NumberCandidateProvider {
     unit_symbols: std::sync::Arc<std::collections::HashSet<String>>,
     /// `/` を含む単位記号 (km/h 等)。 数字なしの単独表記を読むために長い順に持つ
     slash_units: Vec<String>,
+    /// 型番パターン (models.toml)
+    models: CompiledModels,
 }
 
 impl NumberCandidateProvider {
@@ -161,6 +164,7 @@ impl NumberCandidateProvider {
             si_unit_re,
             unit_symbols: std::sync::Arc::new(unit_symbols),
             slash_units,
+            models: CompiledModels::new(&rules.models),
         }
     }
 
@@ -1126,6 +1130,35 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// 入力中の型番が始まる byte 位置 (英字 range を切るために使う)。 型番パターンが無ければ空
+    #[must_use]
+    pub fn model_starts(&self, input: &str) -> Vec<usize> {
+        if self.models.is_empty() {
+            return Vec::new();
+        }
+        input
+            .char_indices()
+            .filter(|(_, c)| c.is_ascii_alphabetic())
+            .filter_map(|(i, _)| self.models.match_at(input, i).map(|_| i))
+            .collect()
+    }
+
+    /// 型番 (`RTX 4070 Ti` / `Ryzen 7 5800X3D` / `i9-13900K`)。 `models.toml` のパターンに当たる時だけ
+    fn try_model(
+        &self,
+        input: &str,
+        pos: usize,
+        first_char: char,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        if !first_char.is_ascii_alphabetic() || self.models.is_empty() {
+            return;
+        }
+        if let Some((end, reading)) = self.models.match_at(input, pos) {
+            out.push(self.make_hit(input, pos, end - pos, reading));
+        }
+    }
+
     /// 数字なしの `km/h` / `m/s` (units に `/` 付きで登録した単位)。 語頭で、 直後が英数字でない時だけ。
     /// 数字つき (60km/h) は si_unit の regex が読む
     fn try_slash_unit(
@@ -1198,6 +1231,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_phrase(input, pos, rest, first_char, out);
         self.try_currency_prefix(input, pos, rest, first_char, out);
         self.try_slash_unit(input, pos, rest, first_char, out);
+        self.try_model(input, pos, first_char, out);
 
         // ─── 先頭文字 dispatch (hot path 最適化) ─────────────────────────────
         // 数値系正規表現は全て **数字系の先頭文字** を要求する (NUM_PAT = 任意符号 +

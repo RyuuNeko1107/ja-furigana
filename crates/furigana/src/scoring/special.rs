@@ -424,6 +424,8 @@ pub struct AlphabetPassthroughProvider {
     lookup: Arc<HashMap<String, String>>,
     /// SI 単位記号 (小文字化済)。 空なら従来どおり全 span を emit する。
     unit_symbols: Arc<HashSet<String>>,
+    /// 直後に型番が続く range の終端 (byte)。 `split_at_model_starts` が切った range
+    before_model: Vec<usize>,
 }
 
 impl AlphabetPassthroughProvider {
@@ -437,6 +439,7 @@ impl AlphabetPassthroughProvider {
             ranges: find_alphabet_ranges(input),
             lookup,
             unit_symbols: Arc::new(HashSet::new()),
+            before_model: Vec::new(),
         }
     }
 
@@ -455,7 +458,42 @@ impl AlphabetPassthroughProvider {
             ranges: find_alphabet_ranges(input),
             lookup,
             unit_symbols,
+            before_model: Vec::new(),
         }
+    }
+
+    /// 空白区切りの 2 語以上で、 外来語表にある語を 「語の読み」 に置き換えて空白でつないだもの
+    /// (末尾の空白は残す)。 全部の語が表にある時だけ。 `allow_partial` なら 1 語でもあれば読む
+    fn known_words_reading(&self, surface: &str, allow_partial: bool) -> Option<String> {
+        let body = surface.trim_end_matches(' ');
+        let mut hits = 0;
+        let mut out: Vec<&str> = Vec::new();
+        for word in body.split(' ').filter(|w| !w.is_empty()) {
+            match self.lookup.get(&normalize_alphabet(word)) {
+                Some(r) => {
+                    hits += 1;
+                    out.push(r.as_str());
+                }
+                None => out.push(word),
+            }
+        }
+        let all_known = hits == out.len();
+        (hits > 0 && (all_known || allow_partial)).then(|| out.join(" ") + &surface[body.len()..])
+    }
+
+    /// 型番 (`i9-13900K` / `RTX 4090`) の開始位置で英字 range を切る。
+    ///
+    /// 前に英単語が付くと (`Hello i9-13900K`)、 range が型番の頭を飲み込んで型番候補の前に
+    /// 辺が無くなり、 型番が読めなくなる。 開始位置より後ろは型番側の候補が覆う。
+    #[must_use]
+    pub fn split_at_model_starts(mut self, starts: &[usize]) -> Self {
+        for r in &mut self.ranges {
+            if let Some(&s) = starts.iter().filter(|&&s| r.start < s && s < r.end).min() {
+                r.end = s;
+                self.before_model.push(s);
+            }
+        }
+        self
     }
 
     /// span が 「先頭の数字 + 既知の単位記号」 の形か (= 数値側に任せるべきか)。
@@ -608,7 +646,17 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                 self.letters_with_digits_reading(&normalized)
             } else {
                 None
-            };
+            }
+            // 空白でつながった複数語 (Hello World / Intel Core) は、 全部の語が外来語表にあれば語ごとに
+            // カタカナで読む。 型番の直前 (Intel Core i7-...) なら未登録の語が混じっても、 登録のある語は読む。
+            // 一部しか知らない英文 (thank you so much) は英字のまま素通し (2026-09-15 の決定を保つ)
+            .or_else(|| {
+                if hit.is_none() {
+                    self.known_words_reading(surface, self.before_model.contains(&range.end))
+                } else {
+                    None
+                }
+            });
             let (reading, band): (std::borrow::Cow<'_, str>, _) =
                 match (letter_name, hit, with_digits) {
                     (Some(r), _, _) => (r.into(), BAND_DICT_EXACT),
@@ -1180,6 +1228,79 @@ mod tests {
         let provider = ProtectTokenProvider::new(input);
         let cands = provider.candidates_vec(&ctx(input), 0);
         assert!(cands.iter().all(|c| !c.reading.is_empty()));
+    }
+
+    fn brand_lookup() -> Arc<HashMap<String, String>> {
+        let mut m = HashMap::new();
+        m.insert("hello".to_string(), "ハロー".to_string());
+        m.insert("world".to_string(), "ワールド".to_string());
+        m.insert("intel".to_string(), "インテル".to_string());
+        m.insert("core".to_string(), "コア".to_string());
+        Arc::new(m)
+    }
+
+    fn brand_readings(input: &str, starts: &[usize]) -> Vec<(String, String)> {
+        let provider =
+            AlphabetPassthroughProvider::new(input, brand_lookup()).split_at_model_starts(starts);
+        provider
+            .candidates_vec(&ctx(input), 0)
+            .into_iter()
+            .map(|c| (c.surface.to_string(), c.reading.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn multi_word_range_is_read_when_every_word_is_known() {
+        assert_eq!(
+            brand_readings("Hello World", &[]),
+            vec![("Hello World".to_string(), "ハロー ワールド".to_string())]
+        );
+        // 1 語でも未登録なら英文とみなして素通し
+        assert_eq!(
+            brand_readings("Hello there", &[]),
+            vec![("Hello there".to_string(), "Hello there".to_string())]
+        );
+        assert_eq!(
+            brand_readings("foo bar", &[]),
+            vec![("foo bar".to_string(), "foo bar".to_string())]
+        );
+    }
+
+    #[test]
+    fn range_before_a_model_reads_known_words_even_if_some_are_unknown() {
+        // 型番の頭 (6) で range が切れ、 末尾の空白は読みにも残る
+        assert_eq!(
+            brand_readings("Foo Core i9", &[9]),
+            vec![("Foo Core ".to_string(), "Foo コア ".to_string())]
+        );
+        assert_eq!(
+            brand_readings("Intel i9", &[6]),
+            vec![("Intel ".to_string(), "インテル ".to_string())]
+        );
+        // 1 語も知らなければそのまま
+        assert_eq!(
+            brand_readings("Foo Bar i9", &[8]),
+            vec![("Foo Bar ".to_string(), "Foo Bar ".to_string())]
+        );
+    }
+
+    #[test]
+    fn split_at_model_starts_cuts_only_the_range_that_contains_the_start() {
+        let input = "Hello i9";
+        let ranges = |starts: &[usize]| {
+            AlphabetPassthroughProvider::passthrough_only(input)
+                .split_at_model_starts(starts)
+                .ranges()
+                .to_vec()
+        };
+        assert_eq!(ranges(&[]), vec![0..8]);
+        assert_eq!(ranges(&[6]), vec![0..6]);
+        // 先頭と同じ位置 / 終端と同じ位置 / 範囲外では切らない
+        assert_eq!(ranges(&[0]), vec![0..8]);
+        assert_eq!(ranges(&[8]), vec![0..8]);
+        assert_eq!(ranges(&[20]), vec![0..8]);
+        // 複数あれば最初のもの
+        assert_eq!(ranges(&[7, 6]), vec![0..6]);
     }
 
     fn w_lookup() -> Arc<HashMap<String, String>> {
