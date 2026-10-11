@@ -1137,11 +1137,16 @@ impl NumberCandidateProvider {
         if self.models.is_empty() {
             return Vec::new();
         }
-        input
-            .char_indices()
-            .filter(|(_, c)| c.is_ascii_alphabetic())
-            .filter_map(|(i, _)| self.models.match_at(input, i).map(|_| i))
-            .collect()
+        // 語頭 (直前が英数字でない英字) だけを調べる
+        let mut prev_alnum = false;
+        let mut starts = Vec::new();
+        for (i, c) in input.char_indices() {
+            if c.is_ascii_alphabetic() && !prev_alnum && self.models.match_at(input, i).is_some() {
+                starts.push(i);
+            }
+            prev_alnum = c.is_ascii_alphanumeric();
+        }
+        starts
     }
 
     /// 型番 (`RTX 4070 Ti` / `Ryzen 7 5800X3D` / `i9-13900K`)。 `models.toml` のパターンに当たる時だけ

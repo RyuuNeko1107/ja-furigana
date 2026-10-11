@@ -9,6 +9,7 @@
 //! - `each`: 1 桁ずつ日本語 (4090 = ヨンゼロキュウゼロ)
 //! - `each_en`: 1 桁ずつ英語 (4090 = フォーゼロナインゼロ)
 //! - `english`: 英語の数詞 0〜99 (11 = イレブン)。 範囲外は `each_en`
+//! - `english10`: 0〜10 は英語 (No.1 = ワン)、 11 以上は位取り (No.21 = ニジュウイチ)
 //! - `pair`: 下から 2 桁ずつ位取り (4090 = ヨンジュウキュウジュウ)
 //! - `pair_en`: 下から 2 桁ずつ英語 (4090 = フォーティーナインティ)
 
@@ -19,6 +20,8 @@ pub enum DigitStyle {
     Each,
     EachEn,
     English,
+    /// 0〜10 は英語、 11 以上は位取り
+    EnglishTo10,
     Pair,
     PairEn,
 }
@@ -32,6 +35,7 @@ impl DigitStyle {
             "each" => Self::Each,
             "each_en" => Self::EachEn,
             "english" => Self::English,
+            "english10" => Self::EnglishTo10,
             "pair" => Self::Pair,
             "pair_en" => Self::PairEn,
             _ => return None,
@@ -49,6 +53,10 @@ impl DigitStyle {
             Self::Each => each(digits, &JA_DIGITS),
             Self::EachEn => each(digits, &EN_DIGITS),
             Self::English => english(digits).unwrap_or_else(|| each(digits, &EN_DIGITS)),
+            Self::EnglishTo10 => match digits.parse::<u32>() {
+                Ok(n) if n <= 10 => english(digits).unwrap_or_else(|| each(digits, &EN_DIGITS)),
+                _ => place(digits).unwrap_or_else(|| each(digits, &JA_DIGITS)),
+            },
             Self::Pair => pairs(digits, |c| place(c).unwrap_or_else(|| each(c, &JA_DIGITS))),
             Self::PairEn => pairs(digits, |c| {
                 english(c).unwrap_or_else(|| each(c, &EN_DIGITS))
@@ -233,6 +241,21 @@ mod tests {
         // 範囲外 / 先頭 0 は 1 桁ずつ英語
         assert_eq!(r("english", "100"), "ワンゼロゼロ");
         assert_eq!(r("english", "07"), "ゼロセブン");
+    }
+
+    #[test]
+    fn english10_is_english_up_to_ten_and_positional_above() {
+        assert_eq!(r("english10", "1"), "ワン");
+        assert_eq!(r("english10", "9"), "ナイン");
+        assert_eq!(r("english10", "10"), "テン");
+        assert_eq!(r("english10", "0"), "ゼロ");
+        // 11 以上は位取り / 5 桁以上と先頭 0 は 1 桁ずつ日本語
+        assert_eq!(r("english10", "11"), "ジュウイチ");
+        assert_eq!(r("english10", "19"), "ジュウキュウ");
+        assert_eq!(r("english10", "284"), "ニヒャクハチジュウヨン");
+        assert_eq!(r("english10", "10004"), "イチゼロゼロゼロヨン");
+        // 先頭 0 の 01 は英語の数詞にならない (each_en 相当)
+        assert_eq!(r("english10", "01"), "ゼロワン");
     }
 
     #[test]

@@ -686,7 +686,7 @@ fn load_loanwords_into(
             if crate::scoring::digit_reading::DigitStyle::parse(&style).is_none() {
                 return Err(crate::FuriganaError::Validation(format!(
                     "{from}: [digits] '{surface}' の読み方 '{style}' は未知 \
-                     (place / each / each_en / english / pair / pair_en)"
+                     (place / each / each_en / english / english10 / pair / pair_en)"
                 )));
             }
             // 「読み方」 と (あれば) 「語 + 数字の時だけ使う読み」 を 1 文字列に畳む。

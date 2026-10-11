@@ -219,9 +219,7 @@ impl CompiledModels {
     /// 語頭 (直前が ASCII 英数字でない) で、 直後も ASCII 英数字でない時だけ。 複数当たれば最も長いもの。
     #[must_use]
     pub fn match_at(&self, input: &str, pos: usize) -> Option<(usize, String)> {
-        let rest = &input[pos..];
-        let lead = rest.chars().next()?.to_ascii_lowercase();
-        let candidates = self.by_first.get(&lead)?;
+        // 語の途中 (直前が英数字) は索引を引く前に除く (英文では大半の位置がここで終わる)
         if input[..pos]
             .chars()
             .next_back()
@@ -229,12 +227,16 @@ impl CompiledModels {
         {
             return None;
         }
+        let rest = &input[pos..];
+        let lead = rest.chars().next()?.to_ascii_lowercase();
+        let candidates = self.by_first.get(&lead)?;
         let mut best: Option<(usize, String)> = None;
         for m in candidates {
-            let Some(caps) = m.re.captures(rest) else {
+            // 当たらない時 (ほとんど) は captures の確保を避けるため、 先に find で見る
+            let Some(found) = m.re.find(rest) else {
                 continue;
             };
-            let end = caps.get(0).map_or(0, |g| g.end());
+            let end = found.end();
             if rest[end..]
                 .chars()
                 .next()
@@ -245,6 +247,9 @@ impl CompiledModels {
             if best.as_ref().is_some_and(|(e, _)| *e >= end) {
                 continue;
             }
+            let Some(caps) = m.re.captures(rest) else {
+                continue;
+            };
             best = Some((pos + end, self.render(m, &caps)));
         }
         best

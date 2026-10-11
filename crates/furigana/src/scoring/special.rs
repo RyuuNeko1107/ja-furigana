@@ -69,7 +69,7 @@ static EMAIL_RE: Lazy<Regex> = Lazy::new(|| {
 
 /// 括弧 1 組 (前後に腕 ヽ ＼ ノ ／ が付くことがある)。 中身が顔かどうかは [`is_kaomoji_inner`] で見る
 static KAOMOJI_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[ヽヾ＼\\]?[(（]([^()（）\s]{1,14})[)）][ノﾉ／/]?")
+    Regex::new(r"[ヽヾ＼\\]?[(（]([^()（）\s]{1,14})[)）][ノﾉ／/v]?")
         .expect("scoring kaomoji regex build failed")
 });
 
@@ -506,37 +506,73 @@ impl AlphabetPassthroughProvider {
     }
 
     /// 小文字の英字列を辞書の語に区切る (部分の数が最少のもの)。 (読み, 部分の数, 辞書の語の数)
+    ///
+    /// 短い部分 (2 文字以下の英文の語) は、 隣り合わせにしない / 1 文字は先頭の `i` `a` だけ。
+    /// さもないと固有名詞 (Aniimo = an + i + …) が細かい語に割られて読まれてしまう
     fn word_break(&self, s: &str) -> Option<(String, usize, usize)> {
+        /// 位置 i の状態 (k = 0: 直前の部分が長い / 1: 短い) に至る最良の経路: (部分の数, 辞書の語の数, 直前の位置, 直前の状態)
+        type Entry = (usize, usize, usize, usize);
         let n = s.len();
-        // best[i] = s[..i] を区切った最良の (部分の数, 読み, 辞書の語の数)
-        let mut best: Vec<Option<(usize, String, usize)>> = vec![None; n + 1];
-        best[0] = Some((0, String::new(), 0));
+        let mut best: Vec<[Option<Entry>; 2]> = vec![[None, None]; n + 1];
+        best[0][0] = Some((0, 0, 0, 0));
+        // 文章用の語表の key を作り直さないための作業領域
+        let mut key = String::from(SENTENCE_KEY_PREFIX);
         for i in 0..n {
-            let Some((count, reading, content)) = best[i].clone() else {
-                continue;
-            };
-            for j in (i + 1)..=n.min(i + MAX_WORD_LEN) {
-                let word = &s[i..j];
-                let (piece, is_content) = match self.lookup.get(word) {
-                    Some(r) if word.len() >= 3 => (r.as_str(), true),
-                    _ => match self.lookup.get(&format!("{SENTENCE_KEY_PREFIX}{word}")) {
-                        Some(r) => (r.as_str(), false),
-                        None => continue,
-                    },
+            for k in 0..2 {
+                let Some((count, content, _, _)) = best[i][k] else {
+                    continue;
                 };
-                let cand = (
-                    count + 1,
-                    format!("{reading}{piece}"),
-                    content + usize::from(is_content),
-                );
-                if best[j].as_ref().is_none_or(|b| cand.0 < b.0) {
-                    best[j] = Some(cand);
+                for j in (i + 1)..=n.min(i + MAX_WORD_LEN) {
+                    let word = &s[i..j];
+                    let short = word.len() <= 2;
+                    if (short && k == 1)
+                        || (word.len() == 1 && !(i == 0 && matches!(word, "i" | "a")))
+                    {
+                        continue;
+                    }
+                    let is_content = word.len() >= 3 && self.lookup.contains_key(word);
+                    if !is_content {
+                        key.truncate(SENTENCE_KEY_PREFIX.len());
+                        key.push_str(word);
+                        if !self.lookup.contains_key(&key) {
+                            continue;
+                        }
+                    }
+                    let cand = (count + 1, content + usize::from(is_content), i, k);
+                    let slot = &mut best[j][usize::from(short)];
+                    if slot.is_none_or(|b| cand.0 < b.0) {
+                        *slot = Some(cand);
+                    }
                 }
             }
         }
-        best.pop()
-            .flatten()
-            .map(|(count, reading, content)| (reading, count, content))
+        let end = best[n];
+        let (mut k, (count, content, _, _)) = end
+            .iter()
+            .enumerate()
+            .filter_map(|(k, e)| e.map(|e| (k, e)))
+            .min_by_key(|(_, e)| e.0)?;
+        // 経路を逆にたどって、 部分の読みを前から並べる
+        let mut pieces: Vec<&str> = Vec::with_capacity(count);
+        let mut j = n;
+        while j > 0 {
+            let (_, _, i, pk) = best[j][k]?;
+            let word = &s[i..j];
+            let reading = self
+                .lookup
+                .get(word)
+                .filter(|_| word.len() >= 3)
+                .or_else(|| {
+                    key.truncate(SENTENCE_KEY_PREFIX.len());
+                    key.push_str(word);
+                    self.lookup.get(&key)
+                })?;
+            pieces.push(reading.as_str());
+            j = i;
+            k = pk;
+        }
+        pieces.reverse();
+        Some((pieces.concat(), count, content))
     }
 
     /// 空白区切りの 2 語以上で、 外来語表にある語を 「語の読み」 に置き換えて空白でつないだもの
@@ -546,6 +582,7 @@ impl AlphabetPassthroughProvider {
         // 単独の語 (型番の前の 1 語) には英文用の語表を使わない (単独の so / to を読まない)
         let sentence = body.contains(' ');
         let mut hits = 0;
+        let mut content = false;
         let mut out: Vec<&str> = Vec::new();
         for word in body.split(' ').filter(|w| !w.is_empty()) {
             let norm = normalize_alphabet(word);
@@ -554,6 +591,9 @@ impl AlphabetPassthroughProvider {
             } else {
                 self.lookup.get(&norm).map(String::as_str)
             };
+            if norm.len() >= 3 && self.lookup.contains_key(&norm) {
+                content = true;
+            }
             match found {
                 Some(r) => {
                     hits += 1;
@@ -563,6 +603,10 @@ impl AlphabetPassthroughProvider {
             }
         }
         let all_known = hits == out.len();
+        // 複数語は、 外来語表の語 (3 文字以上) を 1 つ以上含む時だけ (a a a a a / go up のような機能語だけは読まない)
+        if sentence && !content {
+            return None;
+        }
         (hits > 0 && (all_known || allow_partial)).then(|| out.join(" ") + &surface[body.len()..])
     }
 
@@ -704,7 +748,16 @@ impl CandidateProvider for AlphabetPassthroughProvider {
             // 単独の w の直後が助詞 (キーwを押す / wは小文字) なら、 笑いではなく文字そのもの。
             // 笑いの w は文末・読点・絵文字の前など助詞の前には来ない。 外来語表の ワラ を使わず
             // 文字名で読む。 www... や ww は従来どおり笑い
-            let letter_name = (normalized == "w"
+            // 笑いの w は仮名・漢字の後ろにも普通に来る (なぁwとは / 対応wといい) ので、 文字名にするのは
+            // 大文字の W (ガンダムWが) か、 小文字なら文頭・空白・括弧・引用符・長音 (キー) の後ろだけ
+            let prev = ctx.input[..range.start].chars().next_back();
+            let w_is_letter = surface == "W"
+                || (surface == "w"
+                    && prev.is_none_or(|c| {
+                        c.is_whitespace()
+                            || matches!(c, '「' | '『' | '(' | '（' | '【' | '[' | '"' | '“' | 'ー')
+                    }));
+            let letter_name = (w_is_letter
                 && ctx.input[range.end..].chars().next().is_some_and(|c| {
                     matches!(c, 'は' | 'を' | 'が' | 'の' | 'も' | 'に' | 'で' | 'と')
                 }))
@@ -1287,6 +1340,7 @@ mod tests {
             "ヽ(´ー｀)ノ",
             "＼(^o^)／",
             "(^^)/",
+            "(^-^)v",
         ] {
             let input = format!("あ{kao}い");
             let tokens = extract_protected_tokens(&input);
@@ -1486,6 +1540,31 @@ mod tests {
     }
 
     #[test]
+    fn short_parts_cannot_sit_next_to_each_other_or_stand_alone_mid_word() {
+        // 固有名詞 Aniimo (an + i + imo …) は割らない: 短い部分どうしの隣り合わせ / 途中の 1 文字は不可
+        assert_eq!(one("aniimo"), "aniimo");
+        assert_eq!(one("soupto"), "soupto");
+        // 先頭の i / a は 1 文字でも可 (iloveyou)。 途中の 1 文字は不可
+        assert_eq!(one("iloveyou"), "アイラブユー");
+        assert_eq!(one("aloveyou"), "アラブユー");
+        assert_eq!(one("youiloveyou"), "youiloveyou");
+        // 長い語をはさめば短い語は使える (thankyousomuch の so)
+        assert_eq!(one("thankyousomuch"), "サンクユーソーマッチ");
+        // 短い語が隣り合う区切り (so + to) は採用しない
+        assert_eq!(one("lovesoto"), "lovesoto");
+    }
+
+    #[test]
+    fn multi_word_needs_at_least_one_content_word() {
+        // 機能語だけ (a a a a a / go up) は読まない
+        assert_eq!(one("a a a a a"), "a a a a a");
+        assert_eq!(one("up to you"), "up to you");
+        // 辞書の語 (3 文字以上) が 1 つでもあれば読む
+        assert_eq!(one("love you"), "ラブ ユー");
+        assert_eq!(one("thank you"), "サンク ユー");
+    }
+
+    #[test]
     fn concatenation_skips_short_acronyms_digits_and_long_inputs() {
         // 5 文字以下は区切らない / 6 文字からは区切る
         assert_eq!(one("noyou"), "noyou");
@@ -1513,7 +1592,7 @@ mod tests {
         assert!(provider.word_break("zzzz").is_none());
         assert!(provider
             .word_break("")
-            .map_or(true, |(r, p, _)| r.is_empty() && p == 0));
+            .is_none_or(|(r, p, _)| r.is_empty() && p == 0));
         // 辞書の 2 字の語 (no) は内容語として使わない: noyou は 英文の語表に no が無いので区切れない
         assert!(provider.word_break("noyou").is_none());
     }
@@ -1562,6 +1641,28 @@ mod tests {
         }
         assert_eq!(w_reading("W は小文字", 0), "ワラ");
         assert_eq!(w_reading("Wは小文字", 0), "ダブリュー");
+        // 文頭 / 空白 / 括弧・引用符の後ろの小文字 w
+        assert_eq!(w_reading("wは小文字", 0), "ダブリュー");
+        assert_eq!(w_reading("これは wを押す", "これは ".len()), "ダブリュー");
+        for open in ["「", "『", "(", "（", "【", "[", "\"", "“"] {
+            let input = format!("{open}wを押す");
+            assert_eq!(w_reading(&input, open.len()), "ダブリュー", "{input}");
+        }
+        // 大文字 W は何の後ろでも文字 (ガンダムWが)
+        assert_eq!(w_reading("ガンダムWが", "ガンダム".len()), "ダブリュー");
+    }
+
+    #[test]
+    fn w_after_japanese_text_is_laughter_even_before_a_particle() {
+        // 仮名・漢字・片仮名の後ろの w は、 助詞が続いても笑い (実コメントで誤判定が出た形)
+        for prefix in ["なぁ", "対応", "ウェイ", "ね", "草", "すごい"] {
+            for p in ["と", "は", "を", "が", "の", "も", "に", "で"] {
+                let input = format!("{prefix}w{p}続く");
+                assert_eq!(w_reading(&input, prefix.len()), "ワラ", "{input}");
+            }
+        }
+        // 小文字 w + 長音の後ろ (キーw) だけが文字名
+        assert_eq!(w_reading("キーwを押す", "キー".len()), "ダブリュー");
     }
 
     #[test]
