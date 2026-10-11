@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-10-12
+
 ### Added
 
 - **英字語にくっついた数字の読み方** (loanwords の `[digits]` table)。 数字の読みは語ごとに違う
@@ -1861,7 +1863,8 @@ ja-furigana-dict 側で `core/works/game/touhou.toml`、`core/works/anime/<title
      で yank、 alpha.1 / alpha.2 は yank 済み (rename 前 crate name)。
      ─────────────────────────────────────────────────────────────────── -->
 
-[Unreleased]: https://github.com/RyuuNeko1107/ja-furigana/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/RyuuNeko1107/ja-furigana/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.5.7
 [0.5.2]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.5.2
 [0.5.1]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.5.1
 [0.5.0]: https://github.com/RyuuNeko1107/ja-furigana/releases/tag/v0.5.0
