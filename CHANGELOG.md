@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-10-12
+
 ### Added
 
 - **型番パターン** (`rules/text/models.toml`、 role = "models")。 `RTX 4070 Ti` / `Ryzen 7 5800X3D` / `i9-13900K` / `iPhone 15 Pro Max` / `Galaxy S24 Ultra` / `PS5` / `DDR5-6000` / `PCIe 5.0` / `Wi-Fi 6E` / `GPT-4o` のような ブランド + 数字 + 接尾辞を 1 語で読む。 正規表現 + 読みの雛形 (`{N:style}`、 style = place / each / english / dotted / part / spell …) を辞書側で宣言し、 pattern は先頭の英字で索引して語頭でだけ試す。 語の途中・型番の途中には当たらない。 load 時に正規表現・雛形を検査する (`scoring/model_number.rs`、 `rules/models.rs`)
