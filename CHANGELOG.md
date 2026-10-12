@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.12] - 2026-10-12
+
 ### Added
 
 - **`Furigana::postprocess(text, mode)`**。 `postprocess.toml` のルールを、 出力を自前で組み立てる呼び出し側 (HTTP サーバー等) からも掛けられる。 `to_hiragana` / `to_ruby` / `to_tts` は従来どおり内部で適用する
