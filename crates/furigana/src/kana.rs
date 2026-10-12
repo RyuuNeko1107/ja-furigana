@@ -593,14 +593,14 @@ pub(crate) fn normalize_text_aligned(s: &str, compat: &CompatData) -> Normalized
             continue;
         }
         let norm_start = text.len();
-        // 丸数字が続く時 (①②③) は 123 に合体して 「ひゃくにじゅうさん」 になるので、 間に空白を入れて 1 つずつ読ませる
+        // 丸数字が続く時 (①②③) は 123 に合体して 「ひゃくにじゅうさん」 になるので、 間に読みが空の中黒を入れて 1 つずつ読ませる (空白だと 2 つ目以降の読みの先頭に空白が残る)
         if is_circled_number(ch)
             && s[..orig_off]
                 .chars()
                 .next_back()
                 .is_some_and(is_circled_number)
         {
-            text.push(' ');
+            text.push('・');
         }
         // 上付き数字 (10² / x³) は 「^2」 にして累乗として読む (直前が数字・英字・閉じ括弧の時だけ。 注記の ¹ は除く)
         if let Some(d) = superscript_digit(ch) {
@@ -818,9 +818,9 @@ mod tests {
     fn normalize_text_separates_circled_numbers_and_turns_superscripts_into_powers() {
         let c = CompatData::default();
         // 丸数字は連続した時だけ空白で区切る (①②③ が 123 にならない)。 1 つだけなら従来どおり
-        assert_eq!(normalize_text("①②③", &c), "1 2 3");
+        assert_eq!(normalize_text("①②③", &c), "1・2・3");
         assert_eq!(normalize_text("①番", &c), "1番");
-        assert_eq!(normalize_text("⑩⑪", &c), "10 11");
+        assert_eq!(normalize_text("⑩⑪", &c), "10・11");
         // 上付き数字は直前が数字・英字・閉じ括弧の時だけ累乗にする
         assert_eq!(normalize_text("10²", &c), "10^2");
         assert_eq!(normalize_text("x²+y³", &c), "x^2+y^3");
