@@ -64,10 +64,55 @@ use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, PHONE_RE, RATIO_RE, SLASH_PAIR_RE, TIME_COLON_RE,
-    TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
+    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, PHONE_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
+    SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE, SLASH_PAIR_RE,
+    SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
+    SLASH_SENTENCE_FRACTION_RE, SLASH_STANDALONE_AFTER_RE, SLASH_STANDALONE_BEFORE_RE,
+    TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
 };
 use regex::Regex;
+
+/// 辞書で足された `N/M` の手がかり語 (語の一覧を 1 本の正規表現にしたもの)。 空なら `None`
+#[derive(Debug, Default, Clone)]
+struct SlashCues {
+    date_after: Option<Regex>,
+    date_before: Option<Regex>,
+    date_topic: Option<Regex>,
+    fraction_after: Option<Regex>,
+    fraction_before: Option<Regex>,
+    fraction_topic: Option<Regex>,
+}
+
+impl SlashCues {
+    fn new(cues: &crate::rules::SlashPairCues) -> Self {
+        // 語は正規表現として解釈しない (escape)。 直後は先頭一致、 直前は末尾一致、 話題は部分一致
+        let build = |words: &[String], head: &str, tail: &str| {
+            let mut words: Vec<&str> = words
+                .iter()
+                .map(|w| w.trim())
+                .filter(|w| !w.is_empty())
+                .collect();
+            if words.is_empty() {
+                return None;
+            }
+            words.sort_by_key(|w| std::cmp::Reverse(w.len()));
+            let alt: Vec<String> = words.iter().map(|w| regex::escape(w)).collect();
+            Regex::new(&format!("{head}(?:{}){tail}", alt.join("|"))).ok()
+        };
+        Self {
+            date_after: build(&cues.date_after, "^", ""),
+            date_before: build(&cues.date_before, "", "[:：は ]?[ \\u3000]?$"),
+            date_topic: build(&cues.date_topic, "", ""),
+            fraction_after: build(&cues.fraction_after, "^", ""),
+            fraction_before: build(&cues.fraction_before, "", "[ \\u3000]?$"),
+            fraction_topic: build(&cues.fraction_topic, "", ""),
+        }
+    }
+}
+
+fn extra_match(re: &Option<Regex>, text: &str) -> bool {
+    re.as_ref().is_some_and(|r| r.is_match(text))
+}
 
 // ─── NumberCandidateProvider ────────────────────────────────────────────────
 
@@ -105,6 +150,8 @@ pub struct NumberCandidateProvider {
     slash_units: Vec<String>,
     /// 型番パターン (models.toml)
     models: CompiledModels,
+    /// 辞書 (context_cues.toml) で足された `N/M` の手がかり語
+    slash_cues: SlashCues,
 }
 
 impl NumberCandidateProvider {
@@ -166,6 +213,7 @@ impl NumberCandidateProvider {
             unit_symbols: std::sync::Arc::new(unit_symbols),
             slash_units,
             models: CompiledModels::new(&rules.models),
+            slash_cues: SlashCues::new(&rules.context_cues.slash_pair),
         }
     }
 
@@ -1220,9 +1268,11 @@ impl NumberCandidateProvider {
     }
 
     /// `N/M` を日付か分数か決める。 手がかりが無いもの (1/3 / 10/12) は曖昧なので触らない。
-    /// - 月 1〜12 / 日 13〜31 は日付 (12/25 = じゅうにがつにじゅうごにち)。 3 要素 (2024/10/12) の一部は除く
-    /// - 直後が 分数の言い方 (サイズ / 倍 / 割 / 以上 / 以下 / 程度 / ほど / くらい / 弱 / 強) なら分数
-    ///   (1/2サイズ = にぶんのいちさいず)
+    /// - 分数の手がかり (直後: サイズ / 倍 / 割 / 以上 / 以下 / 程度 / ほど / くらい / 秒 / 周 / ずつ、 直前: HP / 確率 …) が最優先
+    ///   (1/2サイズ = にぶんのいちさいず / HP1/10 = じゅうぶんのいち)
+    /// - 日付の手がかり (曜日の括弧 / 時刻 / まで・から・発売 / 範囲 `10/8〜10/12` / 直前の 本日・締切 …) があれば日付
+    /// - 月 1〜12 / 日 13〜31 は手がかりが無くても日付 (12/25 = じゅうにがつにじゅうごにち)
+    /// - 3 要素 (2024/10/12) の一部は除く
     fn try_slash_pair(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         let Some(caps) = at_start(&SLASH_PAIR_RE, rest) else {
             return;
@@ -1232,7 +1282,8 @@ impl NumberCandidateProvider {
         let (Ok(x), Ok(y)) = (a.parse::<u32>(), b.parse::<u32>()) else {
             return;
         };
-        let prev = input[..pos].chars().next_back();
+        let before = &input[..pos];
+        let prev = before.chars().next_back();
         let after = &rest[whole.end()..];
         // 数字・スラッシュの途中 (2024/10/12 / 1/2/3) は触らない
         if prev.is_some_and(|c| c.is_ascii_digit() || c == '/')
@@ -1240,28 +1291,72 @@ impl NumberCandidateProvider {
         {
             return;
         }
-        let fraction_word = [
-            "サイズ",
-            "倍",
-            "割",
-            "以上",
-            "以下",
-            "程度",
-            "ほど",
-            "くらい",
-            "弱",
-            "強",
-        ]
-        .iter()
-        .any(|w| after.starts_with(w));
-        let reading = if (1..=12).contains(&x) && (13..=31).contains(&y) {
+        let is_date = (1..=12).contains(&x) && (1..=31).contains(&y);
+        let date_range = || {
+            // 範囲の両端は日付 (後ろ ≥ 前)。 1/3から1/2 のように戻る組は分数どうしなので除く
+            let ascending = |x2: u32, y2: u32| (x2, y2) >= (x, y);
+            let next_pair = SLASH_RANGE_AFTER_RE.captures(after).and_then(|c| {
+                Some((
+                    c.get(1)?.as_str().parse::<u32>().ok()?,
+                    c.get(2)?.as_str().parse::<u32>().ok()?,
+                ))
+            });
+            if next_pair.is_some_and(|(x2, y2)| {
+                (1..=12).contains(&x2) && (1..=31).contains(&y2) && ascending(x2, y2)
+            }) {
+                return true;
+            }
+            SLASH_RANGE_BEFORE_RE.captures(before).is_some_and(|c| {
+                let (Some(x0), Some(y0)) = (
+                    c.get(1).and_then(|m| m.as_str().parse::<u32>().ok()),
+                    c.get(2).and_then(|m| m.as_str().parse::<u32>().ok()),
+                ) else {
+                    return false;
+                };
+                (1..=12).contains(&x0) && (1..=31).contains(&y0) && (x, y) >= (x0, y0)
+            })
+        };
+        // 【10/11 … / [10/10-12] のように括弧の直後で始まる日付 (【1/2】 のような 閉じ括弧が直後は除く)
+        let bracket_date =
+            before.ends_with(['【', '[', '［']) && !after.starts_with(['】', ']', '］']);
+        let fraction_cue = SLASH_FRACTION_AFTER_RE.is_match(after)
+            || extra_match(&self.slash_cues.fraction_after, after)
+            || SLASH_FRACTION_BEFORE_RE.is_match(before)
+            || extra_match(&self.slash_cues.fraction_before, before);
+        let date_cue = is_date
+            && (SLASH_DATE_AFTER_RE.is_match(after)
+                || extra_match(&self.slash_cues.date_after, after)
+                || SLASH_DATE_BEFORE_RE.is_match(before)
+                || extra_match(&self.slash_cues.date_before, before)
+                || date_range());
+        // 近くに手がかりが無い時は文全体の話題で決める: 日付の話題の語があり、 分数の話題の語が無く、
+        // 日付の書き方 (文頭・空白・括弧の直後 + 直後が助詞・かな漢字・絵文字) で、 分数と紛れる組 (1/2〜1/10 / 3/3) でない
+        let sentence_date = is_date
+            && !fraction_cue
+            && x != y
+            && !(x == 1 && y <= 10)
+            && !SLASH_SENTENCE_FRACTION_RE.is_match(input)
+            && !extra_match(&self.slash_cues.fraction_topic, input)
+            && SLASH_STANDALONE_BEFORE_RE.is_match(before)
+            && SLASH_STANDALONE_AFTER_RE.is_match(after)
+            && (SLASH_SENTENCE_DATE_RE.is_match(input)
+                || extra_match(&self.slash_cues.date_topic, input)
+                || bracket_date
+                || after.starts_with(['に', '頃']));
+        // まで / から の直後が戻る組 (1/3から1/2) は分数どうしの言い方
+        let falling_range = (after.starts_with("から") || after.starts_with("まで"))
+            && at_start(&SLASH_PAIR_RE, &after["から".len()..]).is_some();
+        let reading = if fraction_cue && y > 0 {
+            format!("{}ブンノ{}", number_to_katakana(b), number_to_katakana(a))
+        } else if (is_date && (13..=31).contains(&y))
+            || (date_cue && !falling_range)
+            || sentence_date
+        {
             format!(
                 "{}{}",
                 self.read_counter_in_date(a, "月"),
                 self.read_counter_in_date(b, "日")
             )
-        } else if fraction_word && y > 0 {
-            format!("{}ブンノ{}", number_to_katakana(b), number_to_katakana(a))
         } else {
             return;
         };
