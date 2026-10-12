@@ -64,7 +64,7 @@ use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, PHONE_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
+    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, PHONE_RE, POSTAL_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
     SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE, SLASH_PAIR_RE,
     SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
     SLASH_SENTENCE_FRACTION_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
@@ -409,6 +409,15 @@ fn hyphen_is_time_range(input: &str, pos: usize, ch: char) -> bool {
 
 /// 装飾にも使われる図形記号。 伏せ字の書き方 (`■■さん` / `△△`) の時だけ読む
 const DECORATIVE_SHAPES: &str = "●■▲▼◆◇";
+
+/// 郵便番号の 3 桁 + 4 桁を 1 桁ずつ読む (間に ノ)
+fn postal_digits(head: &str, tail: &str) -> String {
+    format!(
+        "{}ノ{}",
+        DigitStyle::Each.render(head).unwrap_or_default(),
+        DigitStyle::Each.render(tail).unwrap_or_default()
+    )
+}
 
 /// 伏せ字の直後に付く敬称・肩書きの組み込み分 (辞書の `[placeholder] honorifics` で足せる)
 const BUILTIN_HONORIFICS: [&str; 8] = ["さん", "くん", "君", "ちゃん", "様", "氏", "先生", "殿"];
@@ -1356,6 +1365,58 @@ impl NumberCandidateProvider {
         out.push(self.make(input, pos, end, reading));
     }
 
+    /// 郵便番号 `〒100-0001` / `〒 1000001`。 〒 から数字までを 1 語にして 7 桁を 1 桁ずつ読む
+    /// (イチゼロゼロ ノ ゼロゼロゼロイチ)
+    fn try_postal_mark(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        let after_mark = &rest['〒'.len_utf8()..];
+        let skip = after_mark
+            .chars()
+            .take_while(|&c| c == ' ' || c == '\u{3000}')
+            .map(char::len_utf8)
+            .sum::<usize>();
+        let Some(caps) = at_start(&POSTAL_RE, &after_mark[skip..]) else {
+            return;
+        };
+        let end = '〒'.len_utf8() + skip + caps.get(0).unwrap().end();
+        if rest[end..].starts_with(|c: char| is_digit_like_char(c)) {
+            return;
+        }
+        let reading = format!(
+            "ユウビンバンゴウ{}",
+            postal_digits(caps.get(1).unwrap().as_str(), caps.get(2).unwrap().as_str())
+        );
+        out.push(self.make(input, pos, end, reading));
+    }
+
+    /// `郵便番号 100-0001` のように、 直前が 「郵便番号」 (+ 区切り) の 3 桁-4 桁を 1 桁ずつ読む
+    fn try_postal_after_label(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        let before = input[..pos].trim_end_matches([' ', '\u{3000}', ':', '：']);
+        if !before.ends_with("郵便番号") {
+            return;
+        }
+        let Some(caps) = at_start(&POSTAL_RE, rest) else {
+            return;
+        };
+        let end = caps.get(0).unwrap().end();
+        if rest[end..].starts_with(|c: char| is_digit_like_char(c)) {
+            return;
+        }
+        let reading = postal_digits(caps.get(1).unwrap().as_str(), caps.get(2).unwrap().as_str());
+        out.push(self.make(input, pos, end, reading));
+    }
+
     /// 年付きの日付 (`2025/10/13` / `2000-10-12`)。 年 4 桁 + 月 1〜12 + 日 1〜31 で、 区切りは 2 つとも同じ。
     /// 数字・区切りの途中 (1/2/2025/10/13 の後半、 2025-10-13-1) や、 時刻・IP のような長い数字列の一部は読まない
     fn try_ymd(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
@@ -1615,6 +1676,9 @@ impl CandidateProvider for NumberCandidateProvider {
             if first_char == '何' {
                 self.try_counter_kanji(input, pos, rest, out);
             }
+            if first_char == '〒' {
+                self.try_postal_mark(input, pos, rest, out);
+            }
             self.emit_symbol(input, pos, rest, out);
             return;
         }
@@ -1629,6 +1693,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_kanji_decimal(input, pos, rest, out);
         self.try_phone(input, pos, rest, out);
         self.try_ymd(input, pos, rest, out);
+        self.try_postal_after_label(input, pos, rest, out);
         self.try_slash_pair(input, pos, rest, out);
         self.try_version(input, pos, rest, out);
         self.try_counter(input, pos, rest, out);
