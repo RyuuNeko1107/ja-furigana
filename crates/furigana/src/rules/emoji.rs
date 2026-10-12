@@ -134,7 +134,16 @@ pub struct EmojiData {
 impl EmojiData {
     /// 別 file の内容を足す。 同じキーは後勝ち。
     pub fn merge(&mut self, other: Self) {
-        self.entries.extend(other.entries);
+        for (k, v) in other.entries {
+            // 文脈読みのある項目 (Detailed) を、 読みだけの項目 (Simple) で上書きしない (file の読み込み順に依らない)
+            let keep_existing = matches!(
+                (self.entries.get(&k), &v),
+                (Some(EmojiEntry::Detailed { .. }), EmojiEntry::Simple(_))
+            );
+            if !keep_existing {
+                self.entries.insert(k, v);
+            }
+        }
     }
 
     /// 件数
@@ -174,6 +183,10 @@ mod tests {
         let b: EmojiData = toml::from_str("[entries]\n\"⏰\" = \"とけい\"").unwrap();
         a.merge(b);
         assert_eq!(a.entries["⏰"].base(), Some("とけい"));
+        // 文脈読みのある 🙏 を、 読みだけの項目で上書きしない
+        let c: EmojiData = toml::from_str("[entries]\n\"🙏\" = \"x\"").unwrap();
+        a.merge(c);
+        assert!(matches!(a.entries["🙏"], EmojiEntry::Detailed { .. }));
     }
 
     #[test]

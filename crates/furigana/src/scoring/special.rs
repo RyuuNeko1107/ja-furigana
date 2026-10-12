@@ -421,7 +421,8 @@ pub struct ProtectTokenProvider {
 }
 
 impl ProtectTokenProvider {
-    /// 入力 string を scan して保護 token を抽出、 provider を構築する。
+    /// 入力 string を scan して保護 token を抽出、 provider を構築する (絵文字の読み表なし。 テスト用)。
+    #[cfg(test)]
     #[must_use]
     pub fn new(input: &str) -> Self {
         Self::with_emoji(input, Arc::new(HashMap::new()))

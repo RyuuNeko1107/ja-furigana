@@ -208,6 +208,7 @@ fn infer_role_from_path(path: &Path) -> Option<&'static str> {
         "context_cues.toml" => Some("context_cues"),
         "symbols.toml" => Some("symbols"),
         "emoji.toml" => Some("emoji"),
+        "emoji_context.toml" => Some("emoji_context"),
         "numeric_phrases.toml" => Some("numeric_phrases"),
         "compat.toml" | "compat_map.toml" => Some("compat"),
         "postprocess.toml" => Some("postprocess"),
@@ -389,7 +390,9 @@ pub fn load_rules_dir<P: AsRef<Path>>(dir: P) -> Result<RulesData> {
             Some("scales") => data.scales = parse_toml(content, from)?,
             Some("units") => data.units = parse_toml(content, from)?,
             Some("symbols") => data.symbols = parse_toml(content, from)?,
-            Some("emoji") => {
+            // emoji_context は文脈読み (match) だけを別 file にしたもの。 旧 lib (0.5.19〜21) は未知の role として無視するので、
+            // 簡単な読みを emoji.toml、 文脈読みを emoji_context.toml に分ければ旧 lib でも辞書が壊れない
+            Some("emoji" | "emoji_context") => {
                 let part: crate::rules::EmojiData = parse_toml(content, from)?;
                 data.emoji.merge(part);
             }
