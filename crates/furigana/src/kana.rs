@@ -392,6 +392,16 @@ pub fn normalize_text(s: &str, compat: &CompatData) -> String {
     normalize_text_aligned(s, compat).text
 }
 
+/// ローマ数字 1 文字 (Ⅰ〜Ⅻ = U+2160..=U+216B、 ⅰ〜ⅻ = U+2170..=U+217B) の値 (1〜12)
+fn roman_numeral_value(ch: char) -> Option<u32> {
+    let cp = u32::from(ch);
+    match cp {
+        0x2160..=0x216B => Some(cp - 0x2160 + 1),
+        0x2170..=0x217B => Some(cp - 0x2170 + 1),
+        _ => None,
+    }
+}
+
 /// 1 文字を NFKC → compat 置換 → NFC した断片を返す。
 ///
 /// [`normalize_text_aligned`] が unit ごとに呼ぶ。 NFKC は **1 文字単位** で適用する
@@ -415,6 +425,12 @@ fn normalize_char_piece_into(ch: char, compat: &CompatData, out: &mut String) {
     // 顔文字の頬・口 (´ ¨ ¯ ˘) は NFKC で 「空白 + 結合記号」 に分解されて顔文字が崩れるので、 そのまま残す
     if matches!(ch, '\u{B4}' | '\u{A8}' | '\u{AF}' | '\u{2D8}') {
         out.push(ch);
+        return;
+    }
+    // ローマ数字 Ⅰ〜Ⅻ / ⅰ〜ⅻ は NFKC で I / II / V のような英字列になり、 数 (ドラクエⅤ / Ⅱ世 / 第Ⅲ期) として
+    // 読めなくなるので、 アラビア数字にして lookup する (表示は原文の surface のまま)
+    if let Some(n) = roman_numeral_value(ch) {
+        out.push_str(&n.to_string());
         return;
     }
     // compat lookup の key は 1 文字。 スタック上の buffer から &str を作れば確保不要。
@@ -708,6 +724,18 @@ mod tests {
         // NFKC/NFC は VS を剥がさないので明示除去が要る。人名 (葛飾/辻 等) で頻出。
         assert_eq!(normalize_text("葛\u{E0100}飾", &compat), "葛飾"); // IVS (VS Supplement)
         assert_eq!(normalize_text("辻\u{FE00}", &compat), "辻"); // VS1 (BMP)
+    }
+
+    #[test]
+    fn normalize_text_turns_roman_numerals_into_digits() {
+        let c = CompatData::default();
+        assert_eq!(normalize_text("Ⅱ世", &c), "2世");
+        assert_eq!(normalize_text("第Ⅲ期", &c), "第3期");
+        assert_eq!(normalize_text("ドラクエⅤ", &c), "ドラクエ5");
+        assert_eq!(normalize_text("ⅰⅻ", &c), "112");
+        // 範囲の両端: Ⅰ(U+2160) と Ⅻ(U+216B) は変換、 Ⅼ(U+216C) 以降は従来どおり NFKC
+        assert_eq!(normalize_text("\u{2160}\u{216B}", &c), "112");
+        assert_eq!(normalize_text("\u{216C}", &c), "L");
     }
 
     #[test]

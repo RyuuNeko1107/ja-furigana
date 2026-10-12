@@ -38,12 +38,23 @@ pub struct SlashPairCues {
     pub fraction_topic: Vec<String>,
 }
 
+/// 伏せ字 (`■さん` / `△△様`) の手がかり語。
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct PlaceholderCues {
+    /// 図形記号の直後に付く敬称・肩書き (`■さん` のように 1 つだけでも伏せ字として読む)
+    #[serde(default)]
+    pub honorifics: Vec<String>,
+}
+
 /// context_cues.toml 全体。
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct ContextCuesData {
     /// `N/M` (日付か分数か)
     #[serde(default)]
     pub slash_pair: SlashPairCues,
+    /// 伏せ字の図形記号
+    #[serde(default)]
+    pub placeholder: PlaceholderCues,
 }
 
 impl ContextCuesData {
@@ -56,6 +67,9 @@ impl ContextCuesData {
         a.fraction_after.extend(b.fraction_after);
         a.fraction_before.extend(b.fraction_before);
         a.fraction_topic.extend(b.fraction_topic);
+        self.placeholder
+            .honorifics
+            .extend(other.placeholder.honorifics);
     }
 
     /// 空の語が無いかを検査する (load 時に呼ぶ)。
@@ -75,6 +89,14 @@ impl ContextCuesData {
             if list.iter().any(|w| w.trim().is_empty()) {
                 return Err(format!("slash_pair.{name} に空の語がある"));
             }
+        }
+        if self
+            .placeholder
+            .honorifics
+            .iter()
+            .any(|w| w.trim().is_empty())
+        {
+            return Err("placeholder.honorifics に空の語がある".to_string());
         }
         Ok(())
     }
@@ -97,6 +119,14 @@ mod tests {
         assert_eq!(a.slash_pair.fraction_after, ["くらい"]);
         assert!(a.validate().is_ok());
         let bad: ContextCuesData = toml::from_str("[slash_pair]\ndate_after = [\" \"]").unwrap();
+        assert!(bad.validate().is_err());
+        // 伏せ字の敬称も足され、 空の語は弾く
+        let mut p: ContextCuesData =
+            toml::from_str("[placeholder]\nhonorifics = [\"さん\"]").unwrap();
+        p.merge(toml::from_str("[placeholder]\nhonorifics = [\"師匠\"]").unwrap());
+        assert_eq!(p.placeholder.honorifics, ["さん", "師匠"]);
+        assert!(p.validate().is_ok());
+        let bad: ContextCuesData = toml::from_str("[placeholder]\nhonorifics = [\" \"]").unwrap();
         assert!(bad.validate().is_err());
     }
 }

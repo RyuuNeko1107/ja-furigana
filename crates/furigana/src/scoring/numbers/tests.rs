@@ -1732,6 +1732,85 @@ fn vulgar_fraction_characters_are_always_fractions() {
     }
 }
 
+fn symbol_reading(input: &str, pos: usize, surface: &str) -> Option<String> {
+    let p = provider();
+    p.candidates_vec(&ctx(input), pos)
+        .iter()
+        .find(|c| c.surface == surface)
+        .map(|c| c.reading.to_string())
+}
+
+#[test]
+fn times_sign_is_kakeru_between_operands_and_batsu_otherwise() {
+    // 数字・英字・括弧の間は掛け算
+    for (input, pos) in [
+        ("2×3", 1),
+        ("A×B", 1),
+        ("4K×2", 2),
+        ("えび×3", "えび".len()),
+        ("3×", 1),
+        ("(1+2)×(3)", 5),
+        ("２×３", "２".len()),
+    ] {
+        assert_eq!(
+            symbol_reading(input, pos, "×").as_deref(),
+            Some("カケル"),
+            "{input}"
+        );
+    }
+    // それ以外は誤りを表す ばつ
+    for (input, pos) in [
+        ("返事は×です", "返事は".len()),
+        ("×印", 0),
+        ("○×クイズ", "○".len()),
+        ("ゴミ×", "ゴミ".len()),
+        ("予定×", "予定".len()),
+    ] {
+        assert_eq!(
+            symbol_reading(input, pos, "×").as_deref(),
+            Some("バツ"),
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn decorative_shapes_are_read_only_as_two_symbol_placeholders() {
+    let mut r = rules();
+    for (c, k) in [('■', "シカク"), ('▲', "サンカク"), ('●', "マル")] {
+        r.symbols.entries.insert(c.to_string(), k.to_string());
+    }
+    let before = NumberCandidateProvider::new(&r);
+    let unlisted = before
+        .candidates_vec(&ctx("●師匠"), 0)
+        .iter()
+        .find(|c| c.surface == "●")
+        .map(|c| c.reading.to_string());
+    assert_eq!(unlisted, None);
+    r.context_cues.placeholder.honorifics.push("師匠".into());
+    let p = NumberCandidateProvider::new(&r);
+    let at = |input: &str, pos: usize, surface: &str| {
+        p.candidates_vec(&ctx(input), pos)
+            .iter()
+            .find(|c| c.surface == surface)
+            .map(|c| c.reading.to_string())
+    };
+    // ちょうど 2 つ並び (後ろは何でもよい) か、 直後が敬称なら読む
+    assert_eq!(at("■■", 0, "■").as_deref(), Some("シカク"));
+    assert_eq!(at("■■", "■".len(), "■").as_deref(), Some("シカク"));
+    assert_eq!(at("▲▲の件", 0, "▲").as_deref(), Some("サンカク"));
+    assert_eq!(at("●さん", 0, "●").as_deref(), Some("マル"));
+    assert_eq!(at("●様", 0, "●").as_deref(), Some("マル"));
+    // 辞書 (context_cues.toml の [placeholder] honorifics) で足した敬称・肩書きも効く
+    assert_eq!(at("●師匠", 0, "●").as_deref(), Some("マル"));
+    // 1 つだけ / 3 つ以上の装飾は読まない
+    assert_eq!(at("■", 0, "■"), None);
+    assert_eq!(at("◆■重要■", "◆".len(), "■"), None);
+    assert_eq!(at("■■■お知らせ", 0, "■"), None);
+    assert_eq!(at("■■■お知らせ", "■■".len(), "■"), None);
+    // ○ △ □ は装飾ではないので常に読む (辞書にあれば)
+}
+
 #[test]
 fn slash_pair_ignores_longer_chains() {
     let p = provider();
