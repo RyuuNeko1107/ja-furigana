@@ -183,6 +183,16 @@ impl Furigana {
         out
     }
 
+    /// 出力文字列に `postprocess.toml` のルール (`mode` に対応するもの) を適用する。
+    ///
+    /// `to_hiragana` / `to_ruby` / `to_tts` は内部で自動的に適用する。 トークンから出力を
+    /// 自前で組み立てる呼び出し側 (HTTP サーバー等) が、 同じ後処理を掛けたい時に使う。
+    /// `mode` は `"hiragana"` / `"ruby"` / `"tts"` / `"romaji"`
+    #[must_use]
+    pub fn postprocess(&self, text: &str, mode: &str) -> String {
+        self.rules.postprocess.apply(text, mode)
+    }
+
     /// テキスト → ひらがな文字列
     ///
     /// 漢字部分を読みのひらがなに置き換えた完全展開形を返す。TTS 等向け。
@@ -734,6 +744,30 @@ mod tests {
         "a|b猫",         // ruby delimiter `|` を含む入力
         "C:\\猫\\犬",    // backslash を含む入力 (escape char 自身)
     ];
+
+    #[test]
+    fn postprocess_applies_the_rules_for_the_mode_only() {
+        // 自前で出力を組み立てる呼び出し側が、 to_hiragana と同じ後処理を掛けられる
+        let dir = std::env::temp_dir().join(format!("furigana_pp_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("postprocess.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"postprocess\"
+
+             [[rule]]
+pattern = \"ジュウパー\"
+replacement = \"ジュッパー\"
+modes = [\"hiragana\"]
+",
+        )
+        .unwrap();
+        let f = FuriganaBuilder::new().rules_dir(&dir).build().unwrap();
+        assert_eq!(f.postprocess("ジュウパー", "hiragana"), "ジュッパー");
+        assert_eq!(f.postprocess("ジュウパー", "tts"), "ジュウパー");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn to_hiragana_keeps_kana_surface_verbatim() {
