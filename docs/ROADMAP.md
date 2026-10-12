@@ -5,9 +5,9 @@ ja-furigana の中長期計画。 **完了履歴は [CHANGELOG.md](../CHANGELOG.
 
 > 戻る: [README](../README.md)
 
-## ステータス概観 (2026-09-28 更新)
+## ステータス概観 (2026-10-12 更新)
 
-**最新 release は v0.5.3 (2026-09-28)**。 0.2.0 以降の主な節目 (詳細は CHANGELOG):
+**最新 release は v0.5.7 (2026-10-12)**。 0.2.0 以降の主な節目 (詳細は CHANGELOG):
 
 - **0.2.0 (2026-07-06)**: intonation milestone — accent core (bracket parse + `AccentResult` +
   `--mode=accent`)、 opt-in の rule-based accent 推定、 OOV 促音便 join、 VOICEVOX adapter crate
@@ -30,7 +30,18 @@ runtime 形態素辞書は IPADIC 据え置き (2026-06-11 A/B 評価で IPADIC 
 詳細は [ARCHITECTURE.md](./ARCHITECTURE.md) 設計判断メモ)。 UniDic aType は dict repo 側の offline 生成 tool で
 アクセント専用の表 (`core/accent/unidic.toml`) にして活用 (0.5.1+)。
 
-次の主なテーマは dict 側の継続改善と、 運用で発覚した lib 改善の随時 sweep。
+- **0.5.4〜0.5.6 (2026-09-28〜29)**: 何百件の位置・形容詞活用の accent・和式時刻・位取り 2 桁・促音便の誤爆止め
+- **0.5.7 (2026-10-12)**: 英字語 + 数字の読み方 (loanwords の `[digits]`: Windows11 / iPhone15 / RTX4090)、 バージョン表記 (v1.2.3)、
+  通貨記号 (¥1000 / $100)、 英数字 + 助数詞 (SSR3体)、 名前 + さん / くん の組み直し、 概数 + 助数詞
+- **0.5.8 (予定)**: 型番パターン (`rules/text/models.toml`: RTX / Ryzen / Core i / iPhone / Galaxy / PS5 / DDR / PCIe …)、
+  時刻 (10:00 = じゅうじ) と比 (1:1 = いちたいいち)、 範囲の 「から」 (9時-17時 / A〜Z)、 `km/h`、 括弧の顔文字の除外、
+  型番の前の英単語と複数語の英単語の語ごと読み
+- **0.5.9 (予定)**: 電話番号 (1 桁ずつ)、 `N/M` の日付・分数、 英文の中だけの語表 (`[sentence_words]`)、 連結英語の区切り読み
+
+機能の全体像は [FEATURES.md](./FEATURES.md)。
+
+次の主なテーマは dict 側の継続改善 (英単語・型番の拡充) と、 運用で発覚した lib 改善の随時 sweep。 判定が難しい記号まわり
+(`1/3` の日付か分数か、 `3:2` の時刻か比か) は文脈の手がかりが取れる範囲に限って扱う。
 
 0.x のため minor version で破壊的変更がありうる (patch は互換維持)。 Rust toolchain は
 **1.89+** が必要 (`std::fs::File::lock` 安定化要求のため、 依存 rustyline 18 経由)。
@@ -184,6 +195,8 @@ runtime 形態素辞書は IPADIC 据え置き (2026-06-11 A/B 評価で IPADIC 
 - **顔文字 TTS skip / silent 化**
   - 「・」 → 「なかぐろ」、 「ω」 → 「おめが」 等の 1 字 phonetic 化が TTS で違和感
   - protect token / 顔文字 chunk を TTS 出力で **silent** にする option (= `--include-emoji-tts=false`)
+  - ✅ **出荷済**: 0.3.0 で `TtsOptions::silence_symbols` / `--silence-symbols` (旧案の flag 名は使われていない)。
+    括弧の顔文字は 0.5.8 で保護トークン化して全 mode で読みを空にした
 - **半角 space normalize の正式化** (= 0.1.0 では `preprocess_input()` で 全角 space に変換、 0.2.0 で path 構築 logic に proper 統合)
 
 ##### corpus regression

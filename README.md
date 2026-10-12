@@ -24,8 +24,9 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
   - Web / ブログ記事の `<ruby>` タグ自動生成
   - 配信テロップ用の難読語チェック
   - DB の人名・地名フィールドに読みフリガナを付与
-  - **IT 用語の英単語にも対応** (Kubernetes / Docker / TypeScript 等を
-    `core/loanwords/*.toml` で登録 → 英字の連続を丸ごと完全一致 lookup)
+  - **IT 用語・英単語・型番にも対応** (Kubernetes / Docker / TypeScript 等を
+    `core/loanwords/*.toml` で登録 → 英字の連続を丸ごと完全一致 lookup。 `RTX 4070 Ti` /
+    `Ryzen 7 5800X3D` / `iPhone 15 Pro` のような型番は `rules/text/models.toml` のパターンで読む)
 - ❌ 苦手なこと:
   - **超高精度な文脈読み分け**: 機械学習ベース (BERT 等) のニューラル推論はしない
   - **辞書にない人名・固有名詞**: `furigana-dict` の手動 PR で語彙拡充が前提
@@ -36,7 +37,7 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
 「不確かなときは形態素解析の素朴な結果に fall back」「辞書 hit したものは確実に固定」 という
 **保守的な決定論**。 コミュニティ PR で精度が上がる設計。
 
-> **Status**: 0.5.0 (2026-09-24、 0.1.0 stable cut は 2026-05-12)。 crates.io で 4 crate を公開:
+> **Status**: 0.5.7 (2026-10-12、 0.1.0 stable cut は 2026-05-12)。 crates.io で 4 crate を公開:
 > `ja-furigana` (lib) / `ja-furigana-cli` (`furigana` バイナリ + HTTP server) /
 > `ja-furigana-voicevox` (VOICEVOX kana 記法 adapter) / `ja-furigana-aquestalk`
 > (本家 AquesTalk 音声記号列 adapter)。 各 release の内容は [CHANGELOG.md](./CHANGELOG.md)。
@@ -60,6 +61,8 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
 > 形態素辞書は **`dict-ipadic`** (default) / **`dict-unidic`** (cwj) の feature flag で
 > build-time switch 可能 (A/B 評価で runtime は IPADIC 据え置き、
 > UniDic の pitch accent は offline bracket 生成 tool [dict repo 側] で活用)。
+>
+> **何ができるか** は [docs/FEATURES.md](./docs/FEATURES.md) に一覧がある (出力モード / 漢字・数字・英字・記号の扱い / 辞書の種類)。
 >
 > 詳細は [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) / 中長期計画は [docs/ROADMAP.md](./docs/ROADMAP.md) /
 > 変更履歴は [CHANGELOG.md](./CHANGELOG.md) / breaking 変更ガイドは [MIGRATION.md](./MIGRATION.md)。
@@ -161,6 +164,7 @@ docker run --rm -p 8000:8000 ghcr.io/ryuuneko1107/furigana:latest
 
 | ドキュメント | 内容 |
 |---|---|
+| [`docs/FEATURES.md`](./docs/FEATURES.md) | **機能一覧** (出力モード / 漢字・数字・日時・英字・型番・記号の扱い / 辞書・ルールの種類) |
 | [`docs/HTTP_API.md`](./docs/HTTP_API.md) | endpoints / `mode` / エラー応答 / 認証 / hot reload / 他言語クライアント |
 | [`docs/DATA_LAYOUT.md`](./docs/DATA_LAYOUT.md) | `<data_dir>` 構成 / `dict pull` の流れ / merge 順 |
 | [`docs/CONFIG.md`](./docs/CONFIG.md) | `config.toml` / 環境変数 / CLI フラグ |

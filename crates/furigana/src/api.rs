@@ -650,6 +650,10 @@ fn load_loanwords_into(
             /// `"No" = { style = "place", reading = "ナンバー" }`。
             #[serde(default)]
             digits: HashMap<String, DigitsValue>,
+            /// 英文の中でだけ使う語 (a / is / to / you …)。 単独では引かないので、 日本語の中の
+            /// `to` や `so` を壊さない。 空白区切りの英字 / 空白なしの連結 (thankyou) の部分として使う。
+            #[serde(default)]
+            sentence_words: HashMap<String, String>,
         }
         #[derive(serde::Deserialize)]
         #[serde(untagged)]
@@ -664,6 +668,16 @@ fn load_loanwords_into(
         for (surface, reading) in parsed.entries {
             out.insert(normalize_alphabet(&surface), reading);
         }
+        for (word, reading) in parsed.sentence_words {
+            out.insert(
+                format!(
+                    "{}{}",
+                    crate::scoring::special::SENTENCE_KEY_PREFIX,
+                    normalize_alphabet(&word)
+                ),
+                reading,
+            );
+        }
         for (surface, value) in parsed.digits {
             let (style, reading) = match value {
                 DigitsValue::Style(s) => (s, None),
@@ -672,7 +686,7 @@ fn load_loanwords_into(
             if crate::scoring::digit_reading::DigitStyle::parse(&style).is_none() {
                 return Err(crate::FuriganaError::Validation(format!(
                     "{from}: [digits] '{surface}' の読み方 '{style}' は未知 \
-                     (place / each / each_en / english / pair / pair_en)"
+                     (place / each / each_en / english / english10 / pair / pair_en)"
                 )));
             }
             // 「読み方」 と (あれば) 「語 + 数字の時だけ使う読み」 を 1 文字列に畳む。
@@ -1969,6 +1983,42 @@ role = \"loanwords\"
         // [digits] に無い語は素通し
         assert_eq!(f.to_hiragana("Linux11"), "Linux11");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loanwords_sentence_words_are_loaded_under_a_prefixed_key() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_sw_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("loanwords")).unwrap();
+        std::fs::write(
+            dir.join("loanwords/sw.toml"),
+            r#"[meta]
+schema_version = "2"
+role = "loanwords"
+
+[entries]
+"thank" = "サンク"
+
+[sentence_words]
+"you" = "ユー"
+"don't" = "ドント"
+"#,
+        )
+        .unwrap();
+        let mut out = HashMap::new();
+        load_loanwords_into(&mut out, &dir.join("loanwords"), &[]).unwrap();
+        assert_eq!(out.get("thank").map(String::as_str), Some("サンク"));
+        assert_eq!(out.get("#sw:you").map(String::as_str), Some("ユー"));
+        assert_eq!(out.get("#sw:don't").map(String::as_str), Some("ドント"));
+        // 単独の語としては引かれない (接頭辞なしの key には入らない)
+        assert!(!out.contains_key("you"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
