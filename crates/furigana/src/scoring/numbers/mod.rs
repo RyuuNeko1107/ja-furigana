@@ -1481,11 +1481,11 @@ impl NumberCandidateProvider {
             }
             // v2.0: 英字の直後ではない v + 版番号
             'v' | 'V' => {
-                // 1v1 / 3v3: 数字に挟まれた v は 対 (タイ)
+                // 1v1 / 3v3: 数字に挟まれた v は ブイ (いちぶいいち)
                 if prev.is_some_and(|c| c.is_ascii_digit())
                     && rest[1..].starts_with(|c: char| c.is_ascii_digit())
                 {
-                    out.push(self.make_hit(input, pos, 1, "タイ".to_string()));
+                    out.push(self.make_hit(input, pos, 1, "ブイ".to_string()));
                     return;
                 }
                 if prev.is_some_and(is_word) {

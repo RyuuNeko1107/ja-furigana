@@ -1948,9 +1948,9 @@ fn run_of_eights_is_applause() {
 }
 
 #[test]
-fn v_between_digits_is_tai() {
-    assert_eq!(reading_at("1v1", 1, "v").as_deref(), Some("タイ"));
-    assert_eq!(reading_at("3V3しよ", 1, "V").as_deref(), Some("タイ"));
+fn v_between_digits_is_bui() {
+    assert_eq!(reading_at("1v1", 1, "v").as_deref(), Some("ブイ"));
+    assert_eq!(reading_at("3V3しよ", 1, "V").as_deref(), Some("ブイ"));
     // 数字に挟まれていない v / 版番号は対にしない
     assert!(reading_at("a1v", 2, "v").is_none());
     assert!(reading_at("v1", 0, "v").is_none());
