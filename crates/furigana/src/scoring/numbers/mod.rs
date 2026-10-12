@@ -1481,6 +1481,13 @@ impl NumberCandidateProvider {
             }
             // v2.0: 英字の直後ではない v + 版番号
             'v' | 'V' => {
+                // 1v1 / 3v3: 数字に挟まれた v は 対 (タイ)
+                if prev.is_some_and(|c| c.is_ascii_digit())
+                    && rest[1..].starts_with(|c: char| c.is_ascii_digit())
+                {
+                    out.push(self.make_hit(input, pos, 1, "タイ".to_string()));
+                    return;
+                }
                 if prev.is_some_and(is_word) {
                     return;
                 }
@@ -1743,6 +1750,22 @@ impl NumberCandidateProvider {
         if let Some(m) = at_start(&DIGIT_RE, rest) {
             let m_end = m.get(0).unwrap().end();
             let num = m.get(0).unwrap().as_str();
+            // 8 が 3 つ以上並ぶだけの `888` / `88888` は拍手 (パチパチ)。 数として読むと 「はっぴゃく…」 になる。
+            // 前後が数字・英字・漢字・小数点・位取りの区切りではない時だけ (888円 は助数詞の候補が読む)
+            if num.len() >= 3
+                && num.bytes().all(|b| b == b'8')
+                && !input[..pos]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | ',' | '，'))
+                && !rest[m_end..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | ',' | '，'))
+            {
+                out.push(self.make_hit(input, pos, m_end, "パチ".repeat(num.len())));
+                return;
+            }
             out.push(self.make(input, pos, m_end, number_to_katakana(num)));
         }
     }

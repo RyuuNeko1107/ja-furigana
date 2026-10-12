@@ -1928,3 +1928,30 @@ fn hyphen_between_clock_times_or_years_reads_kara() {
     assert_eq!(kara("2000-2010-1").as_deref(), Some(""));
     assert_eq!(kara("9:00-17").as_deref(), Some(""));
 }
+
+#[test]
+fn run_of_eights_is_applause() {
+    assert_eq!(reading_at("888", 0, "888").as_deref(), Some("パチパチパチ"));
+    assert_eq!(
+        reading_at("888888", 0, "888888").as_deref(),
+        Some("パチパチパチパチパチパチ")
+    );
+    assert_eq!(
+        reading_at("888!", 0, "888").as_deref(),
+        Some("パチパチパチ")
+    );
+    // 数としての 88 / 助数詞付き / 前後に数字・英字・小数点が続く形は拍手にしない
+    assert!(reading_at("88", 0, "88").is_none_or(|r| r != "パチパチ"));
+    assert!(reading_at("8888円", 0, "8888").is_none_or(|r| !r.starts_with("パチ")));
+    assert!(reading_at("1888", 1, "888").is_none_or(|r| !r.starts_with("パチ")));
+    assert!(reading_at("888.5", 0, "888").is_none_or(|r| !r.starts_with("パチ")));
+}
+
+#[test]
+fn v_between_digits_is_tai() {
+    assert_eq!(reading_at("1v1", 1, "v").as_deref(), Some("タイ"));
+    assert_eq!(reading_at("3V3しよ", 1, "V").as_deref(), Some("タイ"));
+    // 数字に挟まれていない v / 版番号は対にしない
+    assert!(reading_at("a1v", 2, "v").is_none());
+    assert!(reading_at("v1", 0, "v").is_none());
+}
