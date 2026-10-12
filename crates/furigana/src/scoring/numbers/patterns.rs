@@ -98,7 +98,8 @@ pub(super) static PHONE_RE: Lazy<Regex> = Lazy::new(|| {
 
 /// `N/M` (日付 12/25 か分数 1/2 か。 文脈で決める)
 pub(super) static SLASH_PAIR_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9]{1,2})/([0-9]{1,2})").expect("scoring SLASH_PAIR regex build failed")
+    Regex::new(r"([0-9]{1,2})[/\u{2044}]([0-9]{1,2})")
+        .expect("scoring SLASH_PAIR regex build failed")
 });
 
 /// `N/M` の直後が日付の手がかり: 曜日の括弧 `(日)` / `（月・祝）`、 時刻 `20:00` / `20時`、 日付の言い方 (まで / から / 発売 …)
@@ -157,7 +158,7 @@ pub(super) static SLASH_SENTENCE_FRACTION_RE: Lazy<Regex> = Lazy::new(|| {
 
 /// 年付きの日付 `2025/10/13` / `2000-10-12` (年 4 桁。 区切りは `/` か `-` で、 2 つとも同じ)
 pub(super) static YMD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9]{4})([/\-])([0-9]{1,2})([/\-])([0-9]{1,2})")
+    Regex::new(r"([0-9]{4})([/\-.])([0-9]{1,2})([/\-.])([0-9]{1,2})")
         .expect("scoring YMD regex build failed")
 });
 

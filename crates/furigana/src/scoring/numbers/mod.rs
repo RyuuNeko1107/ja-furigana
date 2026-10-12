@@ -392,6 +392,36 @@ fn hyphen_is_time_range(input: &str, pos: usize, ch: char) -> bool {
             .is_some_and(is_digit_like_char)
 }
 
+/// `10-20人` の `-`: 数字 - 数字 の直後に助数詞が続き、 後ろの数が大きい時は範囲の区切り (から)。
+/// `3-2` (スコア) や `2024-10-12` (日付) のように助数詞が無い / 後ろが小さい組は従来どおり読まない
+fn hyphen_is_count_range(input: &str, pos: usize, ch: char) -> bool {
+    const COUNTERS: &str = "人日個回名枚本冊台件円歳才年月時間分秒度倍点位階匹頭羽";
+    let first: String = input[..pos]
+        .chars()
+        .rev()
+        .take_while(|&c| is_digit_like_char(c))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let after = &input[pos + ch.len_utf8()..];
+    let second: String = after
+        .chars()
+        .take_while(|&c| is_digit_like_char(c))
+        .collect();
+    let (Ok(a), Ok(b)) = (
+        normalize_digits(&first).parse::<u64>(),
+        normalize_digits(&second).parse::<u64>(),
+    ) else {
+        return false;
+    };
+    a < b
+        && after[second.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| COUNTERS.contains(c))
+}
+
 /// `-` が **負の符号** か (= 「マイナス」 と読むべきか)。
 ///
 /// 符号なら直後が数値で、 かつ直前は数値ではない (「-3」 「弾道 -3」)。
@@ -546,7 +576,7 @@ impl NumberCandidateProvider {
         out.push(self.make(input, pos, m_end, reading));
     }
 
-    /// section 3: 時刻 HH:MM(:SS)。 時は 0〜24、 分・秒は 0〜59 の時だけ時刻 (10:00 は 「じゅうじ」)。
+    /// section 3: 時刻 HH:MM(:SS)。 時は 0〜29 (25:00 = 深夜の 25 時表記)、 分・秒は 0〜59 の時だけ時刻 (10:00 は 「じゅうじ」)。
     /// 時刻にならない `数字:数字` (1:1 / 50:50 / 3:7) は比・スコアとして 「たい」 で読む
     fn try_time_colon(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
         if let Some(caps) = at_start(&TIME_COLON_RE, rest) {
@@ -556,7 +586,7 @@ impl NumberCandidateProvider {
             let se = caps.get(3).map(|m| m.as_str());
             let in_range =
                 |s: &str, max: u32| normalize_digits(s).parse::<u32>().is_ok_and(|n| n <= max);
-            if in_range(h, 24) && in_range(mo, 59) && se.is_none_or(|s| in_range(s, 59)) {
+            if in_range(h, 29) && in_range(mo, 59) && se.is_none_or(|s| in_range(s, 59)) {
                 let mut reading = self.read_counter(h, "時");
                 if se.is_some() || normalize_digits(mo) != "00" {
                     reading.push_str(&self.read_counter(mo, "分"));
@@ -1088,7 +1118,9 @@ impl NumberCandidateProvider {
             // 2024-2025 (年範囲) ばかりで、 マイナス と読むべき例は無い。
             // 負数は -3 のように前が数字でない形で書かれるので、
             // 前が数字のときだけ読まない (区切りとして surface のみ消費する)。
-            let final_read = if is_minus && hyphen_is_time_range(input, pos, ch) {
+            let final_read = if is_minus
+                && (hyphen_is_time_range(input, pos, ch) || hyphen_is_count_range(input, pos, ch))
+            {
                 "から".to_string()
             } else if (is_minus && !minus_is_sign(input, pos, ch))
                 || (is_range_marker && !range_marker_in_numeric_context(input, pos, ch))
@@ -1286,7 +1318,12 @@ impl NumberCandidateProvider {
         };
         let prev = input[..pos].chars().next_back();
         let next = rest[whole.end()..].chars().next();
+        // ドット区切りは年が 19xx / 20xx の時だけ (バージョンの 1234.5.6 と紛れない)。
+        // 英字の直後 (v2026.10.12) は版なので読まない
+        let dotted_year_ok = sep1 != "." || y.starts_with("19") || y.starts_with("20");
         if sep1 != sep2
+            || !dotted_year_ok
+            || prev.is_some_and(|c| c.is_ascii_alphabetic())
             || !(1..=12).contains(&mn)
             || !(1..=31).contains(&dn)
             || prev.is_some_and(|c| c.is_ascii_digit() || matches!(c, '/' | '-' | '.'))
@@ -1326,8 +1363,8 @@ impl NumberCandidateProvider {
         let prev = before.chars().next_back();
         let after = &rest[whole.end()..];
         // 数字・スラッシュの途中 (2024/10/12 / 1/2/3) は触らない
-        if prev.is_some_and(|c| c.is_ascii_digit() || c == '/')
-            || after.starts_with(|c: char| c.is_ascii_digit() || c == '/')
+        if prev.is_some_and(|c| c.is_ascii_digit() || c == '/' || c == '\u{2044}')
+            || after.starts_with(|c: char| c.is_ascii_digit() || c == '/' || c == '\u{2044}')
         {
             return;
         }
@@ -1343,7 +1380,9 @@ impl NumberCandidateProvider {
             || extra_match(&self.slash_cues.fraction_after, after)
             || SLASH_FRACTION_BEFORE_RE.is_match(before)
             || extra_match(&self.slash_cues.fraction_before, before);
-        let reading = if fraction_cue && y > 0 {
+        // ½ ¾ のような 1 字の分数 (NFKC で U+2044 の分数スラッシュになる) は常に分数
+        let vulgar = whole.as_str().contains('\u{2044}');
+        let reading = if (fraction_cue || vulgar) && y > 0 {
             fraction
         } else if (1..=12).contains(&x) && (13..=31).contains(&y) {
             date()

@@ -990,8 +990,13 @@ fn currency_prefix_needs_a_digit_right_after_the_symbol() {
 #[test]
 fn version_rule_skips_dotted_dates() {
     let p = provider();
-    // 西暦 + 月 + 日の形 (2026.1.16) はバージョン扱いしない
-    assert!(find(&p.candidates_vec(&ctx("2026.1.16"), 0), "2026.1.16").is_none());
+    // 西暦 + 月 + 日の形 (2026.1.16) はバージョンではなく日付として読む
+    assert_eq!(
+        find(&p.candidates_vec(&ctx("2026.1.16"), 0), "2026.1.16")
+            .map(|c| c.reading.to_string())
+            .as_deref(),
+        Some("ニセンニジュウロクネンイチガツジュウロクニチ")
+    );
     // 月が 13 以上 / 西暦が 4 桁でなければバージョン
     assert!(find(&p.candidates_vec(&ctx("2026.13.16"), 0), "2026.13.16").is_some());
     assert!(find(&p.candidates_vec(&ctx("12.1.16"), 0), "12.1.16").is_some());
@@ -1101,10 +1106,10 @@ fn time_is_only_valid_hour_minute_second() {
     assert!(reading_at("23:59:59", 0, "23:59:59")
         .unwrap()
         .contains("ビョウ"));
-    // 時 25 以上 / 分 60 以上 / 秒 60 以上は時刻ではなく比
+    // 時 30 以上 / 分 60 以上 / 秒 60 以上は時刻ではなく比 (25〜29 時は深夜の時刻表記)
     assert_eq!(
-        reading_at("25:00", 0, "25:00").as_deref(),
-        Some("ニジュウゴタイゼロ")
+        reading_at("30:00", 0, "30:00").as_deref(),
+        Some("サンジュウタイゼロ")
     );
     assert!(reading_at("12:60", 0, "12:60").unwrap().contains("タイ"));
     // 12:30:60 は時刻でも比でもない (途中の 12:30 も出さない)
@@ -1646,6 +1651,85 @@ fn year_month_day_is_read_as_a_date() {
         reading_at("2025-10-13T10:00", 0, "2025-10-13").as_deref(),
         Some("ニセンニジュウゴネンジュウガツジュウサンニチ")
     );
+}
+
+#[test]
+fn time_after_midnight_notation_reads_hours_up_to_29() {
+    assert_eq!(
+        reading_at("25:00", 0, "25:00").as_deref(),
+        Some("ニジュウゴジ")
+    );
+    assert_eq!(
+        reading_at("29:59", 0, "29:59").as_deref(),
+        Some("ニジュウクジゴジュウキュウフン")
+    );
+    // 30 時以上 / 分が 60 以上は時刻ではなく比
+    assert_eq!(
+        reading_at("30:00", 0, "30:00").as_deref(),
+        Some("サンジュウタイゼロ")
+    );
+    assert_eq!(
+        reading_at("25:60", 0, "25:60").as_deref(),
+        Some("ニジュウゴタイロクジュウ")
+    );
+}
+
+#[test]
+fn dotted_year_month_day_is_a_date_only_for_19xx_and_20xx() {
+    assert_eq!(
+        reading_at("2026.10.12", 0, "2026.10.12").as_deref(),
+        Some("ニセンニジュウロクネンジュウガツジュウニニチ")
+    );
+    assert_eq!(
+        reading_at("1999.1.2", 0, "1999.1.2").as_deref(),
+        Some("センキュウヒャクキュウジュウキュウネンイチガツフツカ")
+    );
+    // 19xx / 20xx 以外の年はバージョンかもしれないので日付にしない
+    assert!(reading_at("1234.5.6", 0, "1234.5.6").is_none());
+    // 4 要素 (2026.10.12.3) / 英字の直後 (v2026.10.12) は版
+    assert!(reading_at("2026.10.12.3", 0, "2026.10.12").is_none());
+    assert!(reading_at("v2026.10.12", 1, "2026.10.12").is_none());
+    assert!(reading_at("ver2026.10.12", 3, "2026.10.12").is_none());
+    // 区切りが混ざる形は読まない
+    assert!(reading_at("2026.10/12", 0, "2026.10/12").is_none());
+}
+
+fn hyphen_reading(input: &str, pos: usize) -> Option<String> {
+    let p = provider();
+    p.candidates_vec(&ctx(input), pos)
+        .iter()
+        .find(|c| c.surface == "-")
+        .map(|c| c.reading.to_string())
+}
+
+#[test]
+fn hyphen_between_numbers_before_a_counter_is_a_range() {
+    // 10-20人 / 1-2日 は範囲 (から)
+    assert_eq!(hyphen_reading("10-20人", 2).as_deref(), Some("から"));
+    assert_eq!(hyphen_reading("1-2日", 1).as_deref(), Some("から"));
+    assert_eq!(hyphen_reading("2024-2025年", 4).as_deref(), Some("から"));
+    assert_eq!(hyphen_reading("１０-２０人", 6).as_deref(), Some("から"));
+    // 同じ数 / 戻る数 / 助数詞が無い (スコア) は範囲にしない
+    assert_eq!(hyphen_reading("10-10人", 2).as_deref(), Some(""));
+    assert_eq!(hyphen_reading("20-10人", 2).as_deref(), Some(""));
+    assert_eq!(hyphen_reading("3-20で勝利", 1).as_deref(), Some(""));
+    // 助数詞でない漢字は範囲にしない
+    assert_eq!(hyphen_reading("3-20手", 1).as_deref(), Some(""));
+}
+
+#[test]
+fn vulgar_fraction_characters_are_always_fractions() {
+    for (input, want) in [
+        ("1\u{2044}2", "ニブンノイチ"),
+        ("3\u{2044}4", "ヨンブンノサン"),
+        ("1\u{2044}3", "サンブンノイチ"),
+    ] {
+        assert_eq!(
+            reading_at(input, 0, input).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
 }
 
 #[test]
