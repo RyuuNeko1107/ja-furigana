@@ -40,7 +40,9 @@
 //! ディレクトリ全体を読み込む高レベル API は [`load_rules_dir`]。
 
 use crate::error::{FuriganaError, Result};
-use crate::rules::{CountersData, ModelsData, PostProcessData, PostProcessSpec, RulesData};
+use crate::rules::{
+    ContextCuesData, CountersData, ModelsData, PostProcessData, PostProcessSpec, RulesData,
+};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -203,6 +205,7 @@ fn infer_role_from_path(path: &Path) -> Option<&'static str> {
         "scales.toml" => Some("scales"),
         "units.toml" => Some("units"),
         "models.toml" => Some("models"),
+        "context_cues.toml" => Some("context_cues"),
         "symbols.toml" => Some("symbols"),
         "numeric_phrases.toml" => Some("numeric_phrases"),
         "compat.toml" | "compat_map.toml" => Some("compat"),
@@ -390,6 +393,12 @@ pub fn load_rules_dir<P: AsRef<Path>>(dir: P) -> Result<RulesData> {
                 part.validate()
                     .map_err(|e| FuriganaError::Validation(format!("{from}: {e}")))?;
                 data.models.merge(part);
+            }
+            Some("context_cues") => {
+                let part: ContextCuesData = parse_toml(content, from)?;
+                part.validate()
+                    .map_err(|e| FuriganaError::Validation(format!("{from}: {e}")))?;
+                data.context_cues.merge(part);
             }
             Some("numeric_phrases") => data.numeric_phrases = parse_toml(content, from)?,
             Some("compat") => data.compat = parse_toml(content, from)?,
@@ -607,6 +616,44 @@ mod tests {
         assert!(data.counters.simple.is_empty());
         assert!(data.scales.is_empty());
         assert!(data.compat.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_rules_dir_loads_and_merges_context_cues() {
+        let a = "[meta]
+schema_version = \"2\"
+role = \"context_cues\"
+
+[slash_pair]
+date_topic = [\"配信\"]
+";
+        let b = "[meta]
+schema_version = \"2\"
+role = \"context_cues\"
+
+[slash_pair]
+fraction_after = [\"くらい\"]
+";
+        let dir = fresh_temp_dir("cues_ok");
+        std::fs::write(dir.join("context_cues.toml"), a).unwrap();
+        std::fs::write(dir.join("more.toml"), b).unwrap();
+        let data = load_rules_dir(&dir).unwrap();
+        assert_eq!(data.context_cues.slash_pair.date_topic, ["配信"]);
+        assert_eq!(data.context_cues.slash_pair.fraction_after, ["くらい"]);
+        std::fs::remove_dir_all(&dir).ok();
+
+        // 空の語は読み込みで弾く
+        let bad = "[meta]
+schema_version = \"2\"
+role = \"context_cues\"
+
+[slash_pair]
+date_topic = [\"\"]
+";
+        let dir = fresh_temp_dir("cues_bad");
+        std::fs::write(dir.join("context_cues.toml"), bad).unwrap();
+        assert!(load_rules_dir(&dir).is_err());
         std::fs::remove_dir_all(&dir).ok();
     }
 

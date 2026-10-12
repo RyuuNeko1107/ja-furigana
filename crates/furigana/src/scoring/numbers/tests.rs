@@ -1497,6 +1497,49 @@ fn slash_pair_sentence_topic_keeps_one_over_small_numbers_as_fractions() {
 }
 
 #[test]
+fn slash_pair_cues_from_the_dictionary_are_added_to_the_builtin_ones() {
+    let mut r = rules();
+    r.context_cues.slash_pair.date_topic.push("ほげ会".into());
+    r.context_cues.slash_pair.fraction_after.push("もの".into());
+    r.context_cues.slash_pair.date_before.push("ふが日".into());
+    r.context_cues
+        .slash_pair
+        .fraction_before
+        .push("ぴよ値".into());
+    r.context_cues
+        .slash_pair
+        .fraction_topic
+        .push("ほげ率".into());
+    let p = NumberCandidateProvider::new(&r);
+    let at = |input: &str, pos: usize, surface: &str| {
+        find(&p.candidates_vec(&ctx(input), pos), surface).map(|c| c.reading.to_string())
+    };
+    // 辞書の話題語で日付 (組み込みの語は引き続き効く)
+    assert_eq!(
+        at("10/4のほげ会", 0, "10/4").as_deref(),
+        Some("ジュウガツヨッカ")
+    );
+    assert!(at("10/4のむにゃ会", 0, "10/4").is_none());
+    assert_eq!(
+        at("10/4の配信予定", 0, "10/4").as_deref(),
+        Some("ジュウガツヨッカ")
+    );
+    // 辞書の分数語 (直後 / 直前) と話題
+    assert_eq!(at("3/4もの", 0, "3/4").as_deref(), Some("ヨンブンノサン"));
+    assert_eq!(
+        at("ふが日10/4", "ふが日".len(), "10/4").as_deref(),
+        Some("ジュウガツヨッカ")
+    );
+    assert_eq!(
+        at("ぴよ値12/25", "ぴよ値".len(), "12/25").as_deref(),
+        Some("ニジュウゴブンノジュウニ")
+    );
+    assert!(at("ほげ率 10/4のほげ会", "ほげ率 ".len(), "10/4").is_none());
+    // 辞書に何も無ければ従来どおり
+    assert!(reading_at("10/4のほげ会", 0, "10/4").is_none());
+}
+
+#[test]
 fn slash_pair_ignores_longer_chains() {
     let p = provider();
     assert!(find(&p.candidates_vec(&ctx("2024/10/25"), 5), "10/25").is_none());

@@ -6,6 +6,7 @@
 //! 集約型 [`RulesData`] が全ルールをまとめて保持する。
 
 pub mod compat;
+pub mod context_cues;
 pub mod counters;
 pub mod days;
 pub mod models;
@@ -16,6 +17,7 @@ pub mod symbols;
 pub mod units;
 
 pub use compat::CompatData;
+pub use context_cues::{ContextCuesData, SlashPairCues};
 pub use counters::{CounterMode, CounterRule, CountersData, EuphonicRule, KanaReplacement};
 pub use days::DaysData;
 pub use models::{ModelSpec, ModelsData};
@@ -44,6 +46,8 @@ pub struct RulesData {
     pub symbols: SymbolsData,
     /// 型番パターン (models.toml)
     pub models: ModelsData,
+    /// 文脈の手がかり語 (context_cues.toml)
+    pub context_cues: ContextCuesData,
     /// 例外語句 (numeric_phrases.toml)
     pub numeric_phrases: NumericPhrasesData,
     /// 異体字マップ (compat_map.toml)

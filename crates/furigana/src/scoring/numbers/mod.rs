@@ -72,6 +72,48 @@ use patterns::{
 };
 use regex::Regex;
 
+/// 辞書で足された `N/M` の手がかり語 (語の一覧を 1 本の正規表現にしたもの)。 空なら `None`
+#[derive(Debug, Default, Clone)]
+struct SlashCues {
+    date_after: Option<Regex>,
+    date_before: Option<Regex>,
+    date_topic: Option<Regex>,
+    fraction_after: Option<Regex>,
+    fraction_before: Option<Regex>,
+    fraction_topic: Option<Regex>,
+}
+
+impl SlashCues {
+    fn new(cues: &crate::rules::SlashPairCues) -> Self {
+        // 語は正規表現として解釈しない (escape)。 直後は先頭一致、 直前は末尾一致、 話題は部分一致
+        let build = |words: &[String], head: &str, tail: &str| {
+            let mut words: Vec<&str> = words
+                .iter()
+                .map(|w| w.trim())
+                .filter(|w| !w.is_empty())
+                .collect();
+            if words.is_empty() {
+                return None;
+            }
+            words.sort_by_key(|w| std::cmp::Reverse(w.len()));
+            let alt: Vec<String> = words.iter().map(|w| regex::escape(w)).collect();
+            Regex::new(&format!("{head}(?:{}){tail}", alt.join("|"))).ok()
+        };
+        Self {
+            date_after: build(&cues.date_after, "^", ""),
+            date_before: build(&cues.date_before, "", "[:：は ]?[ \\u3000]?$"),
+            date_topic: build(&cues.date_topic, "", ""),
+            fraction_after: build(&cues.fraction_after, "^", ""),
+            fraction_before: build(&cues.fraction_before, "", "[ \\u3000]?$"),
+            fraction_topic: build(&cues.fraction_topic, "", ""),
+        }
+    }
+}
+
+fn extra_match(re: &Option<Regex>, text: &str) -> bool {
+    re.as_ref().is_some_and(|r| r.is_match(text))
+}
+
 // ─── NumberCandidateProvider ────────────────────────────────────────────────
 
 /// 数値 + 助数詞 / 大数スケール / SI 単位 / 日付 / 時刻 / 記号 / 素の数字 を
@@ -108,6 +150,8 @@ pub struct NumberCandidateProvider {
     slash_units: Vec<String>,
     /// 型番パターン (models.toml)
     models: CompiledModels,
+    /// 辞書 (context_cues.toml) で足された `N/M` の手がかり語
+    slash_cues: SlashCues,
 }
 
 impl NumberCandidateProvider {
@@ -169,6 +213,7 @@ impl NumberCandidateProvider {
             unit_symbols: std::sync::Arc::new(unit_symbols),
             slash_units,
             models: CompiledModels::new(&rules.models),
+            slash_cues: SlashCues::new(&rules.context_cues.slash_pair),
         }
     }
 
@@ -1274,11 +1319,15 @@ impl NumberCandidateProvider {
         // 【10/11 … / [10/10-12] のように括弧の直後で始まる日付 (【1/2】 のような 閉じ括弧が直後は除く)
         let bracket_date =
             before.ends_with(['【', '[', '［']) && !after.starts_with(['】', ']', '］']);
-        let fraction_cue =
-            SLASH_FRACTION_AFTER_RE.is_match(after) || SLASH_FRACTION_BEFORE_RE.is_match(before);
+        let fraction_cue = SLASH_FRACTION_AFTER_RE.is_match(after)
+            || extra_match(&self.slash_cues.fraction_after, after)
+            || SLASH_FRACTION_BEFORE_RE.is_match(before)
+            || extra_match(&self.slash_cues.fraction_before, before);
         let date_cue = is_date
             && (SLASH_DATE_AFTER_RE.is_match(after)
+                || extra_match(&self.slash_cues.date_after, after)
                 || SLASH_DATE_BEFORE_RE.is_match(before)
+                || extra_match(&self.slash_cues.date_before, before)
                 || date_range());
         // 近くに手がかりが無い時は文全体の話題で決める: 日付の話題の語があり、 分数の話題の語が無く、
         // 日付の書き方 (文頭・空白・括弧の直後 + 直後が助詞・かな漢字・絵文字) で、 分数と紛れる組 (1/2〜1/10 / 3/3) でない
@@ -1287,9 +1336,11 @@ impl NumberCandidateProvider {
             && x != y
             && !(x == 1 && y <= 10)
             && !SLASH_SENTENCE_FRACTION_RE.is_match(input)
+            && !extra_match(&self.slash_cues.fraction_topic, input)
             && SLASH_STANDALONE_BEFORE_RE.is_match(before)
             && SLASH_STANDALONE_AFTER_RE.is_match(after)
             && (SLASH_SENTENCE_DATE_RE.is_match(input)
+                || extra_match(&self.slash_cues.date_topic, input)
                 || bracket_date
                 || after.starts_with(['に', '頃']));
         // まで / から の直後が戻る組 (1/3から1/2) は分数どうしの言い方
