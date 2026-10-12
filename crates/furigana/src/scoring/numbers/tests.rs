@@ -1812,6 +1812,46 @@ fn decorative_shapes_are_read_only_as_two_symbol_placeholders() {
 }
 
 #[test]
+fn postal_code_is_read_digit_by_digit_with_no() {
+    // 〒 の後 (空白は任意)・ハイフンは任意・全角の長音や罫線のハイフンも可
+    for (input, pos, surface) in [
+        ("〒100-0001", 0, "〒100-0001"),
+        ("〒1000001", 0, "〒1000001"),
+        ("〒 100-0001東京", 0, "〒 100-0001"),
+        ("〒　100-0001", 0, "〒　100-0001"),
+        ("〒100‐0001", 0, "〒100‐0001"),
+        ("〒100ー0001", 0, "〒100ー0001"),
+    ] {
+        assert_eq!(
+            reading_at(input, pos, surface).as_deref(),
+            Some("ユウビンバンゴウイチゼロゼロノゼロゼロゼロイチ"),
+            "{input}"
+        );
+    }
+    // 「郵便番号」 の直後 (区切りの空白・コロンは任意) は 〒 無しでも同じ
+    for (input, pos) in [
+        ("郵便番号100-0001", "郵便番号".len()),
+        ("郵便番号 100-0001", "郵便番号 ".len()),
+        ("郵便番号：100-0001", "郵便番号：".len()),
+        ("郵便番号:1000001", "郵便番号:".len()),
+    ] {
+        let surface = &input[pos..];
+        assert_eq!(
+            reading_at(input, pos, surface).as_deref(),
+            Some("イチゼロゼロノゼロゼロゼロイチ"),
+            "{input}"
+        );
+    }
+    // 桁数が違う / 前後が数字 / 「郵便番号」 が無い 3-4 桁は郵便番号にしない
+    assert!(reading_at("〒10-0001", 0, "〒10-0001").is_none());
+    assert!(reading_at("〒100-00012", 0, "〒100-00012").is_none());
+    assert!(reading_at("〒100-0001", 0, "〒100-0001")
+        .is_some_and(|r| r.starts_with("ユウビンバンゴウ")));
+    assert!(reading_at("100-0001", 0, "100-0001").is_none_or(|r| !r.contains("ゼロゼロ")));
+    assert!(reading_at("1100-0001", 1, "100-0001").is_none());
+}
+
+#[test]
 fn slash_pair_ignores_longer_chains() {
     let p = provider();
     assert!(find(&p.candidates_vec(&ctx("2024/10/25"), 5), "10/25").is_none());

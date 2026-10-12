@@ -162,6 +162,12 @@ pub(super) static YMD_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("scoring YMD regex build failed")
 });
 
+/// 郵便番号 `〒100-0001` / `〒1000001` / `郵便番号 100-0001` の数字部分 (3 桁 + 4 桁、 間のハイフンは任意)
+pub(super) static POSTAL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"([0-9]{3})[-\u2010-\u2015\u2212ー]?([0-9]{4})")
+        .expect("scoring POSTAL regex build failed")
+});
+
 pub(super) static DIGIT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
 
