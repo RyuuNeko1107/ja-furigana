@@ -1980,3 +1980,28 @@ fn comma_grouped_currency_and_colon_prefix() {
         Some(":センサンビャクサンジュウナナエン")
     );
 }
+
+#[test]
+fn round2_times_between_words_station_range_and_bracket_currency() {
+    // 語どうしの × は かける、 記号やひらがなが片側にあれば ばつ
+    let times = |input: &str, pos: usize| reading_at(input, pos, "×");
+    assert_eq!(
+        times("ファイターズ×イチモニ", "ファイターズ".len()).as_deref(),
+        Some("カケル")
+    );
+    assert_eq!(times("高橋×佐藤", "高橋".len()).as_deref(), Some("カケル"));
+    assert_eq!(times("○×クイズ", "○".len()).as_deref(), Some("バツ"));
+    assert_eq!(
+        times("返事は×です", "返事は".len()).as_deref(),
+        Some("バツ")
+    );
+    // 通貨は括弧・コロンの直後でも読む
+    assert_eq!(
+        reading_at("価格[¥1,489]", "価格".len(), "[¥1,489").as_deref(),
+        Some("[センヨンヒャクハチジュウキュウエン")
+    );
+    assert_eq!(
+        reading_at("価格(¥500)", "価格".len(), "(¥500").as_deref(),
+        Some("(ゴヒャクエン")
+    );
+}

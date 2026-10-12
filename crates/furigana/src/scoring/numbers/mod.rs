@@ -455,18 +455,21 @@ fn times_sign_reading(input: &str, pos: usize, ch: char) -> &'static str {
         |c: char| is_digit_like_char(c) || c.is_ascii_alphabetic() || matches!(c, '(' | '（');
     // 空白で挟んだ `A × B` (#杉浦太陽 × #松井玲奈 のようなコラボ表記) は かける。 両側に語があるときだけ
     let spaced = |c: Option<char>| c.is_some_and(|c| c == ' ' || c == '\u{3000}');
-    let word_beyond = |s: &str, back: bool| {
-        let t = s.trim_matches(|c: char| c == ' ' || c == '\u{3000}');
-        let _ = back;
-        !t.is_empty()
-    };
     let before_str = input[..pos].trim_end_matches([' ', '\u{3000}']);
     let after_str = input[pos + ch.len_utf8()..].trim_start_matches([' ', '\u{3000}']);
-    if spaced(prev)
-        && spaced(next)
-        && word_beyond(before_str, true)
-        && word_beyond(after_str, false)
-    {
+    if spaced(prev) && spaced(next) && !before_str.is_empty() && !after_str.is_empty() {
+        return "カケル";
+    }
+    // 語どうしの `A×B` (ファイターズ×イチモニ / 高橋×佐藤 / A×B) = コラボ・組み合わせの かける。
+    // 両側が 漢字・カタカナ・英数字。 `○×クイズ` や `返事は×です` (片側が記号・ひらがな) は ばつ
+    let wordish = |c: Option<char>| {
+        c.is_some_and(|c| {
+            crate::char_class::is_kanji_char(c)
+                || (crate::char_class::is_katakana_loose_char(c) && c != 'ー')
+                || c.is_ascii_alphanumeric()
+        })
+    };
+    if wordish(prev) && wordish(next) {
         return "カケル";
     }
     if next.is_some_and(is_operand) || prev.is_some_and(is_digit_like_char) {
@@ -1893,7 +1896,10 @@ impl CandidateProvider for NumberCandidateProvider {
             }
             // 価格:¥1,337 / 料金：$5 — 形態素解析は 「:¥」 を 1 つの記号 token にするので、 通貨記号の位置からは候補が使えない。
             // コロンから始めて通貨つきの数まで 1 つの候補にする (コロンは読みに残す)
-            if matches!(first_char, ':' | '：') {
+            if matches!(
+                first_char,
+                ':' | '：' | '[' | '［' | '(' | '（' | '【' | '「' | '『' | '=' | '＝' | '<' | '＜'
+            ) {
                 let after = &rest[first_char.len_utf8()..];
                 if let Some(next) = after.chars().next() {
                     let mut tmp = Vec::new();
