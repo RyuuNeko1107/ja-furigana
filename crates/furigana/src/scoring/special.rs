@@ -277,13 +277,15 @@ fn emoji_clusters(run: &str) -> Vec<&str> {
 /// - 載っていない cluster は表記のまま。 表が空・1 つも読みに変わらなかった時は `None` (= 全体を表記のまま)
 fn emoji_reading(
     run: &str,
-    table: &HashMap<String, String>,
+    table: &HashMap<String, crate::rules::emoji::EmojiEntry>,
     prev_text: &str,
     after_text: &str,
 ) -> Option<String> {
     if table.is_empty() {
         return None;
     }
+    // 文脈で変わる読み (match の input_contains_any) に使う文全体
+    let input = format!("{prev_text}{run}{after_text}");
     let next = after_text.chars().next();
     let particle_follows = next.is_some_and(|c| "をがはのにでともへや".contains(c));
     // 語が続く (かな・漢字・カタカナ)。 数字・英字・記号・空白・文末は装飾とみなす
@@ -347,7 +349,20 @@ fn emoji_reading(
         let hit = table
             .get(cluster)
             .or_else(|| table.get(&crate::rules::emoji::strip_variation(cluster)));
-        let Some(value) = hit else {
+        let Some(entry) = hit else {
+            out.push_str(cluster);
+            continue;
+        };
+        // 文脈で変わる読み (上から見て最初に当たったもの。 空なら読まない)。 連なりの途中の絵文字は前後が絵文字なので文脈を持たない
+        let cprev = if i == 0 { prev_text } else { "\u{E000}" };
+        let cafter = if i == last { after_text } else { "\u{E000}" };
+        if let Some(r) = entry.matched(cprev, cafter, &input) {
+            any = true;
+            out.push_str(r.strip_prefix('!').unwrap_or(r));
+            continue;
+        }
+        // どの match にも当たらず既定の読みも無い絵文字は、 辞書に載っていないのと同じ (表記のまま)
+        let Some(value) = entry.base() else {
             out.push_str(cluster);
             continue;
         };
@@ -402,7 +417,7 @@ fn emoji_reading(
 pub struct ProtectTokenProvider {
     tokens: Vec<ProtectedToken>,
     /// 絵文字の読み (emoji.toml)。 空なら絵文字は表記のまま通す
-    emoji: Arc<HashMap<String, String>>,
+    emoji: Arc<HashMap<String, crate::rules::emoji::EmojiEntry>>,
 }
 
 impl ProtectTokenProvider {
@@ -414,7 +429,10 @@ impl ProtectTokenProvider {
 
     /// 絵文字の読み表つきで構築する。 表のキーは [`crate::rules::emoji::strip_variation`] を通した形で持つこと
     #[must_use]
-    pub fn with_emoji(input: &str, emoji: Arc<HashMap<String, String>>) -> Self {
+    pub fn with_emoji(
+        input: &str,
+        emoji: Arc<HashMap<String, crate::rules::emoji::EmojiEntry>>,
+    ) -> Self {
         Self {
             tokens: extract_protected_tokens(input),
             emoji,
@@ -1118,6 +1136,7 @@ fn letters_before_digits(surface: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::emoji::EmojiEntry;
     use crate::scoring::boundary::BoundaryAnalysis;
 
     fn ctx(input: &str) -> ScoringContext<'_> {
@@ -1549,13 +1568,19 @@ mod tests {
 
     #[test]
     fn emoji_reading_uses_table_with_fallbacks() {
-        let mut t = HashMap::new();
-        t.insert("⏰".to_string(), "めざましどけい|目覚まし|時計".to_string());
-        t.insert("👍".to_string(), "いいね".to_string());
-        t.insert("😂".to_string(), String::new());
-        t.insert("🍣".to_string(), "!すし".to_string());
-        t.insert("🍜".to_string(), "ラーメン|麺".to_string());
-        t.insert("🦀".to_string(), "かに|蟹".to_string());
+        let mut t = HashMap::<String, EmojiEntry>::new();
+        t.insert(
+            "⏰".to_string(),
+            EmojiEntry::Simple("めざましどけい|目覚まし|時計".to_string()),
+        );
+        t.insert("👍".to_string(), EmojiEntry::Simple("いいね".to_string()));
+        t.insert("😂".to_string(), EmojiEntry::Simple(String::new()));
+        t.insert("🍣".to_string(), EmojiEntry::Simple("!すし".to_string()));
+        t.insert(
+            "🍜".to_string(),
+            EmojiEntry::Simple("ラーメン|麺".to_string()),
+        );
+        t.insert("🦀".to_string(), EmojiEntry::Simple("かに|蟹".to_string()));
         let wo = "を食べる";
         // VS16 / 肌色つきでも基本形で引く
         assert_eq!(
@@ -1616,7 +1641,7 @@ mod tests {
         assert_eq!(emoji_reading("🦀", &t, "今日は", "蟹座の人"), None);
         assert_eq!(emoji_reading("🦀", &t, "今日は", "カニ料理を"), None);
         // かな 1 文字の読み (き / は) は重複判定に使わない: 🌳 = き|木 が 「きょう」 の前で消えない
-        t.insert("🌳".to_string(), "き|木".to_string());
+        t.insert("🌳".to_string(), EmojiEntry::Simple("き|木".to_string()));
         assert_eq!(
             emoji_reading("🌳", &t, "今日は", "の下").as_deref(),
             Some("き")
@@ -1637,7 +1662,53 @@ mod tests {
         );
         // 1 つも当たらない / 表が空なら None (表記のまま)
         assert_eq!(emoji_reading("🔥", &t, "今日は", wo), None);
-        assert_eq!(emoji_reading("⏰", &HashMap::new(), "今日は", wo), None);
+        assert_eq!(
+            emoji_reading("⏰", &HashMap::<String, EmojiEntry>::new(), "今日は", wo),
+            None
+        );
+    }
+
+    #[test]
+    fn emoji_reading_follows_context_matches() {
+        let data: crate::rules::EmojiData = toml::from_str(
+            r#"
+            [entries."🙏"]
+            reading = ""
+            [[entries."🙏".match]]
+            alone = true
+            reading = "ありがとう"
+            [[entries."🙏".match]]
+            prev_ends_any = ["お願い", "お願いします"]
+            reading = ""
+
+            # 既定の読みを省略 = 当たらない時は辞書に載っていないのと同じ (表記のまま)
+            [entries."😭"]
+            [[entries."😭".match]]
+            alone = true
+            reading = "うえーん"
+            "#,
+        )
+        .unwrap();
+        let t: HashMap<String, EmojiEntry> = data.entries.into_iter().collect();
+        // 発言が絵文字だけなら読む
+        assert_eq!(
+            emoji_reading("🙏", &t, "", "").as_deref(),
+            Some("ありがとう")
+        );
+        // 文に添えた時は既定 (読まない)。 match の reading が空でも 「読まない」 を明示する
+        assert_eq!(
+            emoji_reading("🙏", &t, "ありがとう", "").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            emoji_reading("🙏", &t, "よろしくお願い", "").as_deref(),
+            Some("")
+        );
+        // 連なり (🙏🙏) は alone に当たらない → 既定の読まない
+        assert_eq!(emoji_reading("🙏🙏", &t, "", "").as_deref(), Some(""));
+        // 既定の読みが無い絵文字: 当たれば読む、 当たらなければ表記のまま (None)
+        assert_eq!(emoji_reading("😭", &t, "", "").as_deref(), Some("うえーん"));
+        assert_eq!(emoji_reading("😭", &t, "悲しい", ""), None);
     }
 
     #[test]

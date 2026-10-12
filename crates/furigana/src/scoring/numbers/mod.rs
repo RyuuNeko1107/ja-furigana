@@ -153,7 +153,7 @@ pub struct NumberCandidateProvider {
     /// 辞書 (context_cues.toml) で足された `N/M` の手がかり語
     slash_cues: SlashCues,
     /// 絵文字の読み (emoji.toml)。 キーは 完全一致用の原形と、 VS16 / 肌色を除いた形の両方
-    emoji: std::sync::Arc<std::collections::HashMap<String, String>>,
+    emoji: std::sync::Arc<std::collections::HashMap<String, crate::rules::emoji::EmojiEntry>>,
     /// 伏せ字の図形記号の直後に付く敬称・肩書き (組み込み + 辞書)
     honorifics: Vec<String>,
 }
@@ -245,7 +245,9 @@ impl NumberCandidateProvider {
 
     /// 絵文字の読み表 (保護 token の読みに使う)
     #[must_use]
-    pub(crate) fn emoji_table(&self) -> std::sync::Arc<std::collections::HashMap<String, String>> {
+    pub(crate) fn emoji_table(
+        &self,
+    ) -> std::sync::Arc<std::collections::HashMap<String, crate::rules::emoji::EmojiEntry>> {
         std::sync::Arc::clone(&self.emoji)
     }
 
@@ -2017,7 +2019,9 @@ fn comma_grouped_number(s: &str) -> Option<(usize, String)> {
 
 /// emoji.toml の表を引き用に整える: 書かれたキーそのまま (肌色つき専用の読みなど) と、
 /// VS16 / 肌色を除いた形 (⏰ と ⏰️ を同じに引く) の両方を持つ。 除いた形は、 同じキーが明示されていれば上書きしない
-fn build_emoji_table(data: &crate::rules::EmojiData) -> std::collections::HashMap<String, String> {
+fn build_emoji_table(
+    data: &crate::rules::EmojiData,
+) -> std::collections::HashMap<String, crate::rules::emoji::EmojiEntry> {
     let mut table = data.entries.clone();
     for (k, v) in &data.entries {
         let stripped = crate::rules::emoji::strip_variation(k);
