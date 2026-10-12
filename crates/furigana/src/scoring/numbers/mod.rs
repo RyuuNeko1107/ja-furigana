@@ -442,6 +442,22 @@ fn times_sign_reading(input: &str, pos: usize, ch: char) -> &'static str {
     let next = input[pos + ch.len_utf8()..].chars().next();
     let is_operand =
         |c: char| is_digit_like_char(c) || c.is_ascii_alphabetic() || matches!(c, '(' | '（');
+    // 空白で挟んだ `A × B` (#杉浦太陽 × #松井玲奈 のようなコラボ表記) は かける。 両側に語があるときだけ
+    let spaced = |c: Option<char>| c.is_some_and(|c| c == ' ' || c == '\u{3000}');
+    let word_beyond = |s: &str, back: bool| {
+        let t = s.trim_matches(|c: char| c == ' ' || c == '\u{3000}');
+        let _ = back;
+        !t.is_empty()
+    };
+    let before_str = input[..pos].trim_end_matches([' ', '\u{3000}']);
+    let after_str = input[pos + ch.len_utf8()..].trim_start_matches([' ', '\u{3000}']);
+    if spaced(prev)
+        && spaced(next)
+        && word_beyond(before_str, true)
+        && word_beyond(after_str, false)
+    {
+        return "カケル";
+    }
     if next.is_some_and(is_operand) || prev.is_some_and(is_digit_like_char) {
         "カケル"
     } else {
@@ -1319,6 +1335,12 @@ impl NumberCandidateProvider {
             _ => return,
         };
         let after = &rest[first_char.len_utf8()..];
+        // 位取りのカンマ (¥1,337 / $12,500) は外して 1 つの数として読む
+        if let Some((len, digits)) = comma_grouped_number(after) {
+            let reading = format!("{}{unit}", number_to_katakana(&digits));
+            out.push(self.make_hit(input, pos, first_char.len_utf8() + len, reading));
+            return;
+        }
         if let Some(m) = at_start(&DIGIT_RE, after) {
             let whole = m.get(0).unwrap();
             // 符号付き (¥-5) は扱わない。 数字で始まる時だけ。
@@ -1858,6 +1880,26 @@ impl CandidateProvider for NumberCandidateProvider {
             if first_char == '〒' {
                 self.try_postal_mark(input, pos, rest, out);
             }
+            // 価格:¥1,337 / 料金：$5 — 形態素解析は 「:¥」 を 1 つの記号 token にするので、 通貨記号の位置からは候補が使えない。
+            // コロンから始めて通貨つきの数まで 1 つの候補にする (コロンは読みに残す)
+            if matches!(first_char, ':' | '：') {
+                let after = &rest[first_char.len_utf8()..];
+                if let Some(next) = after.chars().next() {
+                    let mut tmp = Vec::new();
+                    self.try_currency_prefix(
+                        input,
+                        pos + first_char.len_utf8(),
+                        after,
+                        next,
+                        &mut tmp,
+                    );
+                    for c in tmp {
+                        let end = c.range.end - pos;
+                        let reading = format!("{first_char}{}", c.reading);
+                        out.push(self.make_hit(input, pos, end, reading));
+                    }
+                }
+            }
             self.try_ascii_forms(input, pos, rest, first_char, out);
             self.emit_symbol(input, pos, rest, out);
             return;
@@ -1934,4 +1976,32 @@ fn after_dai(input: &str, pos: usize) -> bool {
 fn kanji_digit(c: char) -> Option<char> {
     let i = "〇一二三四五六七八九".chars().position(|k| k == c)?;
     char::from_digit(u32::try_from(i).ok()?, 10)
+}
+
+/// 位取りのカンマつきの数 (`1,337` / `12,500,000`) を先頭から探す。 戻り値は (消費する byte 数, カンマを除いた数字)。
+/// 1〜3 桁 + (`,` + ちょうど 3 桁) の繰り返しで、 カンマが 1 つも無ければ `None` (普通の数は別の経路が読む)
+fn comma_grouped_number(s: &str) -> Option<(usize, String)> {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() && i < 3 && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 0 || i >= b.len() || b[i] != b',' {
+        return None;
+    }
+    let mut digits = s[..i].to_string();
+    let mut groups = 0;
+    while i + 3 < b.len() + 0 && b[i] == b',' && b[i + 1..i + 4].iter().all(u8::is_ascii_digit) {
+        digits.push_str(&s[i + 1..i + 4]);
+        i += 4;
+        groups += 1;
+        if i >= b.len() {
+            break;
+        }
+    }
+    // 直後に数字が続く (¥1,3375) 形は位取りではない
+    if groups == 0 || b.get(i).is_some_and(u8::is_ascii_digit) {
+        return None;
+    }
+    Some((i, digits))
 }

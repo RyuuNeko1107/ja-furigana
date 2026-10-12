@@ -67,9 +67,9 @@ static EMAIL_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("scoring email regex build failed")
 });
 
-/// 括弧 1 組 (前後に腕 ヽ ＼ ノ ／ が付くことがある)。 中身が顔かどうかは [`is_kaomoji_inner`] で見る
+/// 括弧 1 組 (前後に腕 ヽ ＼ ノ ／ や、 走る顔文字の ε=ε= ┌ ┘ が付くことがある。 中に空白があってもよい `( ^ω^)`)。 中身が顔かどうかは [`is_kaomoji_inner`] で見る
 static KAOMOJI_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[ヽヾ＼\\]?[(（]([^()（）\s]{1,14})[)）][ノﾉ／/v]?")
+    Regex::new(r"(?:ε[=＝])*[ヽヾ＼\\┌┏└┗╭]?[(（]([^()（）\n]{1,14})[)）][ノﾉ／/v┘┛┐┓╮]?")
         .expect("scoring kaomoji regex build failed")
 });
 
@@ -1347,6 +1347,11 @@ mod tests {
             "＼(^o^)／",
             "(^^)/",
             "(^-^)v",
+            "( ^ω^)",
+            "( ̆ω ̆ )",
+            "(* ́ω`*)",
+            "ε=ε=(ノ≧∇≦)ノ",
+            "ε=ε=ε=┌(;´Д`)┘",
         ] {
             let input = format!("あ{kao}い");
             let tokens = extract_protected_tokens(&input);
