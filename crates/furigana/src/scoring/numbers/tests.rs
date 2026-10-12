@@ -1955,3 +1955,28 @@ fn v_between_digits_is_bui() {
     assert!(reading_at("a1v", 2, "v").is_none());
     assert!(reading_at("v1", 0, "v").is_none());
 }
+
+#[test]
+fn times_sign_between_spaced_words_is_kakeru() {
+    // 空白で挟んだコラボ表記は かける、 片側が空白でない / 片側に語が無い形は従来どおり ばつ
+    let kakeru = |input: &str, pos: usize| reading_at(input, pos, "×");
+    assert_eq!(kakeru("#A × #B", 3).as_deref(), Some("カケル"));
+    assert_eq!(
+        kakeru("返事は×です", "返事は".len()).as_deref(),
+        Some("バツ")
+    );
+    assert_eq!(kakeru("ダメ ×", "ダメ ".len()).as_deref(), Some("バツ"));
+    assert_eq!(kakeru("× 不可", 0).as_deref(), Some("バツ"));
+}
+
+#[test]
+fn comma_grouped_currency_and_colon_prefix() {
+    assert_eq!(
+        reading_at("¥1,337", 0, "¥1,337").as_deref(),
+        Some("センサンビャクサンジュウナナエン")
+    );
+    assert_eq!(
+        reading_at("価格:¥1,337", "価格".len(), ":¥1,337").as_deref(),
+        Some(":センサンビャクサンジュウナナエン")
+    );
+}
