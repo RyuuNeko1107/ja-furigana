@@ -33,6 +33,14 @@ fn surface_is_all_kana(surface: &str) -> bool {
             .all(|c| kana::is_hiragana_char(c) || char_class::is_katakana_loose_char(c))
 }
 
+/// 半角カタカナ (ｱﾘｶﾞﾄｳ) を含むか。 TTS が読めないことがあるので、 hiragana 出力では表記を維持せず読みを出す
+/// (ruby は濁点が別 token に割れて崩れるので従来どおり表記のまま)
+fn surface_has_halfwidth_katakana(surface: &str) -> bool {
+    surface
+        .chars()
+        .any(|c| matches!(c, '\u{FF66}'..='\u{FF9F}'))
+}
+
 /// surface に **ASCII / 全角 alphabet** が含まれるかを判定。
 ///
 /// hiragana mode で 「数字 / 記号 のみ」 vs 「alphabet 含み」 を区別する用途:
@@ -69,7 +77,8 @@ pub fn tokens_to_hiragana(tokens: &[ReadingToken]) -> String {
         if let Some(reading) = &t.reading {
             if surface_has_kanji(&t.surface) {
                 out.push_str(&kana::kata_to_hira(reading));
-            } else if surface_is_all_kana(&t.surface) {
+            } else if surface_is_all_kana(&t.surface) && !surface_has_halfwidth_katakana(&t.surface)
+            {
                 // 全 kana surface は user 入力 (= 「こんにちは」 等) → 表記そのまま維持
                 // 助詞 は→わ 等の音韻変換は TTS engine (VOICEVOX 等) に任せる
                 out.push_str(&t.surface);
@@ -168,6 +177,23 @@ pub fn tokens_to_ruby(tokens: &[ReadingToken]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 半角カタカナは hiragana 出力で読み (ひらがな) にする。 全角カタカナは表記のまま、 ruby は従来どおり
+    #[test]
+    fn halfwidth_katakana_is_read_in_hiragana_output() {
+        let tokens = vec![
+            ReadingToken {
+                surface: "ｱﾘｶﾞﾄｳ".to_string(),
+                reading: Some("アリガトウ".to_string()),
+            },
+            ReadingToken {
+                surface: "コーヒー".to_string(),
+                reading: Some("コーヒー".to_string()),
+            },
+        ];
+        assert_eq!(tokens_to_hiragana(&tokens), "ありがとうコーヒー");
+        assert!(tokens_to_ruby(&tokens).starts_with("ｱﾘｶﾞﾄｳ"));
+    }
 
     /// 読みが空の token は ruby group を作らない (= `{・|}` を出さない)。
     /// 英字表層のルビは **カタカナのまま** (「PayPay」 → ぺいぺい ではなく ペイペイ)。
