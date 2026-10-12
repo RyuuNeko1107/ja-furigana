@@ -1473,10 +1473,35 @@ fn slash_pair_uses_the_topic_of_the_sentence() {
 }
 
 #[test]
+fn slash_pair_range_checks_both_ends_are_valid_dates() {
+    // 同じ日の範囲は日付 / 戻る組・月日が範囲外の組は日付にしない
+    assert!(reading_at("6/26〜6/26は", 0, "6/26").is_some());
+    assert!(reading_at("7/2〜6/26は", 0, "7/2").is_none());
+    assert!(reading_at("6/10〜13/20は", 0, "6/10").is_none());
+    assert!(reading_at("6/10〜7/40は", 0, "6/10").is_none());
+    // 前側の端が範囲外 (月 0 / 日 40) なら後ろ側も日付にしない
+    assert!(reading_at("0/5〜7/3は", "0/5〜".len(), "7/3").is_none());
+    assert!(reading_at("6/40〜7/3は", "6/40〜".len(), "7/3").is_none());
+    assert!(reading_at("6/26〜7/3は", "6/26〜".len(), "7/3").is_some());
+}
+
+#[test]
+fn slash_pair_sentence_topic_keeps_one_over_small_numbers_as_fractions() {
+    // 1/2〜1/10 は分数と紛れるので、 文の話題だけでは日付にしない。 1/12 は日付
+    assert!(reading_at("1/3の配信予定", 0, "1/3").is_none());
+    assert!(reading_at("1/10の配信予定", 0, "1/10").is_none());
+    assert_eq!(
+        reading_at("1/12の配信予定", 0, "1/12").as_deref(),
+        Some("イチガツジュウニニチ")
+    );
+}
+
+#[test]
 fn slash_pair_ignores_longer_chains() {
     let p = provider();
     assert!(find(&p.candidates_vec(&ctx("2024/10/25"), 5), "10/25").is_none());
     assert!(find(&p.candidates_vec(&ctx("2024/10/25"), 0), "20/24").is_none());
+    assert!(find(&p.candidates_vec(&ctx("12/25/10"), 0), "12/25").is_none());
     assert!(find(&p.candidates_vec(&ctx("1/2/25"), 0), "1/2").is_none());
     assert!(find(&p.candidates_vec(&ctx("1/2/25"), 2), "2/25").is_none());
     assert!(find(&p.candidates_vec(&ctx("a/12/25"), 2), "12/25").is_none());
