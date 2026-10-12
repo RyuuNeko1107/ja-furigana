@@ -402,6 +402,23 @@ fn roman_numeral_value(ch: char) -> Option<u32> {
     }
 }
 
+/// 丸数字 ①〜⑳ (U+2460..=U+2473)
+fn is_circled_number(ch: char) -> bool {
+    matches!(ch, '\u{2460}'..='\u{2473}')
+}
+
+/// 上付き数字 ⁰¹²³⁴⁵⁶⁷⁸⁹ の値 (累乗の指数)
+fn superscript_digit(ch: char) -> Option<char> {
+    match ch {
+        '\u{B2}' => Some('2'),
+        '\u{B3}' => Some('3'),
+        '\u{B9}' => Some('1'),
+        '\u{2070}' => Some('0'),
+        '\u{2074}'..='\u{2079}' => char::from_digit(u32::from(ch) - 0x2070, 10),
+        _ => None,
+    }
+}
+
 /// 1 文字を NFKC → compat 置換 → NFC した断片を返す。
 ///
 /// [`normalize_text_aligned`] が unit ごとに呼ぶ。 NFKC は **1 文字単位** で適用する
@@ -542,6 +559,31 @@ pub(crate) fn normalize_text_aligned(s: &str, compat: &CompatData) -> Normalized
             continue;
         }
         let norm_start = text.len();
+        // 丸数字が続く時 (①②③) は 123 に合体して 「ひゃくにじゅうさん」 になるので、 間に空白を入れて 1 つずつ読ませる
+        if is_circled_number(ch)
+            && s[..orig_off]
+                .chars()
+                .next_back()
+                .is_some_and(is_circled_number)
+        {
+            text.push(' ');
+        }
+        // 上付き数字 (10² / x³) は 「^2」 にして累乗として読む (直前が数字・英字・閉じ括弧の時だけ。 注記の ¹ は除く)
+        if let Some(d) = superscript_digit(ch) {
+            if s[..orig_off]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, ')' | '）'))
+            {
+                text.push('^');
+                text.push(d);
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
+        }
         normalize_char_piece_into(ch, compat, &mut text);
         units.push(NormUnit {
             norm_start,
@@ -736,6 +778,20 @@ mod tests {
         // 範囲の両端: Ⅰ(U+2160) と Ⅻ(U+216B) は変換、 Ⅼ(U+216C) 以降は従来どおり NFKC
         assert_eq!(normalize_text("\u{2160}\u{216B}", &c), "112");
         assert_eq!(normalize_text("\u{216C}", &c), "L");
+    }
+
+    #[test]
+    fn normalize_text_separates_circled_numbers_and_turns_superscripts_into_powers() {
+        let c = CompatData::default();
+        // 丸数字は連続した時だけ空白で区切る (①②③ が 123 にならない)。 1 つだけなら従来どおり
+        assert_eq!(normalize_text("①②③", &c), "1 2 3");
+        assert_eq!(normalize_text("①番", &c), "1番");
+        assert_eq!(normalize_text("⑩⑪", &c), "10 11");
+        // 上付き数字は直前が数字・英字・閉じ括弧の時だけ累乗にする
+        assert_eq!(normalize_text("10²", &c), "10^2");
+        assert_eq!(normalize_text("x²+y³", &c), "x^2+y^3");
+        assert_eq!(normalize_text("(a+b)²", &c), "(a+b)^2");
+        assert_eq!(normalize_text("注釈¹", &c), "注釈1");
     }
 
     #[test]

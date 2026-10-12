@@ -757,11 +757,17 @@ impl CandidateProvider for AlphabetPassthroughProvider {
                         c.is_whitespace()
                             || matches!(c, '「' | '『' | '(' | '（' | '【' | '[' | '"' | '“' | 'ー')
                     }));
-            let letter_name = (w_is_letter
+            // 式の中の w (w=2 / x+w / a*w) も文字そのもの。 演算子は笑いの w の前後には付かない (> < ^ は顔文字なので除く)
+            let operator = |c: char| matches!(c, '=' | '+' | '*');
+            let w_in_formula = surface == "w"
+                && (prev.is_some_and(operator)
+                    || ctx.input[range.end..].chars().next().is_some_and(operator));
+            let letter_name = ((w_is_letter
                 && ctx.input[range.end..].chars().next().is_some_and(|c| {
                     matches!(c, 'は' | 'を' | 'が' | 'の' | 'も' | 'に' | 'で' | 'と')
                 }))
-            .then_some("ダブリュー");
+                || w_in_formula)
+                .then_some("ダブリュー");
             let hit = if letter_name.is_some() { None } else { hit };
 
             // 「3km」 のような 数字 + 単位 は NumberCandidateProvider の責務。
@@ -1631,6 +1637,15 @@ mod tests {
             .next()
             .map(|c| c.reading.to_string())
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn w_next_to_an_operator_is_the_letter() {
+        assert_eq!(w_reading("w=2", 0), "ダブリュー");
+        assert_eq!(w_reading("x+w", 2), "ダブリュー");
+        assert_eq!(w_reading("a*w", 2), "ダブリュー");
+        // 演算子が無ければ笑い
+        assert_eq!(w_reading("それなw", "それな".len()), "ワラ");
     }
 
     #[test]
