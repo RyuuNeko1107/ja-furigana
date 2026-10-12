@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-10-12
+
 ### Added
 
 - **`AccentResult::from_analysis(AnalyzeResult)`**: 解析済みの結果から accent 出力を作る (再解析しない)。 `analyze` の結果をログの集計などにも使う呼び出し側が、 `to_accent` でもう一度同じ入力を解析する無駄を省ける。 `to_accent(text)` と同じ結果になる
