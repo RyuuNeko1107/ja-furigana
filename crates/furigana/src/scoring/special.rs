@@ -364,7 +364,11 @@ fn emoji_reading(
         let reading = parts.next().unwrap_or("");
         let words: Vec<String> = std::iter::once(reading)
             .chain(parts)
-            .filter(|w| !w.is_empty())
+            // かな 1 文字の読み・別表記 (き / は / め) は、 前後の別の語の頭や末尾と偶然一致するので重複判定に使わない
+            .filter(|w| {
+                !w.is_empty()
+                    && !(w.chars().count() == 1 && w.chars().all(char_class::is_hiragana_char))
+            })
             .map(crate::kana::kata_to_hira)
             .collect();
         // 連なりの先頭は直前の語、 末尾は直後の語と同じなら装飾 (ねこ🐱 / 🦀蟹座)
@@ -1611,6 +1615,17 @@ mod tests {
         assert_eq!(emoji_reading("⏰", &t, "あさのめざましどけい", wo), None);
         assert_eq!(emoji_reading("🦀", &t, "今日は", "蟹座の人"), None);
         assert_eq!(emoji_reading("🦀", &t, "今日は", "カニ料理を"), None);
+        // かな 1 文字の読み (き / は) は重複判定に使わない: 🌳 = き|木 が 「きょう」 の前で消えない
+        t.insert("🌳".to_string(), "き|木".to_string());
+        assert_eq!(
+            emoji_reading("🌳", &t, "今日は", "の下").as_deref(),
+            Some("き")
+        );
+        assert_eq!(
+            emoji_reading("🌳", &t, "今日は", "きょうも").as_deref(),
+            Some("き")
+        );
+        assert_eq!(emoji_reading("🌳", &t, "今日は", "木の下"), None);
         // 行末に同じ絵文字がもう一度ある挟み装飾
         assert_eq!(emoji_reading("🍜", &t, "昼は", "を食べた🍜"), None);
         // 空の読み = 常に読まない。 載っていない絵文字は表記のまま混ぜる
