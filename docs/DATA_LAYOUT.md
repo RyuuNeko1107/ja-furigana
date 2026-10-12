@@ -29,6 +29,10 @@ default では **実行ファイルと同じディレクトリ**:
     ├── scales.toml                # 万 / 億 / 兆 / 京 / 垓 ...
     ├── units.toml                 # SI 単位 + 「円」「%」
     ├── symbols.toml               # 記号読み (〜→から 等)
+    ├── emoji.toml                 # 絵文字の読み (名詞は文中で使われた時だけ読む、 空 = 読まない、 麻雀牌は常に読む)
+    ├── emoji_context.toml         # 絵文字の文脈読み ([[entries."X".match]]: 直前 / 直後 / 文中の語 / 発言がその絵文字だけ)
+    ├── models.toml                # 型番パターン (正規表現 + 雛形。 Ryzen 7 5800X3D / RTX 4070 Ti / GPT-4o 等)
+    ├── context_cues.toml          # N/M が日付か分数かを決める手がかりの語、 伏せ字の敬称
     ├── numeric_phrases.toml       # 慣用語句 (二十歳→ハタチ 等)
     ├── counters/*.toml            # 助数詞ルール (年度 / 時間半 含む 7+ ファイル)
     ├── postprocess.toml           # 後処理 regex 置換
