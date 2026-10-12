@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- **絵文字の文脈読み** (emoji.toml): 漢字の辞書と同じ形の `[[entries."🙏".match]]` で、 文脈によって読みを変えられる。 条件は `prev_ends_any` (直前) / `next_starts_any` (直後) / `input_contains_any` (文中の語) / `alone = true` (発言がその絵文字だけ)。 全部書いた条件が揃った時に当たり、 上から最初のものを使う (reading が空なら読まない)。 `[entries."X"]` の `reading` を省くと、 どの match にも当たらない時は辞書に載っていないのと同じ (表記のまま)。 連なり (🙏🙏) の途中は文脈を持たず、 alone には当たらない
+
+
 ## [0.5.21] - 2026-10-12
 
 ### Added
