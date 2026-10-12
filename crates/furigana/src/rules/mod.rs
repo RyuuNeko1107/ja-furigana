@@ -17,7 +17,7 @@ pub mod symbols;
 pub mod units;
 
 pub use compat::CompatData;
-pub use context_cues::{ContextCuesData, SlashPairCues};
+pub use context_cues::{ContextCuesData, PlaceholderCues, SlashPairCues};
 pub use counters::{CounterMode, CounterRule, CountersData, EuphonicRule, KanaReplacement};
 pub use days::DaysData;
 pub use models::{ModelSpec, ModelsData};

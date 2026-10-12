@@ -152,6 +152,8 @@ pub struct NumberCandidateProvider {
     models: CompiledModels,
     /// 辞書 (context_cues.toml) で足された `N/M` の手がかり語
     slash_cues: SlashCues,
+    /// 伏せ字の図形記号の直後に付く敬称・肩書き (組み込み + 辞書)
+    honorifics: Vec<String>,
 }
 
 impl NumberCandidateProvider {
@@ -214,6 +216,19 @@ impl NumberCandidateProvider {
             slash_units,
             models: CompiledModels::new(&rules.models),
             slash_cues: SlashCues::new(&rules.context_cues.slash_pair),
+            honorifics: BUILTIN_HONORIFICS
+                .iter()
+                .map(ToString::to_string)
+                .chain(
+                    rules
+                        .context_cues
+                        .placeholder
+                        .honorifics
+                        .iter()
+                        .map(|w| w.trim().to_string())
+                        .filter(|w| !w.is_empty()),
+                )
+                .collect(),
         }
     }
 
@@ -390,6 +405,39 @@ fn hyphen_is_time_range(input: &str, pos: usize, ch: char) -> bool {
             .chars()
             .next()
             .is_some_and(is_digit_like_char)
+}
+
+/// 装飾にも使われる図形記号。 伏せ字の書き方 (`■■さん` / `△△`) の時だけ読む
+const DECORATIVE_SHAPES: &str = "●■▲▼◆◇";
+
+/// 伏せ字の直後に付く敬称・肩書きの組み込み分 (辞書の `[placeholder] honorifics` で足せる)
+const BUILTIN_HONORIFICS: [&str; 8] = ["さん", "くん", "君", "ちゃん", "様", "氏", "先生", "殿"];
+
+/// 図形記号が伏せ字として使われているか: ちょうど 2 つ並ぶ (`■■`) か、 直後が敬称 (`●さん`)。
+/// 1 つだけ / 3 つ以上並ぶ装飾 (`★★★お知らせ★★★`) は伏せ字ではない
+fn is_placeholder_shape(input: &str, pos: usize, ch: char, honorifics: &[String]) -> bool {
+    let before = input[..pos].chars().rev().take_while(|&c| c == ch).count();
+    let after_str = &input[pos + ch.len_utf8()..];
+    let after = after_str.chars().take_while(|&c| c == ch).count();
+    if before + 1 + after == 2 {
+        return true;
+    }
+    let tail = after_str.trim_start_matches(ch);
+    honorifics.iter().any(|h| tail.starts_with(h.as_str()))
+}
+
+/// `×` の読み。 数字・英字・括弧の間 (`2×3` / `A×B` / `4K×2` / `えび×3`) は掛け算の かける、
+/// それ以外 (`返事は×です` / `×印` / `○×クイズ`) は誤りを表す ばつ
+fn times_sign_reading(input: &str, pos: usize, ch: char) -> &'static str {
+    let prev = input[..pos].chars().next_back();
+    let next = input[pos + ch.len_utf8()..].chars().next();
+    let is_operand =
+        |c: char| is_digit_like_char(c) || c.is_ascii_alphabetic() || matches!(c, '(' | '（');
+    if next.is_some_and(is_operand) || prev.is_some_and(is_digit_like_char) {
+        "カケル"
+    } else {
+        "バツ"
+    }
 }
 
 /// `10-20人` の `-`: 数字 - 数字 の直後に助数詞が続き、 後ろの数が大きい時は範囲の区切り (から)。
@@ -1102,7 +1150,16 @@ impl NumberCandidateProvider {
         let Some(ch) = rest.chars().next() else {
             return;
         };
-        if let Some(read) = symbol_char_reading(ch, &self.symbols) {
+        let symbol_read = if ch == '×' {
+            Some(times_sign_reading(input, pos, ch).to_string())
+        } else if DECORATIVE_SHAPES.contains(ch)
+            && !is_placeholder_shape(input, pos, ch, &self.honorifics)
+        {
+            None
+        } else {
+            symbol_char_reading(ch, &self.symbols)
+        };
+        if let Some(read) = symbol_read {
             // 〜 / ~ / ～ は **range marker と vowel extension の dual use**。
             // 数字 context (= 「2〜3」 「100〜200円」) なら従来通り 「から」 で concat、
             // kana / 漢字 / 文末 context (= 「がんばれ〜」 「も〜むりすぎ」) では range
