@@ -449,6 +449,56 @@ fn times_sign_reading(input: &str, pos: usize, ch: char) -> &'static str {
     }
 }
 
+/// `9:00-17:00` の `-`: 時刻 (H:MM) と時刻の間は範囲の区切り (から)
+fn hyphen_is_clock_range(input: &str, pos: usize, ch: char) -> bool {
+    let before = &input[..pos];
+    let after = &input[pos + ch.len_utf8()..];
+    let ends_with_clock = {
+        let b = before.as_bytes();
+        let n = b.len();
+        n >= 4
+            && b[n - 1].is_ascii_digit()
+            && b[n - 2].is_ascii_digit()
+            && b[n - 3] == b':'
+            && b[n - 4].is_ascii_digit()
+    };
+    let a = after.as_bytes();
+    let starts_with_clock = a.len() >= 4
+        && a[0].is_ascii_digit()
+        && (a[1] == b':' && a[2].is_ascii_digit() && a[3].is_ascii_digit()
+            || a[1].is_ascii_digit() && a[2] == b':' && a[3].is_ascii_digit());
+    ends_with_clock && starts_with_clock
+}
+
+/// `2024-2025` の `-`: 西暦 (1900〜2100) の 4 桁どうしで後ろが大きい時は範囲の区切り (から)
+fn hyphen_is_year_range(input: &str, pos: usize, ch: char) -> bool {
+    let digits_before: String = input[..pos]
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    let after = &input[pos + ch.len_utf8()..];
+    let digits_after: String = after.chars().take_while(char::is_ascii_digit).collect();
+    if digits_before.len() != 4 || digits_after.len() != 4 {
+        return false;
+    }
+    // 前後にさらに数字や英字 (電話番号・型番・ISBN) が続く形は範囲ではない
+    let outer_before = input[..pos - 4].chars().next_back();
+    let outer_after = after[4..].chars().next();
+    if outer_before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+        || outer_after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return false;
+    }
+    match (digits_before.parse::<u32>(), digits_after.parse::<u32>()) {
+        (Ok(x), Ok(y)) => (1900..=2100).contains(&x) && (1900..=2100).contains(&y) && x < y,
+        _ => false,
+    }
+}
+
 /// `10-20人` の `-`: 数字 - 数字 の直後に助数詞が続き、 後ろの数が大きい時は範囲の区切り (から)。
 /// `3-2` (スコア) や `2024-10-12` (日付) のように助数詞が無い / 後ろが小さい組は従来どおり読まない
 fn hyphen_is_count_range(input: &str, pos: usize, ch: char) -> bool {
@@ -1185,7 +1235,10 @@ impl NumberCandidateProvider {
             // 負数は -3 のように前が数字でない形で書かれるので、
             // 前が数字のときだけ読まない (区切りとして surface のみ消費する)。
             let final_read = if is_minus
-                && (hyphen_is_time_range(input, pos, ch) || hyphen_is_count_range(input, pos, ch))
+                && (hyphen_is_time_range(input, pos, ch)
+                    || hyphen_is_count_range(input, pos, ch)
+                    || hyphen_is_clock_range(input, pos, ch)
+                    || hyphen_is_year_range(input, pos, ch))
             {
                 "から".to_string()
             } else if (is_minus && !minus_is_sign(input, pos, ch))
@@ -1363,6 +1416,116 @@ impl NumberCandidateProvider {
             reading.push_str(&DigitStyle::Each.render(group).unwrap_or_default());
         }
         out.push(self.make(input, pos, end, reading));
+    }
+
+    /// 英字・記号で書く数の形: 累乗 `x^2` / `2^10`、 倍率 `x2` / `2x`、 版 `v2.0`
+    fn try_ascii_forms(
+        &self,
+        input: &str,
+        pos: usize,
+        rest: &str,
+        first_char: char,
+        out: &mut Vec<RawCandidate<'_>>,
+    ) {
+        let prev = input[..pos].chars().next_back();
+        let is_word = |c: char| c.is_ascii_alphanumeric();
+        match first_char {
+            // 累乗: 直前が数字・英字・閉じ括弧、 指数は 1〜3 桁 (x^2 → エックスノニジョウ の 「ノニジョウ」)
+            '^' => {
+                if !prev.is_some_and(|c| is_word(c) || matches!(c, ')' | '）')) {
+                    return;
+                }
+                let digits: String = rest[1..].chars().take_while(char::is_ascii_digit).collect();
+                if digits.is_empty()
+                    || digits.len() > 3
+                    || rest[1 + digits.len()..].starts_with(|c: char| is_word(c) || c == '乗')
+                {
+                    return;
+                }
+                out.push(self.make_hit(
+                    input,
+                    pos,
+                    1 + digits.len(),
+                    format!("ノ{}ジョウ", number_to_katakana(&digits)),
+                ));
+            }
+            'x' | 'X' => {
+                let after = &rest[1..];
+                // 2x / 1.5x: 数字の直後の x は 「倍」 (0x1F や 2x2 は除く)
+                if prev.is_some_and(|c| c.is_ascii_digit()) {
+                    if !after.starts_with(|c: char| is_word(c) || c == '×') {
+                        out.push(self.make_hit(input, pos, 1, "バイ".to_string()));
+                    }
+                    return;
+                }
+                // x2: 英字・数字の直後ではない x + 1〜2 桁 (x86 / x64 / x32 はアーキテクチャなので除く)
+                if prev.is_some_and(is_word) {
+                    return;
+                }
+                let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+                if digits.is_empty()
+                    || digits.len() > 2
+                    || matches!(digits.as_str(), "32" | "64" | "86")
+                {
+                    return;
+                }
+                if after[digits.len()..].starts_with(|c: char| is_word(c) || c == '.') {
+                    return;
+                }
+                out.push(self.make_hit(
+                    input,
+                    pos,
+                    1 + digits.len(),
+                    format!("{}バイ", number_to_katakana(&digits)),
+                ));
+            }
+            // v2.0: 英字の直後ではない v + 版番号
+            'v' | 'V' => {
+                // 1v1 / 3v3: 数字に挟まれた v は ブイ (いちぶいいち)
+                if prev.is_some_and(|c| c.is_ascii_digit())
+                    && rest[1..].starts_with(|c: char| c.is_ascii_digit())
+                {
+                    out.push(self.make_hit(input, pos, 1, "ブイ".to_string()));
+                    return;
+                }
+                if prev.is_some_and(is_word) {
+                    return;
+                }
+                // 数字 (. 数字)+ を版番号として取る (2 要素の v2.0 も)
+                let body = &rest[1..];
+                let mut end = 0;
+                let mut parts = 0;
+                loop {
+                    let digits = body[end..].chars().take_while(char::is_ascii_digit).count();
+                    if digits == 0 || digits > 3 {
+                        break;
+                    }
+                    end += digits;
+                    parts += 1;
+                    if body[end..].starts_with('.')
+                        && body[end + 1..].starts_with(|c: char| c.is_ascii_digit())
+                    {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if parts < 2 || body[end..].starts_with(|c: char| is_word(c)) {
+                    return;
+                }
+                let whole = &body[..end];
+                if looks_like_dotted_date(whole) {
+                    return;
+                }
+                let reading = whole
+                    .split('.')
+                    .map(number_to_katakana)
+                    .collect::<Vec<_>>()
+                    .join("テン");
+                out.push(self.make_hit(input, pos, 1 + end, format!("ブイ{reading}")));
+            }
+            _ => {}
+        }
     }
 
     /// 郵便番号 `〒100-0001` / `〒 1000001`。 〒 から数字までを 1 語にして 7 桁を 1 桁ずつ読む
@@ -1587,6 +1750,22 @@ impl NumberCandidateProvider {
         if let Some(m) = at_start(&DIGIT_RE, rest) {
             let m_end = m.get(0).unwrap().end();
             let num = m.get(0).unwrap().as_str();
+            // 8 が 3 つ以上並ぶだけの `888` / `88888` は拍手 (パチパチ)。 数として読むと 「はっぴゃく…」 になる。
+            // 前後が数字・英字・漢字・小数点・位取りの区切りではない時だけ (888円 は助数詞の候補が読む)
+            if num.len() >= 3
+                && num.bytes().all(|b| b == b'8')
+                && !input[..pos]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | ',' | '，'))
+                && !rest[m_end..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || matches!(c, '.' | ',' | '，'))
+            {
+                out.push(self.make_hit(input, pos, m_end, "パチ".repeat(num.len())));
+                return;
+            }
             out.push(self.make(input, pos, m_end, number_to_katakana(num)));
         }
     }
@@ -1679,6 +1858,7 @@ impl CandidateProvider for NumberCandidateProvider {
             if first_char == '〒' {
                 self.try_postal_mark(input, pos, rest, out);
             }
+            self.try_ascii_forms(input, pos, rest, first_char, out);
             self.emit_symbol(input, pos, rest, out);
             return;
         }

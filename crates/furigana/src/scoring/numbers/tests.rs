@@ -1861,3 +1861,97 @@ fn slash_pair_ignores_longer_chains() {
     assert!(find(&p.candidates_vec(&ctx("1/2/25"), 2), "2/25").is_none());
     assert!(find(&p.candidates_vec(&ctx("a/12/25"), 2), "12/25").is_none());
 }
+
+#[test]
+fn power_multiplier_and_v_version_forms() {
+    // 累乗 x^2 / 2^10 / rev^3
+    for (input, surface, want) in [
+        ("x^2", "^2", "ノニジョウ"),
+        ("2^10", "^10", "ノジュウジョウ"),
+        ("a2^3です", "^3", "ノサンジョウ"),
+    ] {
+        let pos = input.find(surface).unwrap();
+        assert_eq!(
+            reading_at(input, pos, surface).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
+    // 直前が数字・英字・閉じ括弧ではない ^ / 指数が長い・続きが英数字・乗は累乗にしない
+    assert!(reading_at("^2", 0, "^2").is_none());
+    assert!(reading_at("(^2^)", 1, "^2").is_none());
+    assert!(reading_at("x^2a", 1, "^2").is_none());
+    assert!(reading_at("x^2乗", 1, "^2").is_none());
+    assert!(reading_at("x^1234", 1, "^1234").is_none());
+    // 倍率: 2x は x が 倍、 x2 は 2 倍
+    assert_eq!(reading_at("2x", 1, "x").as_deref(), Some("バイ"));
+    assert_eq!(reading_at("1.5x速", 3, "x").as_deref(), Some("バイ"));
+    assert_eq!(reading_at("x2", 0, "x2").as_deref(), Some("ニバイ"));
+    assert_eq!(
+        reading_at("x10ボーナス", 0, "x10").as_deref(),
+        Some("ジュウバイ")
+    );
+    // 16 進 / 2x2 / x86 / x64 / 英単語の中の x は倍率にしない
+    assert!(reading_at("0x1F", 1, "x").is_none());
+    assert!(reading_at("2x2", 1, "x").is_none());
+    assert!(reading_at("x86", 0, "x86").is_none());
+    assert!(reading_at("x64", 0, "x64").is_none());
+    assert!(reading_at("HPx2", 2, "x2").is_none());
+    assert!(reading_at("x2.5", 0, "x2").is_none());
+    // 版: v2.0 / V1.2.3 は ブイ + 数。 v2 だけ / 英字の後ろは対象外
+    assert_eq!(
+        reading_at("v2.0", 0, "v2.0").as_deref(),
+        Some("ブイニテンゼロ")
+    );
+    assert_eq!(
+        reading_at("V1.2.3です", 0, "V1.2.3").as_deref(),
+        Some("ブイイチテンニテンサン")
+    );
+    assert!(reading_at("v2", 0, "v2").is_none());
+    assert!(reading_at("TV2.0", 1, "V2.0").is_none());
+}
+
+#[test]
+fn hyphen_between_clock_times_or_years_reads_kara() {
+    let kara = |input: &str| {
+        let pos = input.find('-').unwrap();
+        reading_at(input, pos, "-")
+    };
+    assert_eq!(kara("9:00-17:00").as_deref(), Some("から"));
+    assert_eq!(kara("09:30-10:15").as_deref(), Some("から"));
+    assert_eq!(kara("2024-2025").as_deref(), Some("から"));
+    assert_eq!(kara("1999-2000年").as_deref(), Some("から"));
+    // 後ろが小さい / 西暦ではない / 前後に数字や英字が続く形は読まない
+    assert_eq!(kara("2025-2024").as_deref(), Some(""));
+    assert_eq!(kara("0120-1234").as_deref(), Some(""));
+    assert_eq!(kara("A2000-2010").as_deref(), Some(""));
+    assert_eq!(kara("2000-2010-1").as_deref(), Some(""));
+    assert_eq!(kara("9:00-17").as_deref(), Some(""));
+}
+
+#[test]
+fn run_of_eights_is_applause() {
+    assert_eq!(reading_at("888", 0, "888").as_deref(), Some("パチパチパチ"));
+    assert_eq!(
+        reading_at("888888", 0, "888888").as_deref(),
+        Some("パチパチパチパチパチパチ")
+    );
+    assert_eq!(
+        reading_at("888!", 0, "888").as_deref(),
+        Some("パチパチパチ")
+    );
+    // 数としての 88 / 助数詞付き / 前後に数字・英字・小数点が続く形は拍手にしない
+    assert!(reading_at("88", 0, "88").is_none_or(|r| r != "パチパチ"));
+    assert!(reading_at("8888円", 0, "8888").is_none_or(|r| !r.starts_with("パチ")));
+    assert!(reading_at("1888", 1, "888").is_none_or(|r| !r.starts_with("パチ")));
+    assert!(reading_at("888.5", 0, "888").is_none_or(|r| !r.starts_with("パチ")));
+}
+
+#[test]
+fn v_between_digits_is_bui() {
+    assert_eq!(reading_at("1v1", 1, "v").as_deref(), Some("ブイ"));
+    assert_eq!(reading_at("3V3しよ", 1, "V").as_deref(), Some("ブイ"));
+    // 数字に挟まれていない v / 版番号は対にしない
+    assert!(reading_at("a1v", 2, "v").is_none());
+    assert!(reading_at("v1", 0, "v").is_none());
+}
