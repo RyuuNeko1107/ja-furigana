@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`AccentResult::from_analysis(AnalyzeResult)`**: 解析済みの結果から accent 出力を作る (再解析しない)。 `analyze` の結果をログの集計などにも使う呼び出し側が、 `to_accent` でもう一度同じ入力を解析する無駄を省ける。 `to_accent(text)` と同じ結果になる
+
+### Changed
+
+- **形態素解析を並列に実行できるようにした**。 これまでは tokenizer 全体を `Mutex` で守っていて、 同時に来たリクエストの解析が 1 つずつになっていた (8 スレッドで約 8.2 万行/秒に頭打ち)。 `Tokenizer::tokenize_with_lattice` は `&self` で呼べるので tokenizer は共有し、 解析ごとの作業領域 (lattice) だけを小さなプールから借りる。 8 スレッドで約 30 万行/秒 (3.6 倍、 スレッド数にほぼ比例)。 1 スレッドの速度・メモリ・読みの出力は変わらない
+
 ## [0.5.15] - 2026-10-12
 
 ### Added

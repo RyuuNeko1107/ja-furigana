@@ -356,11 +356,7 @@ impl Furigana {
     /// bracket notation がない token は `accent_phrases` 空。
     #[must_use]
     pub fn to_accent(&self, input: &str) -> AccentResult {
-        let result = self.analyze(input);
-        AccentResult {
-            schema_version: "1".to_string(),
-            tokens: result.tokens.into_iter().map(AccentToken::from).collect(),
-        }
+        AccentResult::from_analysis(self.analyze(input))
     }
 }
 
@@ -372,6 +368,21 @@ impl Furigana {
 pub struct AccentResult {
     pub schema_version: String,
     pub tokens: Vec<AccentToken>,
+}
+
+impl AccentResult {
+    /// 解析済みの結果から accent 出力を作る (再解析しない)。
+    ///
+    /// [`Furigana::analyze`] の結果を別の用途 (ログの集計など) にも使う呼び出し側が、
+    /// [`Furigana::to_accent`] で同じ入力をもう一度解析しなくて済むようにするための入口。
+    /// `furigana.to_accent(text)` と `AccentResult::from_analysis(furigana.analyze(text))` は同じ結果になる
+    #[must_use]
+    pub fn from_analysis(result: AnalyzeResult) -> Self {
+        Self {
+            schema_version: "1".to_string(),
+            tokens: result.tokens.into_iter().map(AccentToken::from).collect(),
+        }
+    }
 }
 
 /// accent mode の 1 token。
@@ -720,6 +731,16 @@ fn load_loanwords_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accent_from_analysis_equals_to_accent() {
+        let f = Furigana::minimal().unwrap();
+        for text in ["私は学生です", "今日は2時から", "ありがとう"] {
+            let a = serde_json::to_value(f.to_accent(text)).unwrap();
+            let b = serde_json::to_value(AccentResult::from_analysis(f.analyze(text))).unwrap();
+            assert_eq!(a, b, "{text}");
+        }
+    }
 
     /// 不変条件テスト群で使う代表入力 (漢字/かな/英数/記号/改行/tab/絵文字/
     /// astral 漢字/踊り字/混在)。
