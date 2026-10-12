@@ -2002,7 +2002,7 @@ fn comma_grouped_number(s: &str) -> Option<(usize, String)> {
     }
     let mut digits = s[..i].to_string();
     let mut groups = 0;
-    while i + 3 < b.len() + 0 && b[i] == b',' && b[i + 1..i + 4].iter().all(u8::is_ascii_digit) {
+    while i + 3 < b.len() && b[i] == b',' && b[i + 1..i + 4].iter().all(u8::is_ascii_digit) {
         digits.push_str(&s[i + 1..i + 4]);
         i += 4;
         groups += 1;

@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.5.23] - 2026-10-12
+
+### Added
+
+- **`emoji_context.toml`** (role `emoji_context`): 絵文字の文脈読み (match) だけを別 file に書ける。 読みだけの項目は `emoji.toml`、 文脈読みは `emoji_context.toml` に分ければ、 文脈読みを知らない旧 lib (0.5.19〜0.5.21) は未知の role として無視するので辞書が壊れない (下位互換)。 同じ絵文字が両方にある時は、 読み込み順に関わらず文脈読みのある方を使う
+
+### Fixed
+
+- clippy (`identity_op`) と未使用 warning (`ProtectTokenProvider::new` はテスト専用に)
+
+
 ## [0.5.22] - 2026-10-12
 
 ### Added
