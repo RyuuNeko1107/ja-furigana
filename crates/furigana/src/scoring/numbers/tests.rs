@@ -1376,6 +1376,15 @@ fn slash_pair_that_is_not_a_date_is_a_fraction() {
     assert!(reading_at("25/0", 0, "25/0").is_none());
     assert!(reading_at("50/50", 0, "50/50").is_none());
     assert!(reading_at("24/7", 0, "24/7").is_none());
+    // 24/7 だけが特別 (24 か 7 の片方だけなら分数)
+    assert_eq!(
+        reading_at("24/9", 0, "24/9").as_deref(),
+        Some("キュウブンノニジュウヨン")
+    );
+    assert_eq!(
+        reading_at("13/7", 0, "13/7").as_deref(),
+        Some("ナナブンノジュウサン")
+    );
     for input in ["No.19/20", "vol.13/20", "#13/20", "第13/20"] {
         let start = input.find(|c: char| c.is_ascii_digit()).unwrap();
         assert!(
