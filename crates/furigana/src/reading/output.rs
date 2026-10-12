@@ -28,9 +28,17 @@ fn surface_has_kanji(surface: &str) -> bool {
 /// (= 「は」 particle で UniDic が 「ワ」 を返す等) surface をそのまま使う方針。
 fn surface_is_all_kana(surface: &str) -> bool {
     !surface.is_empty()
-        && surface
-            .chars()
-            .all(|c| kana::is_hiragana_char(c) || char_class::is_katakana_loose_char(c))
+        && surface.chars().all(|c| {
+            kana::is_hiragana_char(c) || char_class::is_katakana_loose_char(c) || is_zero_width(c)
+        })
+}
+
+/// 幅ゼロの不可視文字 (入力に混ざっていても 「かなだけの表記」 の判定を妨げない)
+fn is_zero_width(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}' | '\u{200C}' | '\u{2060}' | '\u{FEFF}' | '\u{AD}'
+    )
 }
 
 /// 半角カタカナ (ｱﾘｶﾞﾄｳ) を含むか。 TTS が読めないことがあるので、 hiragana 出力では表記を維持せず読みを出す

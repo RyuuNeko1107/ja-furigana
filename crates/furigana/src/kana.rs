@@ -379,6 +379,16 @@ fn is_variation_selector(c: char) -> bool {
     matches!(c, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
 }
 
+/// 幅ゼロの不可視文字 (ZWSP / ZWNJ / WORD JOINER / BOM / soft hyphen)。 漢字の間に挟まれると辞書の語に当たらなくなる
+/// (NG ワード回避のスパムでも使われる) ので、 異体字セレクタと同じく正規化テキストからは除く。 ZWJ は絵文字の連結に使うので除かない
+#[inline]
+fn is_invisible_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}' | '\u{200C}' | '\u{2060}' | '\u{FEFF}' | '\u{AD}'
+    )
+}
+
 /// テキスト正規化: 異体字セレクタ除去 → NFKC → 異体字置換 → NFC
 ///
 /// `compat_map` の variant → canonical 変換を、NFKC の後に適用する。
@@ -545,8 +555,32 @@ pub(crate) fn normalize_text_aligned(s: &str, compat: &CompatData) -> Normalized
     let mut units: Vec<NormUnit> = Vec::new();
     for (orig_off, ch) in s.char_indices() {
         let orig_end = orig_off + ch.len_utf8();
-        if is_variation_selector(ch) {
-            // VS は norm に出さず、 直前 unit の原文範囲を伸ばして吸収する。
+        // 半角の濁点・半濁点 (ﾋﾞ → ビ): 1 文字ずつの NFKC だと結合記号が別に残って 「ひ゛」 になるので、 直前の半角カナと合成する
+        if matches!(ch, '\u{FF9E}' | '\u{FF9F}')
+            && s[..orig_off]
+                .chars()
+                .next_back()
+                .is_some_and(|c| matches!(c, '\u{FF66}'..='\u{FF9D}'))
+        {
+            let mark = if ch == '\u{FF9E}' {
+                '\u{3099}'
+            } else {
+                '\u{309A}'
+            };
+            if let Some(last) = text.chars().next_back() {
+                let composed: String = [last, mark].iter().collect::<String>().nfc().collect();
+                if composed.chars().count() == 1 {
+                    text.pop();
+                    text.push_str(&composed);
+                    if let Some(u) = units.last_mut() {
+                        u.orig.end = orig_end;
+                    }
+                    continue;
+                }
+            }
+        }
+        if is_variation_selector(ch) || is_invisible_char(ch) {
+            // VS / 不可視文字は norm に出さず、 直前 unit の原文範囲を伸ばして吸収する。
             if let Some(last) = units.last_mut() {
                 last.orig.end = orig_end;
             } else {
@@ -792,6 +826,19 @@ mod tests {
         assert_eq!(normalize_text("x²+y³", &c), "x^2+y^3");
         assert_eq!(normalize_text("(a+b)²", &c), "(a+b)^2");
         assert_eq!(normalize_text("注釈¹", &c), "注釈1");
+    }
+
+    #[test]
+    fn normalize_text_composes_halfwidth_voiced_marks_and_drops_invisible_chars() {
+        let c = CompatData::default();
+        assert_eq!(normalize_text("ﾋﾞｰﾙ", &c), "ビール");
+        assert_eq!(normalize_text("ﾊﾟｿｺﾝ", &c), "パソコン");
+        // 合成できない組 (ｱﾞ) は結合記号のまま残す
+        assert!(normalize_text("ｱﾞ", &c).starts_with('ア'));
+        // 不可視文字は除く (表示用の surface は alignment で元のまま)
+        assert_eq!(normalize_text("漢\u{200B}字", &c), "漢字");
+        assert_eq!(normalize_text("\u{FEFF}先頭", &c), "先頭");
+        assert_eq!(normalize_text("ソフト\u{AD}ハイフン", &c), "ソフトハイフン");
     }
 
     #[test]
