@@ -48,6 +48,7 @@ pub mod inspect;
 pub mod lattice;
 pub mod lindera_fallback;
 pub mod matcher;
+pub mod model_number;
 pub mod names;
 pub mod numbers;
 pub mod odoriji;

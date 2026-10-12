@@ -412,6 +412,11 @@ pub fn normalize_text(s: &str, compat: &CompatData) -> String {
 /// 単一文字が NFKC で不変なら合成の余地が無いので NFC でも不変 = 旧実装と完全に等価。
 /// 変換が要る文字だけ従来どおりの経路に落とす。
 fn normalize_char_piece_into(ch: char, compat: &CompatData, out: &mut String) {
+    // 顔文字の頬・口 (´ ¨ ¯ ˘) は NFKC で 「空白 + 結合記号」 に分解されて顔文字が崩れるので、 そのまま残す
+    if matches!(ch, '\u{B4}' | '\u{A8}' | '\u{AF}' | '\u{2D8}') {
+        out.push(ch);
+        return;
+    }
     // compat lookup の key は 1 文字。 スタック上の buffer から &str を作れば確保不要。
     let mut buf = [0u8; 4];
     let ch_str: &str = ch.encode_utf8(&mut buf);
@@ -710,6 +715,17 @@ mod tests {
         let compat = make_compat(&[]);
         // 全角数字 NFKC → 半角
         assert_eq!(normalize_text("１２３", &compat), "123");
+    }
+
+    #[test]
+    fn normalize_text_keeps_kaomoji_cheek_marks() {
+        // ´ ¨ ¯ ˘ は NFKC で 「空白 + 結合記号」 に分解されて顔文字が崩れるので残す
+        let compat = make_compat(&[]);
+        for s in ["(´・ω・`)", "¨", "¯", "˘"] {
+            assert_eq!(normalize_text(s, &compat), s);
+        }
+        // 他の互換文字は従来どおり分解される
+        assert_eq!(normalize_text("ｱ", &compat), "ア");
     }
 
     #[test]

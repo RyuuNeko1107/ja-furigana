@@ -124,7 +124,8 @@ impl<'a> Pipeline<'a> {
             input,
             Arc::clone(self.loanwords),
             unit_symbols,
-        );
+        )
+        .split_at_model_starts(&self.number_provider.model_starts(input));
         let dict_bridge = DictBridgeProvider::new(self.dict);
         let odoriji = OdorijiProvider::new();
         // 形態素 layer: 既定は Lindera の最良解 1 本、 cost engine では IPADIC lattice 全体
