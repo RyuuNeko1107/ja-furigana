@@ -3,9 +3,9 @@
 //! [`Analyzer::new`] で IPADIC を埋め込みロードし、`tokenize` で
 //! テキストを [`MorphToken`] 列に分解する。
 //!
-//! Lindera 自体の `Tokenizer` はスレッドセーフではないため、
-//! 内部で `Mutex` 保護している。複数スレッドから同時呼び出し可能だが
-//! 直列実行になることに注意。
+//! `Tokenizer::tokenize_with_lattice` は `&self` で呼べる (辞書は読み取り専用) ので、 tokenizer は
+//! スレッド間で共有し、 解析ごとの作業領域 (lattice) だけを小さなプールから借りる。
+//! 複数スレッドから同時に解析できる (並列実行)。
 
 use crate::error::{FuriganaError, Result};
 use lindera::dictionary::load_dictionary;
@@ -57,18 +57,14 @@ impl MorphToken {
 
 /// 形態素解析器
 pub struct Analyzer {
-    tokenizer: Mutex<TokenizerState>,
+    /// 読み取り専用 (解析中に書き換わらない)。 全スレッドで共有する
+    tokenizer: Tokenizer,
+    /// 使い回す lattice の置き場。 借りる・返す一瞬だけ lock を取る (解析中は持たない)
+    lattices: Mutex<Vec<Lattice>>,
 }
 
-/// Mutex で守る tokenizer 本体 + 使い回す lattice。
-///
-/// `Tokenizer::tokenize` は呼ぶたびに `Lattice` を新規確保する (短文 1 回で約 14 KiB、
-/// 解析 1 回の確保量の最大項)。 tokenizer はもともと Mutex で直列化しているので、
-/// lattice も同じ lock の下に置いて `tokenize_with_lattice` で使い回す。
-struct TokenizerState {
-    tokenizer: Tokenizer,
-    lattice: Lattice,
-}
+/// 返却を受け付ける lattice の最大数 (同時解析数の目安。 超えた分は捨てる)
+const LATTICE_POOL_MAX: usize = 64;
 
 /// これより長い入力を解析した後は lattice を捨てる (byte 数)。
 ///
@@ -119,10 +115,8 @@ impl Analyzer {
         let segmenter = Segmenter::new(Mode::Normal, dictionary, None);
         let tokenizer = Tokenizer::new(segmenter);
         Ok(Self {
-            tokenizer: Mutex::new(TokenizerState {
-                tokenizer,
-                lattice: Lattice::default(),
-            }),
+            tokenizer,
+            lattices: Mutex::new(Vec::new()),
         })
     }
 
@@ -150,14 +144,32 @@ impl Analyzer {
     /// IPADIC 辞書本体 (単語コスト / 連接コスト / 品詞) を借りて `f` を実行する。
     ///
     /// コスト lattice engine ([`crate::scoring::lattice`]) が単語列挙と連接コストに使う。
-    /// Tokenizer と同じ Mutex 下で借りるので解析中は tokenize と直列化されるが、
-    /// 元々 tokenize も同じ lock を取るので 1 解析あたりの lock 回数は変わらない。
+    /// 辞書は読み取り専用で共有しているので lock は要らない (他の解析と並列に動く)。
     pub(crate) fn with_dictionary<R>(&self, f: impl FnOnce(&Dictionary) -> R) -> R {
-        let guard = self.tokenizer.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("Tokenizer mutex poisoned; recovering lock and continuing");
-            poisoned.into_inner()
-        });
-        f(&guard.tokenizer.segmenter.dictionary)
+        f(&self.tokenizer.segmenter.dictionary)
+    }
+
+    /// lattice を 1 つ借りる (無ければ作る)。 poison は握り潰さず回復して続ける
+    fn take_lattice(&self) -> Lattice {
+        self.lattices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .pop()
+            .unwrap_or_default()
+    }
+
+    /// 借りた lattice を返す。 巨大入力の後は捨てる (容量が伸びたまま常駐しないように)
+    fn return_lattice(&self, lattice: Lattice, text_len: usize) {
+        if text_len > LATTICE_RETAIN_MAX_BYTES {
+            return;
+        }
+        let mut pool = self
+            .lattices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if pool.len() < LATTICE_POOL_MAX {
+            pool.push(lattice);
+        }
     }
 
     /// crate 内部用の軽量 tokenize: surface / reading / 固有名詞判定だけを返す。
@@ -229,20 +241,9 @@ impl Analyzer {
             return Vec::new();
         }
 
-        // poison 時は lock を握り潰して surface-only に倒すと、 以降全 request が
-        // 恒久 degrade (形態素解析なし) に固定されてしまう。 poison は別 thread の
-        // panic 由来で、 `Tokenizer::tokenize` は `&self` (read-only、 内部可変は
-        // Mutex で排他) なので、 lock を奪い返して継続するのが安全 (恒久 degrade 回避)。
-        let mut guard = self.tokenizer.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("Tokenizer mutex poisoned; recovering lock and continuing");
-            poisoned.into_inner()
-        });
-        let state = &mut *guard;
+        let mut lattice = self.take_lattice();
 
-        let result = match state
-            .tokenizer
-            .tokenize_with_lattice(text, &mut state.lattice)
-        {
+        let result = match self.tokenizer.tokenize_with_lattice(text, &mut lattice) {
             Ok(mut tokens) => tokens
                 .iter_mut()
                 .map(|t| {
@@ -257,9 +258,7 @@ impl Analyzer {
                 vec![fallback(text)]
             }
         };
-        if text.len() > LATTICE_RETAIN_MAX_BYTES {
-            state.lattice = Lattice::default();
-        }
+        self.return_lattice(lattice, text.len());
         result
     }
 }
@@ -387,8 +386,8 @@ mod tests {
         // 別 thread で tokenizer lock 保持中に panic させ mutex を poison させる。
         let a2 = Arc::clone(&a);
         let handle = std::thread::spawn(move || {
-            let _guard = a2.tokenizer.lock().unwrap();
-            panic!("intentional panic while holding tokenizer lock");
+            let _guard = a2.lattices.lock().unwrap();
+            panic!("intentional panic while holding lattice pool lock");
         });
         assert!(handle.join().is_err(), "panic で poison したはず");
         // poison 後も tokenize は recover して継続する (恒久 degrade に陥らない)。
@@ -398,5 +397,41 @@ mod tests {
             tokens.len() > 1,
             "poison から回復して形態素解析が継続するはず (surface-only ではない): {tokens:?}"
         );
+    }
+
+    #[test]
+    fn analyzer_is_shareable_across_threads() {
+        fn assert_sync<T: Send + Sync>() {}
+        assert_sync::<Analyzer>();
+    }
+
+    /// 8 スレッドが同時に解析しても、 1 スレッドで解析した結果と全部一致する (共有 tokenizer + lattice プール)
+    #[test]
+    fn concurrent_tokenize_matches_sequential() {
+        use std::sync::Arc;
+        let a = Arc::new(analyzer());
+        let inputs = [
+            "私は学生です",
+            "今日は雨が降っています",
+            "東京特許許可局",
+            "ありがとうございました",
+            "猫が好きな人",
+        ];
+        let expected: Vec<Vec<MorphToken>> = inputs.iter().map(|t| a.tokenize(t)).collect();
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let a = Arc::clone(&a);
+                let expected = expected.clone();
+                std::thread::spawn(move || {
+                    for round in 0..200 {
+                        let k = (i + round) % inputs.len();
+                        assert_eq!(a.tokenize(inputs[k]), expected[k]);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
     }
 }
