@@ -37,7 +37,7 @@ TTS 音声合成の前段やふりがな補助での使用を想定。
 「不確かなときは形態素解析の素朴な結果に fall back」「辞書 hit したものは確実に固定」 という
 **保守的な決定論**。 コミュニティ PR で精度が上がる設計。
 
-> **Status**: 0.5.7 (2026-10-12、 0.1.0 stable cut は 2026-05-12)。 crates.io で 4 crate を公開:
+> **Status**: 0.5.24 (2026-10-13、 0.1.0 stable cut は 2026-05-12)。 crates.io で 4 crate を公開:
 > `ja-furigana` (lib) / `ja-furigana-cli` (`furigana` バイナリ + HTTP server) /
 > `ja-furigana-voicevox` (VOICEVOX kana 記法 adapter) / `ja-furigana-aquestalk`
 > (本家 AquesTalk 音声記号列 adapter)。 各 release の内容は [CHANGELOG.md](./CHANGELOG.md)。
