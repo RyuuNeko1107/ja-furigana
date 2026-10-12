@@ -169,12 +169,24 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
         }
     }
 
-    // 絵文字 (連続範囲を 1 つの token に集約)
+    // 絵文字 (連続範囲を 1 つの token に集約)。 VS16 / 肌色 / ZWJ / keycap (1️⃣) / 国旗も同じ token に含める
     let mut current_emoji_start: Option<usize> = None;
     let mut current_emoji_end: usize = 0;
-    for (idx, c) in input.char_indices() {
+    let chars: Vec<(usize, char)> = input.char_indices().collect();
+    for (i, &(idx, c)) in chars.iter().enumerate() {
         let char_end = idx + c.len_utf8();
-        if is_emoji_char(c) {
+        let keycap_base = matches!(c, '0'..='9' | '#' | '*')
+            && chars
+                .get(i + 1)
+                .is_some_and(|&(_, n)| n == '\u{20E3}' || n == '\u{FE0F}')
+            && chars
+                .get(i + 1)
+                .map(|&(_, n)| {
+                    n == '\u{20E3}' || chars.get(i + 2).is_some_and(|&(_, m)| m == '\u{20E3}')
+                })
+                .unwrap_or(false);
+        let joiner_in_run = current_emoji_start.is_some() && crate::char_class::is_emoji_joiner(c);
+        if is_emoji_char(c) || keycap_base || joiner_in_run {
             if current_emoji_start.is_none() {
                 current_emoji_start = Some(idx);
             }
@@ -209,6 +221,170 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
     filtered
 }
 
+// ─── 絵文字の読み ───────────────────────────────────────────────────────────
+
+/// 絵文字の連なりを 1 まとまり (cluster) ごとに分ける。 1 つの cluster は
+/// 基本の絵文字 + (VS16 / 肌色 / keycap / タグ) と、 ZWJ で繋いだ続きの絵文字、 国旗 (地域指示記号 2 つ)。
+fn emoji_clusters(run: &str) -> Vec<&str> {
+    let chars: Vec<(usize, char)> = run.char_indices().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let start = chars[i].0;
+        let mut j = i + 1;
+        if char_class::is_regional_indicator(chars[i].1)
+            && chars
+                .get(j)
+                .is_some_and(|&(_, c)| char_class::is_regional_indicator(c))
+        {
+            j += 1;
+        }
+        loop {
+            while chars
+                .get(j)
+                .is_some_and(|&(_, c)| char_class::is_emoji_joiner(c) && c != '\u{200D}')
+            {
+                j += 1;
+            }
+            if chars.get(j).is_some_and(|&(_, c)| c == '\u{200D}') {
+                j += 1;
+                if chars.get(j).is_some() {
+                    j += 1;
+                    continue;
+                }
+            }
+            break;
+        }
+        let end = chars.get(j).map_or(run.len(), |&(idx, _)| idx);
+        out.push(&run[start..end]);
+        i = j;
+    }
+    out
+}
+
+/// 絵文字の連なりの読み。 cluster ごとに 完全一致 → VS16 と肌色を除いた形 の順で表を引く。
+///
+/// 表の値は `読み|別表記|別表記…` (別表記は省略可)。
+/// - 読みが空 (`""`) の絵文字は常に 「読まない」
+/// - 先頭を `!` にすると、 前後を問わず常に読む (`"!めざましどけい"`)
+/// - 読みがある絵文字 (名詞: ⏰ = めざましどけい) は、 文の中で名詞として使われている時だけ読む。 見出し・文末・語の後ろに
+///   添える装飾 (`アイス🍨楽しみー` / `🌸本日の配信🌸`) まで読むと 「アイスアイス」 になるため、 次の全部を満たす時:
+///   1. 直後が **格助詞** (を が は の に で と も へ や)、 または **語が続く** (かな・漢字・カタカナ: `🐯さんが` / `⚾見に行く`)。
+///      語が続く場合は、 行頭・空白・開き括弧の直後ではなく (見出しの装飾)、 直前が文末の形 (ます・です・た・よ・ね…) でもない
+///   2. 直前が名詞 (漢字・カタカナ・英数字・絵文字) ではない (`ラーメン🍜が` / `猫🐱が` はその語の装飾)。 綴りの揺れに頼らない
+///   3. 直前・直後の語が、 同じ読み・別表記ではない (`ねこ🐱` / `🦀蟹座`。 別表記は `|` の後ろ)
+///   4. 行末に同じ絵文字がもう一度付いていない (`🐸…🐸` の挟み装飾)
+/// - 載っていない cluster は表記のまま。 表が空・1 つも読みに変わらなかった時は `None` (= 全体を表記のまま)
+fn emoji_reading(
+    run: &str,
+    table: &HashMap<String, String>,
+    prev_text: &str,
+    after_text: &str,
+) -> Option<String> {
+    if table.is_empty() {
+        return None;
+    }
+    let next = after_text.chars().next();
+    let particle_follows = next.is_some_and(|c| "をがはのにでともへや".contains(c));
+    // 語が続く (かな・漢字・カタカナ)。 数字・英字・記号・空白・文末は装飾とみなす
+    let word_follows = next.is_some_and(|c| {
+        char_class::is_kanji_char(c)
+            || char_class::is_hiragana_char(c)
+            || (char_class::is_katakana_loose_char(c) && c != 'ー')
+    });
+    let prev_char = prev_text.chars().next_back();
+    // 行頭・空白・開き括弧の直後 = 見出しの装飾
+    let prev_at_boundary =
+        prev_char.is_none_or(|c| c.is_whitespace() || "【「『（(［[<＜・、。!！?？…".contains(c));
+    // 直前が名詞 (漢字・カタカナ・英数字・絵文字) なら、 その語に添えた装飾
+    let prev_is_noun = prev_char.is_some_and(|c| {
+        char_class::is_kanji_char(c)
+            || (char_class::is_katakana_loose_char(c) && c != 'ー')
+            || (c.is_alphanumeric() && !char_class::is_hiragana_char(c))
+            || is_emoji_char(c)
+    });
+    // 直前が文末の形なら、 次の文との区切りに置いた装飾
+    let prev_is_sentence_end = [
+        "ます",
+        "です",
+        "した",
+        "ない",
+        "ました",
+        "でした",
+        "ください",
+        "よ",
+        "ね",
+        "わ",
+        "ぞ",
+        "ぜ",
+        "か",
+        "な",
+        "さ",
+        "い",
+        "う",
+        "た",
+        "だ",
+        "る",
+        "。",
+        "!",
+        "！",
+        "?",
+        "？",
+        "…",
+        "w",
+        "ｗ",
+    ]
+    .iter()
+    .any(|e| prev_text.ends_with(e));
+    let prev_hira = crate::kana::kata_to_hira(prev_text);
+    let after_hira = crate::kana::kata_to_hira(after_text);
+    let tail = after_text.trim_end();
+    let clusters = emoji_clusters(run);
+    let last = clusters.len().saturating_sub(1);
+    let mut any = false;
+    let mut out = String::new();
+    for (i, cluster) in clusters.into_iter().enumerate() {
+        let hit = table
+            .get(cluster)
+            .or_else(|| table.get(&crate::rules::emoji::strip_variation(cluster)));
+        let Some(value) = hit else {
+            out.push_str(cluster);
+            continue;
+        };
+        if value.is_empty() {
+            any = true;
+            continue;
+        }
+        if let Some(always) = value.strip_prefix('!') {
+            any = true;
+            out.push_str(always.split('|').next().unwrap_or(""));
+            continue;
+        }
+        let mut parts = value.split('|');
+        let reading = parts.next().unwrap_or("");
+        let words: Vec<String> = std::iter::once(reading)
+            .chain(parts)
+            .filter(|w| !w.is_empty())
+            .map(crate::kana::kata_to_hira)
+            .collect();
+        // 連なりの先頭は直前の語、 末尾は直後の語と同じなら装飾 (ねこ🐱 / 🦀蟹座)
+        let duplicates_neighbour = (i == 0
+            && words.iter().any(|w| prev_hira.ends_with(w.as_str())))
+            || (i == last && words.iter().any(|w| after_hira.starts_with(w.as_str())));
+        // 行末に同じ絵文字がもう一度ある挟み装飾 (🐸…🐸)
+        let paired = i == last && !tail.is_empty() && tail.ends_with(cluster);
+        let in_sentence =
+            particle_follows || (word_follows && !prev_at_boundary && !prev_is_sentence_end);
+        if i == last && in_sentence && !prev_is_noun && !duplicates_neighbour && !paired {
+            any = true;
+            out.push_str(reading);
+        } else {
+            out.push_str(cluster);
+        }
+    }
+    any.then_some(out)
+}
+
 // ─── ProtectTokenProvider ────────────────────────────────────────────────────
 
 /// 保護 token を candidate として供給する [`CandidateProvider`] 実装。
@@ -221,14 +397,23 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
 #[derive(Debug, Clone)]
 pub struct ProtectTokenProvider {
     tokens: Vec<ProtectedToken>,
+    /// 絵文字の読み (emoji.toml)。 空なら絵文字は表記のまま通す
+    emoji: Arc<HashMap<String, String>>,
 }
 
 impl ProtectTokenProvider {
     /// 入力 string を scan して保護 token を抽出、 provider を構築する。
     #[must_use]
     pub fn new(input: &str) -> Self {
+        Self::with_emoji(input, Arc::new(HashMap::new()))
+    }
+
+    /// 絵文字の読み表つきで構築する。 表のキーは [`crate::rules::emoji::strip_variation`] を通した形で持つこと
+    #[must_use]
+    pub fn with_emoji(input: &str, emoji: Arc<HashMap<String, String>>) -> Self {
         Self {
             tokens: extract_protected_tokens(input),
+            emoji,
         }
     }
 
@@ -252,11 +437,17 @@ impl CandidateProvider for ProtectTokenProvider {
                 let surface = &ctx.input[token.range.clone()];
                 let char_count = surface.chars().count();
                 let length = u8::try_from(char_count).unwrap_or(u8::MAX);
-                // 顔文字は読みを空にして丸ごと除外、 それ以外は surface のまま素通し
-                let reading = if token.kind == ProtectedKind::Kaomoji {
-                    ""
-                } else {
-                    surface
+                // 顔文字は読みを空にして丸ごと除外、 絵文字は辞書の読み (無ければ表記のまま)、 それ以外は表記のまま素通し
+                let reading: std::borrow::Cow<'_, str> = match token.kind {
+                    ProtectedKind::Kaomoji => "".into(),
+                    ProtectedKind::Emoji => emoji_reading(
+                        surface,
+                        &self.emoji,
+                        &ctx.input[..token.range.start],
+                        &ctx.input[token.range.end..],
+                    )
+                    .map_or_else(|| surface.into(), Into::into),
+                    _ => surface.into(),
                 };
                 out.push(RawCandidate::new(
                     reading,
@@ -1333,6 +1524,119 @@ mod tests {
             .into_iter()
             .map(|c| (c.surface.to_string(), c.reading.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn emoji_clusters_split_skin_tone_zwj_flag_and_keycap() {
+        assert_eq!(emoji_clusters("😂😂"), ["😂", "😂"]);
+        assert_eq!(emoji_clusters("👍\u{1F3FD}🙏"), ["👍\u{1F3FD}", "🙏"]);
+        assert_eq!(emoji_clusters("⏰\u{FE0F}🔥"), ["⏰\u{FE0F}", "🔥"]);
+        // ZWJ で繋いだ家族は 1 つ
+        let family = "👨\u{200D}👩\u{200D}👧";
+        assert_eq!(emoji_clusters(family), [family]);
+        // 国旗は地域指示記号 2 つで 1 つ
+        assert_eq!(emoji_clusters("🇯🇵🇺🇸"), ["🇯🇵", "🇺🇸"]);
+        // keycap
+        assert_eq!(
+            emoji_clusters("1\u{FE0F}\u{20E3}2\u{FE0F}\u{20E3}"),
+            ["1\u{FE0F}\u{20E3}", "2\u{FE0F}\u{20E3}"]
+        );
+    }
+
+    #[test]
+    fn emoji_reading_uses_table_with_fallbacks() {
+        let mut t = HashMap::new();
+        t.insert("⏰".to_string(), "めざましどけい|目覚まし|時計".to_string());
+        t.insert("👍".to_string(), "いいね".to_string());
+        t.insert("😂".to_string(), String::new());
+        t.insert("🍣".to_string(), "!すし".to_string());
+        t.insert("🍜".to_string(), "ラーメン|麺".to_string());
+        t.insert("🦀".to_string(), "かに|蟹".to_string());
+        let wo = "を食べる";
+        // VS16 / 肌色つきでも基本形で引く
+        assert_eq!(
+            emoji_reading("⏰\u{FE0F}", &t, "今日は", wo).as_deref(),
+            Some("めざましどけい")
+        );
+        assert_eq!(
+            emoji_reading("👍\u{1F3FD}", &t, "", wo).as_deref(),
+            Some("いいね")
+        );
+        // 直後が助詞でも語でもなければ (文末・句読点・空白・数字・記号) 装飾 (None = 1 つも読みに変わらない)
+        assert_eq!(emoji_reading("⏰", &t, "今日は", ""), None);
+        assert_eq!(emoji_reading("⏰", &t, "今日は", "。"), None);
+        assert_eq!(emoji_reading("⏰", &t, "今日は", " 続き"), None);
+        assert_eq!(emoji_reading("⏰", &t, "今日は", "12時"), None);
+        assert_eq!(emoji_reading("⏰", &t, "今日は", "✨"), None);
+        // 語が続く時も読む (⚾見に行く / 🎧ながら)。 ただし行頭・空白・開き括弧の直後 (見出し) や、 直前が文末の形なら装飾
+        assert_eq!(
+            emoji_reading("⏰", &t, "今日は", "起きた").as_deref(),
+            Some("めざましどけい")
+        );
+        assert_eq!(emoji_reading("⏰", &t, "", "起きた"), None);
+        assert_eq!(emoji_reading("⏰", &t, "【", "起きた"), None);
+        assert_eq!(
+            emoji_reading("⏰", &t, "ありがとうございます", "今日は"),
+            None
+        );
+        assert_eq!(emoji_reading("⏰", &t, "楽しかったね", "今日は"), None);
+        // 助詞が続く時は行頭でも読む
+        assert_eq!(
+            emoji_reading("⏰", &t, "", "を止める").as_deref(),
+            Some("めざましどけい")
+        );
+        // 先頭 ! は常に読む
+        assert_eq!(emoji_reading("🍣", &t, "", "").as_deref(), Some("すし"));
+        // 直前が名詞 (漢字・カタカナ・英数字・絵文字) なら、 その語に添えた装飾 (綴りに関係なく)
+        assert_eq!(emoji_reading("🍜", &t, "ラーメン", wo), None);
+        assert_eq!(emoji_reading("🍜", &t, "拉麺", wo), None);
+        assert_eq!(emoji_reading("🍜", &t, "ramen", wo), None);
+        assert_eq!(emoji_reading("🍜", &t, "3", wo), None);
+        assert_eq!(emoji_reading("🍜", &t, "🍙", wo), None);
+        // 直前が助詞・句読点・空白なら名詞として読む
+        assert_eq!(
+            emoji_reading("🍜", &t, "昼は", wo).as_deref(),
+            Some("ラーメン")
+        );
+        assert_eq!(
+            emoji_reading("🍜", &t, "昼、", wo).as_deref(),
+            Some("ラーメン")
+        );
+        assert_eq!(
+            emoji_reading("🍜", &t, "昼 ", wo).as_deref(),
+            Some("ラーメン")
+        );
+        // 直前・直後の語が同じ読み・別表記なら装飾 (ひらがな・別表記)
+        assert_eq!(emoji_reading("🍜", &t, "らーめん", wo), None);
+        assert_eq!(emoji_reading("⏰", &t, "あさのめざましどけい", wo), None);
+        assert_eq!(emoji_reading("🦀", &t, "今日は", "蟹座の人"), None);
+        assert_eq!(emoji_reading("🦀", &t, "今日は", "カニ料理を"), None);
+        // 行末に同じ絵文字がもう一度ある挟み装飾
+        assert_eq!(emoji_reading("🍜", &t, "昼は", "を食べた🍜"), None);
+        // 空の読み = 常に読まない。 載っていない絵文字は表記のまま混ぜる
+        assert_eq!(emoji_reading("😂😂", &t, "", "").as_deref(), Some(""));
+        assert_eq!(emoji_reading("⏰🔥", &t, "", ""), None);
+        assert_eq!(
+            emoji_reading("⏰🔥😂", &t, "今日は", "を").as_deref(),
+            Some("⏰🔥")
+        );
+        // 1 つも当たらない / 表が空なら None (表記のまま)
+        assert_eq!(emoji_reading("🔥", &t, "今日は", wo), None);
+        assert_eq!(emoji_reading("⏰", &HashMap::new(), "今日は", wo), None);
+    }
+
+    #[test]
+    fn emoji_run_is_extracted_as_one_token_including_joiners_and_misc_symbols() {
+        // ⏰ (U+23F0) と VS16、 肌色、 国旗も絵文字の一部
+        for emoji in ["⏰\u{FE0F}", "👍\u{1F3FD}", "🇯🇵", "1\u{FE0F}\u{20E3}", "⭐"] {
+            let input = format!("あ{emoji}い");
+            let tokens = extract_protected_tokens(&input);
+            assert_eq!(tokens.len(), 1, "{emoji:?}");
+            assert_eq!(tokens[0].kind, ProtectedKind::Emoji, "{emoji:?}");
+            assert_eq!(&input[tokens[0].range.clone()], emoji, "{emoji:?}");
+        }
+        // 普通の数字は絵文字にならない
+        assert!(extract_protected_tokens("123").is_empty());
     }
 
     #[test]

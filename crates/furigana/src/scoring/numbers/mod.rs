@@ -152,6 +152,8 @@ pub struct NumberCandidateProvider {
     models: CompiledModels,
     /// 辞書 (context_cues.toml) で足された `N/M` の手がかり語
     slash_cues: SlashCues,
+    /// 絵文字の読み (emoji.toml)。 キーは 完全一致用の原形と、 VS16 / 肌色を除いた形の両方
+    emoji: std::sync::Arc<std::collections::HashMap<String, String>>,
     /// 伏せ字の図形記号の直後に付く敬称・肩書き (組み込み + 辞書)
     honorifics: Vec<String>,
 }
@@ -216,6 +218,7 @@ impl NumberCandidateProvider {
             slash_units,
             models: CompiledModels::new(&rules.models),
             slash_cues: SlashCues::new(&rules.context_cues.slash_pair),
+            emoji: std::sync::Arc::new(build_emoji_table(&rules.emoji)),
             honorifics: BUILTIN_HONORIFICS
                 .iter()
                 .map(ToString::to_string)
@@ -238,6 +241,12 @@ impl NumberCandidateProvider {
     #[must_use]
     pub fn unit_symbols(&self) -> std::sync::Arc<std::collections::HashSet<String>> {
         std::sync::Arc::clone(&self.unit_symbols)
+    }
+
+    /// 絵文字の読み表 (保護 token の読みに使う)
+    #[must_use]
+    pub(crate) fn emoji_table(&self) -> std::sync::Arc<std::collections::HashMap<String, String>> {
+        std::sync::Arc::clone(&self.emoji)
     }
 
     fn make(
@@ -2004,4 +2013,15 @@ fn comma_grouped_number(s: &str) -> Option<(usize, String)> {
         return None;
     }
     Some((i, digits))
+}
+
+/// emoji.toml の表を引き用に整える: 書かれたキーそのまま (肌色つき専用の読みなど) と、
+/// VS16 / 肌色を除いた形 (⏰ と ⏰️ を同じに引く) の両方を持つ。 除いた形は、 同じキーが明示されていれば上書きしない
+fn build_emoji_table(data: &crate::rules::EmojiData) -> std::collections::HashMap<String, String> {
+    let mut table = data.entries.clone();
+    for (k, v) in &data.entries {
+        let stripped = crate::rules::emoji::strip_variation(k);
+        table.entry(stripped).or_insert_with(|| v.clone());
+    }
+    table
 }

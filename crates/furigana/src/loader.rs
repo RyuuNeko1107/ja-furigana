@@ -207,6 +207,7 @@ fn infer_role_from_path(path: &Path) -> Option<&'static str> {
         "models.toml" => Some("models"),
         "context_cues.toml" => Some("context_cues"),
         "symbols.toml" => Some("symbols"),
+        "emoji.toml" => Some("emoji"),
         "numeric_phrases.toml" => Some("numeric_phrases"),
         "compat.toml" | "compat_map.toml" => Some("compat"),
         "postprocess.toml" => Some("postprocess"),
@@ -388,6 +389,10 @@ pub fn load_rules_dir<P: AsRef<Path>>(dir: P) -> Result<RulesData> {
             Some("scales") => data.scales = parse_toml(content, from)?,
             Some("units") => data.units = parse_toml(content, from)?,
             Some("symbols") => data.symbols = parse_toml(content, from)?,
+            Some("emoji") => {
+                let part: crate::rules::EmojiData = parse_toml(content, from)?;
+                data.emoji.merge(part);
+            }
             Some("models") => {
                 let part: ModelsData = parse_toml(content, from)?;
                 part.validate()

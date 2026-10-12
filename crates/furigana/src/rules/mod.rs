@@ -9,6 +9,7 @@ pub mod compat;
 pub mod context_cues;
 pub mod counters;
 pub mod days;
+pub mod emoji;
 pub mod models;
 pub mod numeric_phrases;
 pub mod postprocess;
@@ -20,6 +21,7 @@ pub use compat::CompatData;
 pub use context_cues::{ContextCuesData, PlaceholderCues, SlashPairCues};
 pub use counters::{CounterMode, CounterRule, CountersData, EuphonicRule, KanaReplacement};
 pub use days::DaysData;
+pub use emoji::EmojiData;
 pub use models::{ModelSpec, ModelsData};
 pub use numeric_phrases::NumericPhrasesData;
 pub use postprocess::{PostProcessData, PostProcessRuleSpec, PostProcessSpec};
@@ -46,6 +48,8 @@ pub struct RulesData {
     pub symbols: SymbolsData,
     /// 型番パターン (models.toml)
     pub models: ModelsData,
+    /// 絵文字の読み (emoji.toml)
+    pub emoji: EmojiData,
     /// 文脈の手がかり語 (context_cues.toml)
     pub context_cues: ContextCuesData,
     /// 例外語句 (numeric_phrases.toml)

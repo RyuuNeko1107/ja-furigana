@@ -118,7 +118,7 @@ impl<'a> Pipeline<'a> {
         input: &str,
         run: impl for<'p> FnOnce(&ScoringContext<'p>, &[&'p dyn CandidateProvider]) -> R,
     ) -> R {
-        let protect = ProtectTokenProvider::new(input);
+        let protect = ProtectTokenProvider::with_emoji(input, self.number_provider.emoji_table());
         let unit_symbols = self.number_provider.unit_symbols();
         let alphabet = AlphabetPassthroughProvider::with_units(
             input,
