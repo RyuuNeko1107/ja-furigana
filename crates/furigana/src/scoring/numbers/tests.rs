@@ -1371,6 +1371,108 @@ fn slash_pair_is_a_fraction_before_a_measure_word() {
 }
 
 #[test]
+fn slash_pair_is_a_date_with_date_cues_even_when_both_are_under_13() {
+    // 曜日の括弧 / 時刻 / まで・から・発売 / 誕生日
+    for (input, want) in [
+        ("10/11(日)", "ジュウガツジュウイチニチ"),
+        ("10/11（日）", "ジュウガツジュウイチニチ"),
+        ("10/1(木)", "ジュウガツツイタチ"),
+        ("10/5 19:00", "ジュウガツイツカ"),
+        ("6/5まで", "ロクガツイツカ"),
+        ("6/10から発売", "ロクガツトオカ"),
+        ("5/3誕生日", "ゴガツミッカ"),
+    ] {
+        let surface = &input[..input.find(['(', '（', ' ', 'ま', 'か', '誕']).unwrap()];
+        assert_eq!(
+            reading_at(input, 0, surface).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
+    // 直前の言い方
+    assert_eq!(
+        reading_at("本日10/5は", "本日".len(), "10/5").as_deref(),
+        Some("ジュウガツイツカ")
+    );
+}
+
+#[test]
+fn slash_pair_range_of_dates_reads_both_ends() {
+    assert_eq!(
+        reading_at("6/26〜7/2は", 0, "6/26").as_deref(),
+        Some("ロクガツニジュウロクニチ")
+    );
+    assert_eq!(
+        reading_at("6/26〜7/2は", "6/26〜".len(), "7/2").as_deref(),
+        Some("シチガツフツカ")
+    );
+    // 戻る組 (1/3から1/2) は分数どうしなので触らない
+    assert!(reading_at("1/3から1/2やない", 0, "1/3").is_none());
+}
+
+#[test]
+fn slash_pair_fraction_cues_beat_date_rule() {
+    // 直前の HP / 確率 は分数 (12/25 でも日付にしない)
+    assert_eq!(
+        reading_at("HP 12/25", "HP ".len(), "12/25").as_deref(),
+        Some("ニジュウゴブンノジュウニ")
+    );
+    assert_eq!(
+        reading_at("確率1/3", "確率".len(), "1/3").as_deref(),
+        Some("サンブンノイチ")
+    );
+    assert_eq!(
+        reading_at("9/16くらい", 0, "9/16").as_deref(),
+        Some("ジュウロクブンノキュウ")
+    );
+}
+
+#[test]
+fn slash_pair_without_cues_stays_untouched() {
+    for input in [
+        "12/12",
+        "5/12",
+        "人生の1/3は睡眠",
+        "昨日1/2だった",
+        "No.19/20",
+        "13/54人",
+    ] {
+        let start = input.find(|c: char| c.is_ascii_digit()).unwrap();
+        let end = start
+            + input[start..]
+                .find(|c: char| !c.is_ascii_digit() && c != '/')
+                .unwrap_or(input.len() - start);
+        assert!(
+            reading_at(input, start, &input[start..end]).is_none(),
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn slash_pair_uses_the_topic_of_the_sentence() {
+    // 日付の話題の語があり、 日付の書き方 (文頭・空白・括弧の直後) なら日付
+    assert_eq!(
+        reading_at("10/4の配信予定", 0, "10/4").as_deref(),
+        Some("ジュウガツヨッカ")
+    );
+    assert_eq!(
+        reading_at("【10/11新作サンプル】", "【".len(), "10/11").as_deref(),
+        Some("ジュウガツジュウイチニチ")
+    );
+    assert_eq!(
+        reading_at("9/6にかえってくる", 0, "9/6").as_deref(),
+        Some("クガツムイカ")
+    );
+    // 分数の話題の語 / 分数と紛れる組 / 手がかりなしは触らない
+    assert!(reading_at("スコア 10/4の配信", "スコア ".len(), "10/4").is_none());
+    assert!(reading_at("【1/2】配信予定", "【".len(), "1/2").is_none());
+    assert!(reading_at("3/3だよ配信予定", 0, "3/3").is_none());
+    assert!(reading_at("人生の1/3は睡眠", "人生の".len(), "1/3").is_none());
+    assert!(reading_at("らんま1/2を見て予定", "らんま".len(), "1/2").is_none());
+}
+
+#[test]
 fn slash_pair_ignores_longer_chains() {
     let p = provider();
     assert!(find(&p.candidates_vec(&ctx("2024/10/25"), 5), "10/25").is_none());

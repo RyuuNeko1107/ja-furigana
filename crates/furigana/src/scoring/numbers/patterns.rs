@@ -101,6 +101,70 @@ pub(super) static SLASH_PAIR_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"([0-9]{1,2})/([0-9]{1,2})").expect("scoring SLASH_PAIR regex build failed")
 });
 
+/// `N/M` の直後が日付の手がかり: 曜日の括弧 `(日)` / `（月・祝）`、 時刻 `20:00` / `20時`、 日付の言い方 (まで / から / 発売 …)
+pub(super) static SLASH_DATE_AFTER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^(?:[ 　]?[(（][月火水木金土日祝]|[ 　]?[0-9]{1,2}(?::[0-9]{2}|時)|まで|から|より|発売|開催|配信|開始|開幕|公開|実施|予定|締切|締め切り|〆|終了|スタート|誕生日|記念日|時点|更新)",
+    )
+    .expect("scoring SLASH_DATE_AFTER regex build failed")
+});
+
+/// `N/M` の直後が分数の手がかり
+pub(super) static SLASH_FRACTION_AFTER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(?:サイズ|倍|割|以上|以下|程度|ほど|くらい|ぐらい|弱|強|ずつ)")
+        .expect("scoring SLASH_FRACTION_AFTER regex build failed")
+});
+
+/// `N/M` の直前が分数の手がかり (HP1/10 / 確率 1/3)。 数値の途中は除く
+pub(super) static SLASH_FRACTION_BEFORE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:HP|MP|SP|LP|hp|mp|sp|確率|割合|体力|ゲージ|ライフ)[ 　]?$")
+        .expect("scoring SLASH_FRACTION_BEFORE regex build failed")
+});
+
+/// `N/M` の直前が日付の手がかり (本日 / 明日 / 締切 / 発売日 …)
+pub(super) static SLASH_DATE_BEFORE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:本日|明日|明後日|来月|今月|締切|締め切り|〆切|期限|発売日|開催日|配信日|更新日|公開日|開始日|予定日|日程|日時)[:：は ]?[ 　]?$")
+        .expect("scoring SLASH_DATE_BEFORE regex build failed")
+});
+
+/// 範囲 `N/M〜N/M` の途中: 直前が `N/M〜` (後ろの日付)
+pub(super) static SLASH_RANGE_BEFORE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"([0-9]{1,2})/([0-9]{1,2})(?:\([^)]*\)|（[^）]*）)?[ 　]?[〜~～\-－ー–][ 　]?$")
+        .expect("scoring SLASH_RANGE_BEFORE regex build failed")
+});
+
+/// 範囲 `N/M〜N/M` の先頭: 直後が `〜N/M`
+pub(super) static SLASH_RANGE_AFTER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(?:\([^)]*\)|（[^）]*）)?[ 　]?[〜~～\-－ー–][ 　]?([0-9]{1,2})/([0-9]{1,2})(?:[^0-9/]|$)")
+        .expect("scoring SLASH_RANGE_AFTER regex build failed")
+});
+
+/// 文全体に日付の話題の語がある (配信 / イベント / 予定 / 発売 …)。 `N/M` の手がかりが近くに無い時の判定に使う
+pub(super) static SLASH_SENTENCE_DATE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        "配信|ライブ|イベント|予定|発売|開催|通販|お品書き|試合|締切|〆切|スケジュール|日程|曜日|放送|公開|リリース|アップデート|メンテ|開幕|開始|終了|誕生日|記念日|ガチャ|限定|コミケ|参加|出演|チケット|販売|受付|応募|当選|ご案内|お知らせ|開館|休業|営業|開店",
+    )
+    .expect("scoring SLASH_SENTENCE_DATE regex build failed")
+});
+
+/// 文全体に分数・得点・進捗の話題の語がある。 あれば文脈だけでは日付にしない
+pub(super) static SLASH_SENTENCE_FRACTION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        "(?i)スコア|score|HP|MP|ページ|page|回目|分の|割|倍|進捗|wordle|勝|敗|ターン|達成|中[0-9]|点|確率|割合|ダメージ|%|％|スケール|サイズ|第[0-9]|比率|成功|失敗|残り|完了|クリア|リスト|ヒット|打率|安打|奪三振",
+    )
+    .expect("scoring SLASH_SENTENCE_FRACTION regex build failed")
+});
+
+/// `N/M` が文頭・空白・括弧の直後で、 直後が助詞・かな漢字・絵文字 (単独の日付の書き方)
+pub(super) static SLASH_STANDALONE_BEFORE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?:^|[ 　\n【\[［「『、。!！?？・はがもをでにへと])$")
+        .expect("scoring SLASH_STANDALONE_BEFORE regex build failed")
+});
+pub(super) static SLASH_STANDALONE_AFTER_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(?:[ 　]?[\p{Hiragana}\p{Katakana}\p{Han}\p{Extended_Pictographic}]|[ 　]?$)")
+        .expect("scoring SLASH_STANDALONE_AFTER regex build failed")
+});
+
 pub(super) static DIGIT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
 
