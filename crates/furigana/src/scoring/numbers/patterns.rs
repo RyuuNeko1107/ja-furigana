@@ -150,19 +150,15 @@ pub(super) static SLASH_SENTENCE_DATE_RE: Lazy<Regex> = Lazy::new(|| {
 /// 文全体に分数・得点・進捗の話題の語がある。 あれば文脈だけでは日付にしない
 pub(super) static SLASH_SENTENCE_FRACTION_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        "(?i)スコア|score|HP|MP|ページ|page|回目|分の|割|倍|進捗|wordle|勝|敗|ターン|達成|中[0-9]|点|確率|割合|ダメージ|%|％|スケール|サイズ|第[0-9]|比率|成功|失敗|残り|完了|クリア|リスト|ヒット|打率|安打|奪三振",
+        "(?i)スコア|score|HP|MP|ページ|page|回目|分の|進捗|wordle|ターン|達成|確率|割合|ダメージ|%|％|スケール|比率|打率|安打|奪三振|第[0-9]",
     )
     .expect("scoring SLASH_SENTENCE_FRACTION regex build failed")
 });
 
-/// `N/M` が文頭・空白・括弧の直後で、 直後が助詞・かな漢字・絵文字 (単独の日付の書き方)
-pub(super) static SLASH_STANDALONE_BEFORE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?:^|[ 　\n【\[［「『、。!！?？・はがもをでにへと])$")
-        .expect("scoring SLASH_STANDALONE_BEFORE regex build failed")
-});
-pub(super) static SLASH_STANDALONE_AFTER_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?:[ 　]?[\p{Hiragana}\p{Katakana}\p{Han}\p{Extended_Pictographic}]|[ 　]?$)")
-        .expect("scoring SLASH_STANDALONE_AFTER regex build failed")
+/// 年付きの日付 `2025/10/13` / `2000-10-12` (年 4 桁。 区切りは `/` か `-` で、 2 つとも同じ)
+pub(super) static YMD_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"([0-9]{4})([/\-])([0-9]{1,2})([/\-])([0-9]{1,2})")
+        .expect("scoring YMD regex build failed")
 });
 
 pub(super) static DIGIT_RE: Lazy<Regex> =
