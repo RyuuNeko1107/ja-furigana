@@ -309,8 +309,17 @@ pub(super) fn build_si_unit_regex(units: &UnitsData) -> Option<Regex> {
 }
 
 /// `re` が `hay` の先頭から (start == 0) match した場合のみ Captures を返す。
+///
+/// `re.captures` は先頭から離れた位置でも探すので、 長い入力の全位置でこれを呼ぶと入力長の 2 乗に比例する
+/// (`1.2.3.4.5.…` を 3 万文字並べた入力で 45 秒かかった)。 数や日付・型番の形は 256 byte より長くならないので、
+/// 先頭 256 byte (文字の途中では切らない) だけを見る
 pub(super) fn at_start<'h>(re: &Regex, hay: &'h str) -> Option<Captures<'h>> {
-    re.captures(hay)
+    const WINDOW: usize = 256;
+    let mut end = hay.len().min(WINDOW);
+    while !hay.is_char_boundary(end) {
+        end -= 1;
+    }
+    re.captures(&hay[..end])
         .filter(|c| c.get(0).is_some_and(|m| m.start() == 0))
 }
 
@@ -390,6 +399,17 @@ mod tests {
         let counters: crate::rules::CountersData = toml::from_str(toml_str).unwrap();
         let (_arabic, kanji) = build_counter_regexes(&counters);
         assert!(kanji.is_none(), "opt-in 無しは漢数字 regex を作らない");
+    }
+
+    #[test]
+    fn at_start_looks_only_at_the_head_window() {
+        // 3 万文字続く版番号でも、 見るのは先頭 256 byte だけ (全位置で全体を舐めると 2 乗で遅くなる)
+        let long = "1.2.3.4.5.".repeat(3000);
+        let m = at_start(&VERSION_RE, &long).unwrap();
+        assert!(m.get(0).unwrap().end() <= 256);
+        // 文字の途中では切らない (全角数字は 3 byte)
+        let wide = "１．２．３".repeat(200);
+        assert!(at_start(&Regex::new(r"[０-９]").unwrap(), &wide).is_some());
     }
 
     #[test]
