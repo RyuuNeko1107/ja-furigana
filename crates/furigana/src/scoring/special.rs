@@ -73,9 +73,53 @@ static KAOMOJI_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("scoring kaomoji regex build failed")
 });
 
+/// 括弧のない顔文字 (`^^` / `^_^` / `^o^` / `T_T` / `;_;` / `>_<` / `orz` / `XD` / `:)`)、 と閉じ括弧のない汗の顔 (`(^^;` / `(;^_^A`)。
+/// 英数字との境目の判定は [`bare_kaomoji_boundary_ok`] で行う (Rust の regex は先読み・後読みが使えない)
+static BARE_KAOMOJI_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"[(（]?[;；]?[\^＾][_\-.oO・‿ω]?[\^＾][;；ゞ]?A?[)）]?|[TＴ;；][_\-ー^ωд][TＴ;；]|[>＞][_ωД][<＜]|(?i:orz)|(?i:xd)|[:：][-']?[)(DPp]",
+    )
+    .expect("scoring bare kaomoji regex build failed")
+});
+
+/// 括弧のない顔文字の前後の境目。 `^` 始まり (目が閉じた顔) は直後が数字なら累乗 (2^3^4) なので除く。
+/// 英字・`:` 始まりは、 前後が英数字なら語の一部 (Corzo / box:D) なので除く
+fn bare_kaomoji_boundary_ok(input: &str, range: &Range<usize>) -> bool {
+    let m = &input[range.clone()];
+    let prev = input[..range.start].chars().next_back();
+    let next = input[range.end..].chars().next();
+    let first = m.chars().next().unwrap_or(' ');
+    let word = |c: char| c.is_ascii_alphanumeric();
+    if matches!(first, '^' | '＾' | '(' | '（' | ';' | '；') && m.contains(['^', '＾']) {
+        return !next.is_some_and(|c| c.is_ascii_digit())
+            && !prev.is_some_and(|c| c.is_ascii_digit());
+    }
+    // T-Tシャツ (Tシャツの T を並べた語) は顔ではない
+    if input[range.end..].starts_with("シャツ") {
+        return false;
+    }
+    !prev.is_some_and(|c| word(c) || c == ':') && !next.is_some_and(word)
+}
+
 /// 顔文字の中身か。 かな・漢字を含まず、 顔のパーツ (目・口・頬) を含み、 英数字は 2 つまで。
 /// 点 (`・`) や記号だけのものは、 英数字が無い時だけ顔とみなす ((A・B) は顔ではない)
 fn is_kaomoji_inner(inner: &str) -> bool {
+    // 引用符で挟んだ目 ( '-' ) / ( '.' )
+    let t: Vec<char> = inner.trim().chars().collect();
+    if t.len() == 3
+        && matches!(t[0], '\'' | '`' | '´' | '′')
+        && matches!(t[2], '\'' | '`' | '´' | '′')
+        && matches!(t[1], '-' | '.' | '_' | 'ー' | '・')
+    {
+        return true;
+    }
+    // 括弧のない顔文字の形そのもの ((T-T) / (;_;) / (XD))
+    if BARE_KAOMOJI_RE
+        .find(inner.trim())
+        .is_some_and(|m| m.start() == 0 && m.end() == inner.trim().len())
+    {
+        return true;
+    }
     let mut strong = false;
     let mut weak = false;
     let mut alnum = 0;
@@ -164,6 +208,23 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
             let m = caps.get(0).unwrap();
             tokens.push(ProtectedToken {
                 range: m.range(),
+                kind: ProtectedKind::Kaomoji,
+            });
+        }
+    }
+
+    // 括弧のない顔文字。 括弧つきの顔文字や URL・メールと重なるものは取らない
+    for m in BARE_KAOMOJI_RE.find_iter(input) {
+        let range = m.range();
+        if tokens
+            .iter()
+            .any(|t| t.range.start < range.end && range.start < t.range.end)
+        {
+            continue;
+        }
+        if bare_kaomoji_boundary_ok(input, &range) {
+            tokens.push(ProtectedToken {
+                range,
                 kind: ProtectedKind::Kaomoji,
             });
         }
@@ -1776,7 +1837,7 @@ mod tests {
             );
         }
         // 中身が長すぎるものは顔ではない (15 文字)
-        let long = format!("({})", "^".repeat(15));
+        let long = format!("({})", "´".repeat(15));
         assert!(extract_protected_tokens(&long)
             .iter()
             .all(|t| t.kind != ProtectedKind::Kaomoji));
@@ -1785,6 +1846,39 @@ mod tests {
         assert!(extract_protected_tokens(&ok)
             .iter()
             .any(|t| t.kind == ProtectedKind::Kaomoji));
+    }
+
+    #[test]
+    fn bare_kaomoji_without_parentheses_is_protected() {
+        for kao in [
+            "^^", "^_^", "^o^", "^-^", "T_T", "T-T", ";_;", ";ω;", ">_<", ">ω<", "orz", "Orz",
+            "XD", ":)", ":D", "(^^;", "(;^_^A", "(^-^;", "(^^ゞ",
+        ] {
+            let input = format!("あ{kao} い");
+            let tokens = extract_protected_tokens(&input);
+            assert_eq!(tokens.len(), 1, "{kao}");
+            assert_eq!(tokens[0].kind, ProtectedKind::Kaomoji, "{kao}");
+            assert_eq!(&input[tokens[0].range.clone()], kao, "{kao}");
+        }
+        // 引用符の目
+        assert_eq!(extract_protected_tokens("あ( '-' )い").len(), 1);
+        // 顔ではないもの: 累乗 / Tシャツ / 英単語の一部 / 英数字に挟まれた記号
+        for text in [
+            "2^3^4",
+            "x^2^3",
+            "T-Tシャツ",
+            "Corzo",
+            "box:D",
+            "ab:)cd",
+            "http://a.com/^^",
+        ] {
+            assert!(
+                extract_protected_tokens(text)
+                    .iter()
+                    .all(|t| t.kind != ProtectedKind::Kaomoji),
+                "{text}"
+            );
+        }
     }
 
     #[test]
