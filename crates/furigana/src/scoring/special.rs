@@ -161,6 +161,7 @@ fn is_kaomoji_inner(inner: &str) -> bool {
                 | 'ᴗ'
                 | '˘'
                 | '′'
+                | 'ᐢ'
         ) {
             strong = true;
         }
