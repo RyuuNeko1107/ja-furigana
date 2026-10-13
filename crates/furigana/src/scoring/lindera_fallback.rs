@@ -415,7 +415,14 @@ impl CandidateProvider for LinderaFallbackProvider {
         let Some(rest) = input.get(pos..end) else {
             return;
         };
-        if rest.is_empty() || !rest.chars().all(is_standalone_kana) {
+        // かな (+ 句読点) か、 記号だけの残り ((^o^)↑ の ↑ のように、 顔文字などの保護 token の直後で
+        // 形態素が 「^)↑」 と 1 つにしてしまった場合)。 記号は表記のまま通す
+        let symbol_only = |c: char| !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control();
+        if rest.is_empty()
+            || !rest
+                .chars()
+                .all(|c| is_standalone_kana(c) || symbol_only(c))
+        {
             return;
         }
         let length = u8::try_from(rest.chars().count()).unwrap_or(u8::MAX);
