@@ -2054,3 +2054,17 @@ fn era_abbreviation_dates_and_years() {
     }
     assert!(reading_at("HR7.10.13", 1, "R7.10.13").is_none());
 }
+
+#[test]
+fn slash_pair_with_three_digit_denominator_is_a_fraction() {
+    // 1/144 (縮尺) / 3/100 / 50/100 は分数、 年つき (2026/10) や 4 桁は対象外
+    assert_eq!(
+        reading_at("1/144", 0, "1/144").as_deref(),
+        Some("ヒャクヨンジュウヨンブンノイチ")
+    );
+    assert_eq!(
+        reading_at("3/100", 0, "3/100").as_deref(),
+        Some("ヒャクブンノサン")
+    );
+    assert!(reading_at("1000/1", 0, "1000/1").is_none());
+}

@@ -96,9 +96,9 @@ pub(super) static PHONE_RE: Lazy<Regex> = Lazy::new(|| {
     .expect("scoring PHONE regex build failed")
 });
 
-/// `N/M` (日付 12/25 か分数 1/2 か。 文脈で決める)
+/// `N/M` (日付 12/25 か分数 1/2 か。 文脈で決める。 3 桁まで: 1/144 (縮尺) / 50/100 は分数)
 pub(super) static SLASH_PAIR_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9]{1,2})[/\u{2044}]([0-9]{1,2})")
+    Regex::new(r"([0-9]{1,3})[/\u{2044}]([0-9]{1,3})")
         .expect("scoring SLASH_PAIR regex build failed")
 });
 
