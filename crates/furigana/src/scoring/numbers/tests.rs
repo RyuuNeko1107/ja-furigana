@@ -2005,3 +2005,52 @@ fn round2_times_between_words_station_range_and_bracket_currency() {
         Some("(ゴヒャクエン")
     );
 }
+
+#[test]
+fn era_abbreviation_dates_and_years() {
+    // 和暦の略記: 年.月.日 (. か /) と 年 / 年度 / 年代
+    assert_eq!(
+        reading_at("R7.10.13", 0, "R7.10.13").as_deref(),
+        Some("レイワナナネンジュウガツジュウサンニチ")
+    );
+    assert_eq!(
+        reading_at("H30.4.1", 0, "H30.4.1").as_deref(),
+        Some("ヘイセイサンジュウネンシガツツイタチ")
+    );
+    assert_eq!(
+        reading_at("R1.5.1", 0, "R1.5.1").as_deref(),
+        Some("レイワガンネンゴガツツイタチ")
+    );
+    assert_eq!(
+        reading_at("S64.1.7", 0, "S64.1.7").as_deref(),
+        Some("ショウワロクジュウヨンネンイチガツナノカ")
+    );
+    assert_eq!(
+        reading_at("R7/10/13", 0, "R7/10/13").as_deref(),
+        Some("レイワナナネンジュウガツジュウサンニチ")
+    );
+    assert_eq!(
+        reading_at("R7年度", 0, "R7年度").as_deref(),
+        Some("レイワナナネンド")
+    );
+    assert_eq!(
+        reading_at("S50年代", 0, "S50年代").as_deref(),
+        Some("ショウワゴジュウネンダイ")
+    );
+    // 元号の範囲外 / 月日が正しくない / 単独の R7 / 年.月だけ / 英字の直後は読まない
+    for bad in [
+        "R7",
+        "R7.10",
+        "H32.1.1",
+        "R7.13.1",
+        "R7.10.32",
+        "R7.10.13.5",
+    ] {
+        assert!(
+            reading_at(bad, 0, bad)
+                .is_none_or(|r| !r.starts_with("レイワ") && !r.starts_with("ヘイセイ")),
+            "{bad}"
+        );
+    }
+    assert!(reading_at("HR7.10.13", 1, "R7.10.13").is_none());
+}

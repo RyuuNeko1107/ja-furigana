@@ -1466,6 +1466,15 @@ impl NumberCandidateProvider {
         let prev = input[..pos].chars().next_back();
         let is_word = |c: char| c.is_ascii_alphanumeric();
         match first_char {
+            // 和暦の略記: R7.10.13 / H30.4.1 / S64.1.7 / T15.12.25 / M45.7.30、 R7年 / R7年度 / S50年代
+            'M' | 'T' | 'S' | 'H' | 'R' => {
+                if prev.is_some_and(is_word) {
+                    return;
+                }
+                if let Some((len, reading)) = self.era_abbreviation(rest) {
+                    out.push(self.make_hit(input, pos, len, reading));
+                }
+            }
             // 累乗: 直前が数字・英字・閉じ括弧、 指数は 1〜3 桁 (x^2 → エックスノニジョウ の 「ノニジョウ」)
             '^' => {
                 if !prev.is_some_and(|c| is_word(c) || matches!(c, ')' | '）')) {
@@ -2034,4 +2043,89 @@ fn build_emoji_table(
         table.entry(stripped).or_insert_with(|| v.clone());
     }
     table
+}
+
+impl NumberCandidateProvider {
+    /// 和暦の略記を先頭から読む: `R7.10.13` (年.月.日、 区切りは `.` か `/`) と `R7年` / `R7年度` / `S50年代`。
+    /// 戻り値は (消費する byte 数, 読み)。 年が元号の範囲を超える / 月日が正しくない / 直後に英数字が続く形は `None`
+    /// (`R7` だけ・`R7.10` だけ は Radeon R7 や版番号と区別できないので読まない)
+    fn era_abbreviation(&self, rest: &str) -> Option<(usize, String)> {
+        let b = rest.as_bytes();
+        let (name, max_year) = match b.first()? {
+            b'M' => ("メイジ", 45),
+            b'T' => ("タイショウ", 15),
+            b'S' => ("ショウワ", 64),
+            b'H' => ("ヘイセイ", 31),
+            b'R' => ("レイワ", 99),
+            _ => return None,
+        };
+        let digits = |from: usize| b[from..].iter().take_while(|c| c.is_ascii_digit()).count();
+        let ylen = digits(1);
+        if !(1..=2).contains(&ylen) {
+            return None;
+        }
+        let year: u32 = rest[1..1 + ylen].parse().ok()?;
+        if year == 0 || year > max_year {
+            return None;
+        }
+        let year_reading = if year == 1 {
+            "ガンネン".to_string()
+        } else {
+            format!("{}ネン", number_to_katakana(&year.to_string()))
+        };
+        let after_year = 1 + ylen;
+        // R7年 / R7年度 / S50年代
+        if rest[after_year..].starts_with('年') {
+            let mut end = after_year + '年'.len_utf8();
+            let mut tail = "";
+            if rest[end..].starts_with('度') {
+                tail = "ド";
+                end += '度'.len_utf8();
+            } else if rest[end..].starts_with('代') {
+                tail = "ダイ";
+                end += '代'.len_utf8();
+            }
+            let reading = if tail.is_empty() {
+                format!("{name}{year_reading}")
+            } else {
+                // 年度・年代の ネン は 「ネンド」 「ネンダイ」 (ガンネン + ド にはしない: 元年度は稀)
+                format!("{name}{}ネン{tail}", number_to_katakana(&year.to_string()))
+            };
+            return Some((end, reading));
+        }
+        // R7.10.13 (同じ区切りで 3 つ)
+        let sep = *b.get(after_year)?;
+        if !matches!(sep, b'.' | b'/') {
+            return None;
+        }
+        let mlen = digits(after_year + 1);
+        if !(1..=2).contains(&mlen) {
+            return None;
+        }
+        let m_end = after_year + 1 + mlen;
+        if b.get(m_end) != Some(&sep) {
+            return None;
+        }
+        let dlen = digits(m_end + 1);
+        if !(1..=2).contains(&dlen) {
+            return None;
+        }
+        let end = m_end + 1 + dlen;
+        if b.get(end)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == sep)
+        {
+            return None;
+        }
+        let month: u32 = rest[after_year + 1..m_end].parse().ok()?;
+        let day: u32 = rest[m_end + 1..end].parse().ok()?;
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+            return None;
+        }
+        let reading = format!(
+            "{name}{year_reading}{}{}",
+            self.read_counter_in_date(&month.to_string(), "月"),
+            self.read_counter_in_date(&day.to_string(), "日")
+        );
+        Some((end, reading))
+    }
 }
