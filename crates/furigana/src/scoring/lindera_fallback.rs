@@ -170,6 +170,8 @@ impl LinderaFallbackProvider {
         // 上のうち、 閉じ括弧とひらがなの未知語を除いた強い境界。 通り / 沿い 等は閉じ括弧や未知語の後ろだと
         // 名詞の続き (「TODO.md」通り / 国道４１号）沿い / やちむん通り) なので、 強い境界の直後だけ清音に戻す
         let mut prev_is_strong_boundary = true;
+        // 直前の token がカタカナ語 (ロング / ユミン) か。 カタカナ語 + 使い は つかい (ロング使い = ロングの使い手)
+        let mut prev_is_katakana = false;
         for ((tok, next_attaches), ni_motion) in
             tokens.into_iter().zip(attaches_next).zip(next_ni_motion)
         {
@@ -192,6 +194,7 @@ impl LinderaFallbackProvider {
                 byte_pos = gap_end;
                 prev_is_boundary = true;
                 prev_is_strong_boundary = true;
+                prev_is_katakana = false;
             }
             let end = byte_pos + surface_len;
             // reading: Lindera details[7] (= カタカナ)、 無ければ surface fallback
@@ -239,9 +242,13 @@ impl LinderaFallbackProvider {
             } else {
                 prev_is_strong_boundary
             };
+            // カタカナ語の直後の 使い (ロング使い / ユミン使い / デコ使い) は つかい。
+            // ヅカイ (人使い / 言葉使い / 魔物使い) は漢字の語の後ろの連濁
+            let katakana_tsukai = prev_is_katakana && tok.surface == "使い";
             if tok.is_noun_suffix
                 && ((after_boundary && is_okurigana_form(&tok.surface))
-                    || (ni_motion && is_okurigana_form_voiced_after_noun_excluded(&tok.surface)))
+                    || (ni_motion && is_okurigana_form_voiced_after_noun_excluded(&tok.surface))
+                    || katakana_tsukai)
             {
                 if let Some(plain) = devoice_first_kana(&reading) {
                     reading = plain;
@@ -249,6 +256,11 @@ impl LinderaFallbackProvider {
             }
             prev_is_boundary = this_is_boundary;
             prev_is_strong_boundary = this_is_strong_boundary;
+            prev_is_katakana = !tok.surface.is_empty()
+                && tok
+                    .surface
+                    .chars()
+                    .all(|c| crate::kana::is_katakana_char(c) || c == 'ー');
             edges.push((byte_pos, end, reading, kind));
             byte_pos = end;
         }
@@ -633,6 +645,18 @@ mod tests {
         assert_eq!(edge_reading(&a, "時間通りに行く", "通り"), "ドオリ");
         assert_eq!(edge_reading(&a, "20年越しに", "越し"), "ゴシ");
         assert_eq!(edge_reading(&a, "20%引きで", "引き"), "ビキ");
+    }
+
+    /// カタカナ語の直後の 使い (ロング使い / ユミン使い) は つかい。 漢字の語の後ろは ヅカイ のまま。
+    #[test]
+    fn tsukai_after_katakana_is_not_voiced() {
+        let a = analyzer();
+        assert_eq!(edge_reading(&a, "ロング使い", "使い"), "ツカイ");
+        assert_eq!(edge_reading(&a, "ユミン使いになったの", "使い"), "ツカイ");
+        assert_eq!(edge_reading(&a, "カーボンローラーデコ使いです", "使い"), "ツカイ");
+        // 漢字の語の後ろ (魔物使い / 人使い) は連濁のまま
+        assert_eq!(edge_reading(&a, "魔物使い", "使い"), "ヅカイ");
+        assert_eq!(edge_reading(&a, "野菜使い", "使い"), "ヅカイ");
     }
 
     #[test]
