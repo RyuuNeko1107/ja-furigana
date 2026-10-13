@@ -77,7 +77,7 @@ static KAOMOJI_RE: Lazy<Regex> = Lazy::new(|| {
 /// 英数字との境目の判定は [`bare_kaomoji_boundary_ok`] で行う (Rust の regex は先読み・後読みが使えない)
 static BARE_KAOMOJI_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r"[(（]?[;；]?[\^＾][_\-.oO・‿ω]?[\^＾][;；ゞ]?A?[)）]?|[TＴ;；][_\-ー^ωд][TＴ;；]|[>＞][_ωД][<＜]|(?i:orz)|(?i:xd)|[:：][-']?[)(DPp]",
+        r"[(（]?[;；]?[\^＾][_\-.oO・‿ω]?[\^＾][;；ゞ]?A?[)）]?|[TＴ;；][_\-ー^ωд][TＴ;；]|[>＞][_ωД][<＜]|T{2,}|(?i:orz)|(?i:xd)|[:：][-']?[)(DPp]",
     )
     .expect("scoring bare kaomoji regex build failed")
 });
@@ -1851,8 +1851,8 @@ mod tests {
     #[test]
     fn bare_kaomoji_without_parentheses_is_protected() {
         for kao in [
-            "^^", "^_^", "^o^", "^-^", "T_T", "T-T", ";_;", ";ω;", ">_<", ">ω<", "orz", "Orz",
-            "XD", ":)", ":D", "(^^;", "(;^_^A", "(^-^;", "(^^ゞ",
+            "^^", "^_^", "^o^", "^-^", "TT", "T_T", "T-T", ";_;", ";ω;", ">_<", ">ω<", "orz",
+            "Orz", "XD", ":)", ":D", "(^^;", "(;^_^A", "(^-^;", "(^^ゞ",
         ] {
             let input = format!("あ{kao} い");
             let tokens = extract_protected_tokens(&input);
