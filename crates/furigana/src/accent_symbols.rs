@@ -369,6 +369,41 @@ mod tests {
     }
 
     #[test]
+    fn chained_phrases_flat_has_no_nucleus_and_gap_sets_break() {
+        use crate::chain_phrases::ChainedPhrase;
+        let ph = |sound: &str, accent: usize, gap: &str| ChainedPhrase {
+            surface: sound.to_string(),
+            reading: sound.to_string(),
+            mora: sound.chars().count(),
+            accent,
+            estimated: false,
+            sound: sound.to_string(),
+            gap_before: gap.to_string(),
+        };
+        let m = chained_to_mora_phrases(
+            &[ph("アメ", 0, ""), ph("カゼ", 1, "、"), ph("ユキ", 2, "。?")],
+            "！",
+        );
+        assert_eq!(m.phrases.len(), 3);
+        // 平板 (0) は 核なし、 起伏はその位置
+        assert_eq!(m.phrases[0].nucleus, None);
+        assert_eq!(m.phrases[1].nucleus, Some(1));
+        assert_eq!(m.phrases[2].nucleus, Some(2));
+        // 先頭句は常に区切りなし / 記号の並びは強い方
+        assert_eq!(m.phrases[0].break_before, PhraseBreak::None);
+        assert_eq!(m.phrases[1].break_before, PhraseBreak::Short);
+        assert_eq!(m.phrases[2].break_before, PhraseBreak::Question);
+        assert_eq!(m.trailing, PhraseBreak::Long);
+        // 先頭の句の前に記号があっても 区切りは付けない
+        let m = chained_to_mora_phrases(&[ph("アメ", 1, "、")], "");
+        assert_eq!(m.phrases[0].break_before, PhraseBreak::None);
+        assert_eq!(m.trailing, PhraseBreak::None);
+        // 記号列に出せない文字だけの句は作らない
+        let m = chained_to_mora_phrases(&[ph("😀", 0, "")], "");
+        assert!(m.phrases.is_empty());
+    }
+
+    #[test]
     fn mora_split_merges_small_kana() {
         assert_eq!(mora_split("キョウ"), ["キョ", "ウ"]);
         assert_eq!(mora_split("カーテン"), ["カ", "ー", "テ", "ン"]);

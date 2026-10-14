@@ -233,11 +233,10 @@ fn chain_flag(prev: &Node, node: &Node) -> bool {
         (Ki(_), _) | (_, Ki(_)) => false,
         // 13
         (Me(_), D(_)) | (Me(_), K(_)) | (Me(_), Me(M::KeiyoudoushiGokan)) => false,
-        // 12
-        (D(_), D(H)) if prev.renyou => true,
-        // 11
+        // 12: 「動詞,非自立」を連用形の動詞の後でくっつける / 11: 「形容詞,非自立」を連用形の動詞・形容詞の後でくっつける。
+        // 動詞 → 動詞,非自立 と 形容詞 → 形容詞,非自立 は 既定 (くっつける) と同じ結果なので 分岐を持たない。
+        // 動詞 → 形容詞,非自立 だけは 規則 05 (別の句) に落ちるので 連用形の時に ここで拾う
         (D(_), K(H)) if prev.renyou => true,
-        (K(_), K(H)) if prev.renyou => true,
         (Js(true), K(H)) if matches!(prev.surface.as_str(), "て" | "で") => true,
         // 10
         (K(S) | D(S) | Me(M::Setsubi), Me(_)) => false,
@@ -257,9 +256,7 @@ fn chain_flag(prev: &Node, node: &Node) -> bool {
         (Me(M::KeiyoudoushiGokan), Me(_)) => false,
         // 03
         (K(_), Me(_)) => false,
-        // 02
-        (Me(_), Me(_)) => true,
-        // 01
+        // 02 (名詞の連続はくっつける) と 01 (既定) は同じ結果
         _ => true,
     }
 }
@@ -282,7 +279,6 @@ fn calc_top_node_acc(node: &Node, prev: &Node, top_acc: usize, mora_size: usize)
     };
     let add_rule = || (mora_size as isize + rule.add_type).max(0) as usize;
     match rule.accent_type {
-        AccentType::F1 => top_acc,
         AccentType::F2 if top_acc == 0 => add_rule(),
         AccentType::F3 if top_acc != 0 => add_rule(),
         AccentType::F4 => add_rule(),
@@ -291,11 +287,11 @@ fn calc_top_node_acc(node: &Node, prev: &Node, top_acc: usize, mora_size: usize)
         AccentType::C2 => mora_size + 1,
         AccentType::C3 => mora_size,
         AccentType::C4 => 0,
-        AccentType::C5 => top_acc,
         AccentType::P1 | AccentType::P2 if top_acc == 0 => 0,
         AccentType::P1 | AccentType::P2 => mora_size + node_acc,
         AccentType::P6 => 0,
         AccentType::P14 if top_acc != 0 => mora_size + node_acc,
+        // F1 / C5 / 条件に合わない F2 F3 P14 は 句の核を変えない
         _ => top_acc,
     }
 }
@@ -391,7 +387,7 @@ pub(crate) fn build_phrases(nodes: &mut [Node]) -> Vec<ChainPhrase> {
     set_accent_type(nodes);
     let mut out: Vec<ChainPhrase> = Vec::new();
     for (i, n) in nodes.iter().enumerate() {
-        let chained = i > 0 && n.chain_flag == Some(true);
+        let chained = n.chain_flag == Some(true);
         if chained {
             if let Some(last) = out.last_mut() {
                 last.end = i + 1;
@@ -424,6 +420,277 @@ mod tests {
             rules: ChainRules::parse(rules),
             chain_flag: None,
         }
+    }
+
+    #[test]
+    fn accent_type_parse_covers_every_kind() {
+        use AccentType::*;
+        for (s, want) in [
+            ("F1", F1),
+            ("F2", F2),
+            ("F3", F3),
+            ("F4", F4),
+            ("F5", F5),
+            ("C1", C1),
+            ("C2", C2),
+            ("C3", C3),
+            ("C4", C4),
+            ("C5", C5),
+            ("P1", P1),
+            ("P2", P2),
+            ("P6", P6),
+            ("P14", P14),
+            ("", None),
+            ("*", None),
+        ] {
+            assert_eq!(AccentType::parse(s), Some(want), "{s}");
+        }
+        assert_eq!(AccentType::parse("F6"), Option::None);
+        assert_eq!(AccentType::parse("P3"), Option::None);
+    }
+
+    #[test]
+    fn rules_parse_keeps_each_pos_and_add_type() {
+        let r = ChainRules::parse("動詞%F4@1/助詞%F2@2/形容詞%C3@-1/名詞%P6@0");
+        let rule = |t, a| {
+            Some(ChainRule {
+                accent_type: t,
+                add_type: a,
+            })
+        };
+        assert_eq!(r.doushi, rule(AccentType::F4, 1));
+        assert_eq!(r.joshi, rule(AccentType::F2, 2));
+        assert_eq!(r.keiyoushi, rule(AccentType::C3, -1));
+        assert_eq!(r.meishi, rule(AccentType::P6, 0));
+        assert_eq!(r.default, Option::None);
+        // 品詞指定なしは default、 知らない種類・品詞は捨てる
+        let d = ChainRules::parse("C2");
+        assert_eq!(d.default, rule(AccentType::C2, 0));
+        assert_eq!(ChainRules::parse("X9").default, Option::None);
+        assert_eq!(ChainRules::parse("副詞%F1@0").default, Option::None);
+        assert_eq!(ChainRules::parse("*"), ChainRules::default());
+        assert_eq!(ChainRules::parse(""), ChainRules::default());
+    }
+
+    fn n(surface: &str, morae: usize, accent: usize, pos: Pos) -> Node {
+        node(surface, morae, accent, pos, "")
+    }
+
+    /// 句の連結 18 規則: (前の語の品詞, 前の語が連用形か, 前の語の表記, 次の語の品詞, くっつくか)。
+    /// どの行も 「その規則が無いと別の規則 (または 既定) に落ちて結果が変わる」 組を選んである
+    #[test]
+    fn chain_flag_each_rule() {
+        use MeishiKind as M;
+        use Pos::*;
+        use Sub::*;
+        let gen = Meishi(M::General);
+        #[rustfmt::skip]
+        let cases: &[(Pos, bool, &str, Pos, bool)] = &[
+            // 18: 「*,接尾」は前にくっつける
+            (Kigou(false), false, "", Meishi(M::Setsubi), true),
+            (gen, false, "", Keiyoushi(Setsubi), true),
+            (Kigou(false), false, "", Doushi(Setsubi), true),
+            // 17: 名詞の後の 「名」 は別の句 / 16: 姓の後の名詞は別の句
+            (gen, false, "", Meishi(M::Mei), false),
+            (Meishi(M::Sei), false, "", gen, false),
+            // 15: 接頭詞は単独 / 14: 記号は単独
+            (gen, false, "", Settoushi, false),
+            (Kigou(false), false, "", gen, false),
+            (gen, false, "", Kigou(true), false),
+            // 13: 名詞の後に 動詞 / 形容詞 / 形容動詞語幹 がきたら別の句
+            (gen, false, "", Doushi(Jiritsu), false),
+            (gen, false, "", Keiyoushi(Jiritsu), false),
+            (gen, false, "", Meishi(M::KeiyoudoushiGokan), false),
+            // 11: 形容詞,非自立 は 連用形の動詞の後 / 助詞 て で の後でくっつく
+            (Doushi(Jiritsu), true, "", Keiyoushi(Hijiritsu), true),
+            (Doushi(Jiritsu), false, "", Keiyoushi(Hijiritsu), false),
+            (Joshi(true), false, "て", Keiyoushi(Hijiritsu), true),
+            (Joshi(true), false, "で", Keiyoushi(Hijiritsu), true),
+            (Joshi(true), false, "が", Keiyoushi(Hijiritsu), false),
+            (Joshi(false), false, "て", Keiyoushi(Hijiritsu), false),
+            // 10: 接尾の後の名詞は別の句
+            (Meishi(M::Setsubi), false, "", gen, false),
+            // 08: 付属語は前にくっつける / 09: 付属語の後の自立語は別の句
+            (Joshi(false), false, "", Joshi(false), true),
+            (Jodoushi, false, "", Joshi(false), true),
+            (Joshi(false), false, "", gen, false),
+            (Jodoushi, false, "", Doushi(Jiritsu), false),
+            (Fukushi, false, "", Joshi(false), true),
+            (Meishi(M::FukushiKanou), false, "", Jodoushi, true),
+            // 07: 名詞,副詞可能 は単独
+            (Meishi(M::FukushiKanou), false, "", gen, false),
+            (gen, false, "", Meishi(M::FukushiKanou), false),
+            // 06: 副詞 接続詞 連体詞 は単独
+            (Fukushi, false, "", gen, false),
+            (gen, false, "", Fukushi, false),
+            (Setsuzokushi, false, "", gen, false),
+            (gen, false, "", Rentaishi, false),
+            // 05: 動詞の後に 形容詞 / 名詞 がきたら別の句
+            (Doushi(Jiritsu), false, "", Keiyoushi(Jiritsu), false),
+            (Doushi(Jiritsu), false, "", gen, false),
+            // 04: 形容動詞語幹の後の名詞は別の句 / 03: 形容詞の後の名詞は別の句
+            (Meishi(M::KeiyoudoushiGokan), false, "", gen, false),
+            (Keiyoushi(Jiritsu), false, "", gen, false),
+            // 02 / 01: 名詞の連続・既定はくっつける
+            (gen, false, "", gen, true),
+            (Doushi(Jiritsu), false, "", Doushi(Jiritsu), true),
+            (Keiyoushi(Jiritsu), true, "", Keiyoushi(Hijiritsu), true),
+        ];
+        for (i, &(prev_pos, renyou, surface, next_pos, want)) in cases.iter().enumerate() {
+            let mut prev = n(surface, 2, 0, prev_pos);
+            prev.renyou = renyou;
+            let next = n("x", 2, 0, next_pos);
+            assert_eq!(
+                chain_flag(&prev, &next),
+                want,
+                "case {i}: {prev_pos:?} -> {next_pos:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn get_rule_picks_by_previous_pos() {
+        use MeishiKind as M;
+        let r = ChainRules::parse("動詞%F1/助詞%F2/形容詞%F3/名詞%F4");
+        let t = |p| r.get_rule(p).map(|x| x.accent_type);
+        assert_eq!(t(Pos::Doushi(Sub::Jiritsu)), Some(AccentType::F1));
+        assert_eq!(t(Pos::Jodoushi), Some(AccentType::F1));
+        assert_eq!(t(Pos::Joshi(false)), Some(AccentType::F2));
+        assert_eq!(t(Pos::Keiyoushi(Sub::Jiritsu)), Some(AccentType::F3));
+        assert_eq!(t(Pos::Meishi(M::General)), Some(AccentType::F4));
+        assert_eq!(t(Pos::Fukushi), Option::None);
+        let d = ChainRules::parse("C2");
+        assert_eq!(
+            d.get_rule(Pos::Fukushi).map(|x| x.accent_type),
+            Some(AccentType::C2)
+        );
+        assert_eq!(
+            d.get_rule(Pos::Joshi(true)).map(|x| x.accent_type),
+            Some(AccentType::C2)
+        );
+    }
+
+    /// 結合型ごとの 句の核 (mora_size = 2 / node_acc = 3)
+    #[test]
+    fn top_node_acc_each_type() {
+        use Pos::*;
+        let prev = n("前", 2, 0, Fukushi);
+        let acc = |rules: &str, top: usize| {
+            let node = node("後", 2, 3, Joshi(false), rules);
+            calc_top_node_acc(&node, &prev, top, 2)
+        };
+        // F1 / C5 は変えない
+        assert_eq!(acc("F1", 4), 4);
+        assert_eq!(acc("C5", 4), 4);
+        // F2: 平板の時だけ mora_size + add / F3: 起伏の時だけ
+        assert_eq!(acc("F2@1", 0), 3);
+        assert_eq!(acc("F2@1", 4), 4);
+        assert_eq!(acc("F3@1", 4), 3);
+        assert_eq!(acc("F3@1", 0), 0);
+        // F4: 常に mora_size + add (負は 0 に切る)
+        assert_eq!(acc("F4@1", 0), 3);
+        assert_eq!(acc("F4@1", 4), 3);
+        assert_eq!(acc("F4@-1", 4), 1);
+        assert_eq!(acc("F4@-5", 4), 0);
+        // F5 / C4 / P6 は 平板
+        assert_eq!(acc("F5", 4), 0);
+        assert_eq!(acc("C4", 4), 0);
+        assert_eq!(acc("P6", 4), 0);
+        // C1: mora_size + node_acc / C2: mora_size + 1 / C3: mora_size
+        assert_eq!(acc("C1", 4), 5);
+        assert_eq!(acc("C2", 4), 3);
+        assert_eq!(acc("C3", 4), 2);
+        // P1 / P2: 平板なら平板、 起伏なら mora_size + node_acc
+        for t in ["P1", "P2"] {
+            assert_eq!(acc(t, 0), 0, "{t}");
+            assert_eq!(acc(t, 4), 5, "{t}");
+        }
+        // P14: 起伏の時だけ mora_size + node_acc
+        assert_eq!(acc("P14", 4), 5);
+        assert_eq!(acc("P14", 0), 0);
+        // 規則が無ければ 変えない
+        assert_eq!(acc("", 4), 4);
+    }
+
+    #[test]
+    fn digit_acc_each_rule() {
+        use MeishiKind as M;
+        let k = |s: &str, m: usize| n(s, m, 0, Pos::Meishi(M::Kazu));
+        let acc = |p: &Node, c: &Node, next: Option<&Node>| calc_digit_acc(p, c, next);
+        // 十: 五 六 八 + 十 + 一〜九 は平板 / それ以外は 1
+        let one = k("一", 2);
+        let ju = k("十", 2);
+        for p in ["五", "六", "八"] {
+            assert_eq!(acc(&k(p, 2), &ju, Some(&one)), Some(0), "{p}十一");
+            assert_eq!(acc(&k(p, 2), &ju, Some(&k("万", 2))), Some(1), "{p}十万");
+            assert_eq!(acc(&k(p, 2), &ju, None), Some(1), "{p}十");
+        }
+        assert_eq!(acc(&k("三", 2), &ju, Some(&one)), Some(1));
+        // 百: 七 = 2 / 三 四 九 何 = 1 / それ以外は 前+後の拍数
+        let hyaku = k("百", 3);
+        assert_eq!(acc(&k("七", 2), &hyaku, None), Some(2));
+        for p in ["三", "四", "九", "何"] {
+            assert_eq!(acc(&k(p, 2), &hyaku, None), Some(1), "{p}百");
+        }
+        assert_eq!(acc(&k("二", 2), &hyaku, None), Some(5));
+        // 千 / 万: 前の拍数 + 1
+        assert_eq!(acc(&k("二", 2), &k("千", 2), None), Some(3));
+        assert_eq!(acc(&k("二", 3), &k("万", 2), None), Some(4));
+        // 億: 一 六 七 八 幾 = 2 / それ以外 = 1
+        for p in ["一", "六", "七", "八", "幾"] {
+            assert_eq!(acc(&k(p, 2), &k("億", 2), None), Some(2), "{p}億");
+        }
+        assert_eq!(acc(&k("二", 2), &k("億", 2), None), Some(1));
+        // 兆: 六 七 = 2 / それ以外 = 1
+        for p in ["六", "七"] {
+            assert_eq!(acc(&k(p, 2), &k("兆", 2), None), Some(2), "{p}兆");
+        }
+        assert_eq!(acc(&k("二", 2), &k("兆", 2), None), Some(1));
+        // 該当なし
+        assert_eq!(acc(&k("二", 2), &k("三", 2), None), Option::None);
+    }
+
+    #[test]
+    fn kazu_pos_detection() {
+        assert!(Pos::Meishi(MeishiKind::Kazu).is_kazu());
+        assert!(Pos::Kigou(true).is_kazu());
+        assert!(!Pos::Kigou(false).is_kazu());
+        assert!(!Pos::Meishi(MeishiKind::General).is_kazu());
+    }
+
+    /// 数詞の連結が set_accent_type で句の核に反映される (十 の特例と 前の語の書き換え)
+    #[test]
+    fn set_accent_type_digits() {
+        use MeishiKind as M;
+        let kazu = Pos::Meishi(M::Kazu);
+        // 先頭の 十 + 数 は 平板
+        let mut v = vec![n("十", 2, 1, kazu), n("五", 1, 1, kazu)];
+        let ph = build_phrases(&mut v);
+        assert_eq!((ph.len(), ph[0].accent), (1, 0));
+        // 十 の次が数でなければ 変えない / 十 以外は変えない
+        let mut v = vec![n("十", 2, 1, kazu), n("が", 1, 0, Pos::Joshi(false))];
+        assert_eq!(build_phrases(&mut v)[0].accent, 1);
+        let mut v = vec![n("二", 1, 1, kazu), n("五", 1, 1, kazu)];
+        assert_eq!(build_phrases(&mut v)[0].accent, 1);
+        // 三 + 百 は 前の語 (三) の核が 1 になる
+        let mut v = vec![n("三", 2, 0, kazu), n("百", 3, 0, kazu)];
+        assert_eq!(build_phrases(&mut v)[0].accent, 1);
+        // 片方が数詞でなければ 数詞の連結は使わない
+        let mut v = vec![n("三", 2, 0, kazu), n("百", 3, 0, Pos::Other)];
+        assert_eq!(build_phrases(&mut v)[0].accent, 0);
+        let mut v = vec![n("二", 2, 0, Pos::Other), n("十", 2, 0, kazu)];
+        assert_eq!(build_phrases(&mut v)[0].accent, 0);
+        // 句をまたぐと mora_size は数え直し: 名詞 + 助詞(F4@1) / 動詞 + 助詞(F4@1)
+        let mut v = vec![
+            n("犬", 2, 1, Pos::Meishi(M::General)),
+            node("も", 1, 0, Pos::Joshi(false), "F4@1"),
+            n("走る", 3, 0, Pos::Doushi(Sub::Jiritsu)),
+            node("よ", 1, 0, Pos::Joshi(false), "F4@1"),
+        ];
+        let ph = build_phrases(&mut v);
+        assert_eq!(ph.len(), 2);
+        assert_eq!((ph[0].morae, ph[0].accent), (3, 3));
+        assert_eq!((ph[1].morae, ph[1].accent), (4, 4));
     }
 
     #[test]
