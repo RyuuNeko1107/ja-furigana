@@ -61,6 +61,15 @@ pub struct Args {
     #[arg(long)]
     no_devoice: bool,
 
+    /// voicevox / aquestalk: 辞書に無い英字語 (`AviUtl` など) の扱い。
+    /// `drop` = 記号列から落とす (既定) / `spell` = 1 文字ずつ英字の名前で読む / `romaji` = ローマ字として読む (実験的)
+    #[arg(long, default_value = "drop", value_parser = ["drop", "spell", "romaji"])]
+    unknown_alpha: String,
+
+    /// voicevox / aquestalk: 読めずに英字のまま残った語を stderr に出す (`unknown<TAB>語1<TAB>語2…`)
+    #[arg(long)]
+    report_unknown: bool,
+
     /// aquestalk: 記号列をこの文字数以下のアクセント句単位へ分割し 1 行 1 塊で出力する
     /// (エンジン側の長さ上限対策。 0 = 分割しない)
     #[arg(long, default_value_t = 0)]
@@ -178,6 +187,22 @@ pub fn run(args: &Args, paths: &Paths, _cfg: &Config) -> Result<()> {
 }
 
 /// 1 入力を mode に応じて変換する。 `lookup` と `--batch` で共有する。
+/// 記号列の元になるモーラ句。 `--unknown-alpha` に従い、 `--report-unknown` なら読めなかった英字語を stderr に出す
+fn mora_phrases(f: &Furigana, text: &str, args: &Args) -> furigana::accent_symbols::MoraPhrases {
+    use furigana::accent_symbols::{SymbolOptions, UnknownAlpha};
+    let mut opts = SymbolOptions::default();
+    opts.unknown_alpha = match args.unknown_alpha.as_str() {
+        "spell" => UnknownAlpha::Spell,
+        "romaji" => UnknownAlpha::Romaji,
+        _ => UnknownAlpha::Drop,
+    };
+    let out = f.to_mora_phrases_with(text, opts);
+    if args.report_unknown && !out.unknown.is_empty() {
+        eprintln!("unknown	{}", out.unknown.join("	"));
+    }
+    out.phrases
+}
+
 fn convert(f: &Furigana, text: &str, args: &Args) -> Result<String> {
     let result = match args.mode.as_str() {
         "kanji" => text.to_string(),
@@ -199,14 +224,14 @@ fn convert(f: &Furigana, text: &str, args: &Args) -> Result<String> {
         // POST /accent_phrases?is_kana=true にそのまま渡せる。
         // dict bracket / --estimate-accent が無い token は平板 fallback。
         "voicevox-aques" | "voicevox" => {
-            ja_furigana_voicevox::to_aques_kana_phrases(&f.to_mora_phrases(text))
+            ja_furigana_voicevox::to_aques_kana_phrases(&mora_phrases(f, text, args))
         }
         // 本家 AquesTalk 音声記号列 (ADR-0001 adapter crate 経由)。
         // AquesTalk2 / AquesTalk10 の合成 API へそのまま渡せる。
         // VOICEVOX kana 記法との差分 = 半角 `?` / `。` と `、` の pause 区別 / 無声化 `_`。
         "aquestalk" => {
             let symbols = ja_furigana_aquestalk::to_aquestalk_phrases(
-                &f.to_mora_phrases(text),
+                &mora_phrases(f, text, args),
                 ja_furigana_aquestalk::Options {
                     devoice: !args.no_devoice,
                     trailing_period: !args.drop_period,

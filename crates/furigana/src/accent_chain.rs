@@ -118,7 +118,7 @@ impl ChainRules {
     }
 
     /// 直前の語の品詞に対応する規則 (無ければ品詞指定なしの規則)。 助動詞は 動詞扱い。
-    fn get_rule(&self, prev: Pos) -> Option<ChainRule> {
+    pub(crate) fn get_rule(&self, prev: Pos) -> Option<ChainRule> {
         let by_pos = match prev {
             Pos::Doushi(_) | Pos::Jodoushi => self.doushi,
             Pos::Joshi(_) => self.joshi,

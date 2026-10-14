@@ -6,7 +6,9 @@
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-10-14
+## [0.6.1] - 2026-10-14
+
+(0.6.0 は欠番。 公開前に 下の英字語の扱いを足して 0.6.1 としてまとめた)
 
 ### Added
 
@@ -14,6 +16,7 @@
 - **アクセント表・連結表のバイナリキャッシュ** (`tablecache.rs`) — 読み込んだ表を `<辞書ディレクトリ>/.furigana-cache/tables-<key>.fgtb` に保存し、 次回以降はそれを読む (起動 約 530 ms → 約 220 ms)。 元ファイルの (大きさ, 更新時刻, 内容のハッシュ) で古いキャッシュを検出する。 書けない場所では黙って諦める。 `FURIGANA_NO_TABLE_CACHE=1` で無効。 `furigana dict build-cache` で先に作れる
 - **形式の版** — `[meta] format = "<役割>/<版>"` (`accent/1`, `accent_chain/1`)。 lib は自分が対応する版だけ読み、 知らない版は無視する (`format` の無い file は従来どおり)
 - **VOICEVOX / AquesTalk の記号列が OpenJTalk 方式のアクセント句になる** — 辞書に連結規則の表 (`role = "accent_chain"`) があれば、 `Furigana::to_mora_phrases` が `to_accent_phrases` の句から 「モーラ列 + 核 + 区切り」 を作り、 `ja_furigana_aquestalk::Converter::convert` / `ja_furigana_voicevox::to_aques_kana_phrases` / `to_aquestalk_phrases` / CLI `--mode voicevox|aquestalk` / HTTP がそれを使う (助詞の は / へ / を は ワ / エ / オ)。 表が無ければ従来どおり。 `accent_lexicon(false)` なら表も読まない。 既存の `to_aquestalk(_with)` / `to_aques_kana` (AccentResult を受ける版) は従来のまま
+- **辞書に無い英字語 (`AviUtl` など) の扱い** — VOICEVOX / AquesTalk の記号列はカタカナしか出せないので、 読みが英字のまま残った語は 記号列から黙って落ちていた。 `Furigana::to_mora_phrases_with(text, SymbolOptions { unknown_alpha, .. })` が 落とした語の一覧 (`SymbolOutput::unknown`) を返し、 `UnknownAlpha::Spell` (1 文字ずつ英字の名前で読む: `AviUtl` → エーブイアイユーティーエル) / `UnknownAlpha::Romaji` (ローマ字として読む簡易の読み: アビウトル。 **実験的**、 呼び方が割れる語では外れる) で読ませることもできる。 既定は従来どおり落とす (`Drop`)。 CLI は `--unknown-alpha drop|spell|romaji` と `--report-unknown` (stderr に `unknown<TAB>語…`)。 HTTP は `unknown_alpha` パラメータと、 `voicevox-aques` / `aquestalk` の応答の `unknown` 配列
 - CLI `--batch` の並列化 (`-j N`、 既定は CPU 数。 出力順は入力どおり)
 - `MorphToken::pos_detail3` (IPADIC の細分類 3 = 姓 / 名)
 - 計測用の examples (`bench_chain` / `bench_load` / `missing_accents` / `pos_pairs` / `dump_morphs`)

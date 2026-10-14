@@ -431,8 +431,20 @@ impl Furigana {
     /// adapter crate (`ja-furigana-aquestalk` / `-voicevox`) の `Converter` と CLI / HTTP はこれを使う。
     #[must_use]
     pub fn to_mora_phrases(&self, input: &str) -> crate::accent_symbols::MoraPhrases {
+        self.to_mora_phrases_with(input, crate::accent_symbols::SymbolOptions::default())
+            .phrases
+    }
+
+    /// [`Self::to_mora_phrases`] の option 付き版。 辞書に無い英字語の扱い ([`crate::accent_symbols::UnknownAlpha`]) を選べ、
+    /// 読めずに英字のまま残った語の一覧も返す。
+    #[must_use]
+    pub fn to_mora_phrases_with(
+        &self,
+        input: &str,
+        opts: crate::accent_symbols::SymbolOptions,
+    ) -> crate::accent_symbols::SymbolOutput {
         if self.chain_table.is_empty() {
-            return crate::accent_symbols::to_mora_phrases(&self.to_accent(input));
+            return crate::accent_symbols::to_mora_phrases_with(&self.to_accent(input), opts);
         }
         let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
         let analysis = self.pipeline().analyze(&norm.text);
@@ -444,7 +456,7 @@ impl Furigana {
             &self.accent_lexicon,
             &self.chain_table,
         );
-        crate::accent_symbols::chained_to_mora_phrases(&phrases, &gap)
+        crate::accent_symbols::chained_to_mora_phrases(&phrases, &gap, opts)
     }
 }
 

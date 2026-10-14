@@ -125,7 +125,7 @@ fn parse_template(t: &str, groups: usize) -> Result<Vec<Piece>, String> {
 }
 
 /// 英字の読み (A〜Z)。
-const LETTER_NAMES: [&str; 26] = [
+pub(crate) const LETTER_NAMES: [&str; 26] = [
     "エー",
     "ビー",
     "シー",

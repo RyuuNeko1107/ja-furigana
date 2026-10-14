@@ -236,6 +236,7 @@ fn process(
             timings_ms,
             analyze: Some(analyze_result),
             accent: None,
+            unknown: None,
         }));
     }
 
@@ -270,6 +271,7 @@ fn process(
             timings_ms,
             analyze: None,
             accent: Some(accent_result),
+            unknown: None,
         }));
     }
 
@@ -278,7 +280,13 @@ fn process(
         // - voicevox-aques: そのまま POST /accent_phrases?is_kana=true へ渡せる kana 記法
         // - aquestalk: 本家 AquesTalk (AquesTalk2 / AquesTalk10) の音声記号列
         let convert_start = Instant::now();
-        let symbols_in = f.to_mora_phrases(&text);
+        let alpha_mode = parse_unknown_alpha(params.unknown_alpha.as_deref())
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))))?;
+        let mut sym_opts = furigana::accent_symbols::SymbolOptions::default();
+        sym_opts.unknown_alpha = alpha_mode;
+        let symbols_out = f.to_mora_phrases_with(&text, sym_opts);
+        let symbols_in = symbols_out.phrases;
+        let unknown_words = symbols_out.unknown;
         // aquestalk は engine 側に記号列長の上限があるので、 `segmented=true` の時は
         // アクセント句境界で分割した列も `segments` に載せる (pause 記号は保持される)。
         let (result, segments) = if mode == "aquestalk" {
@@ -322,6 +330,7 @@ fn process(
             timings_ms,
             analyze: None,
             accent: None,
+            unknown: Some(unknown_words),
         }));
     }
 
@@ -427,6 +436,7 @@ fn process(
         timings_ms,
         analyze: None,
         accent: None,
+        unknown: None,
     }))
 }
 
@@ -564,6 +574,19 @@ fn round1(ms: f64) -> f64 {
     (ms * 10.0).round() / 10.0
 }
 
+/// `unknown_alpha` パラメータの解釈 (省略は `drop`)
+fn parse_unknown_alpha(v: Option<&str>) -> Result<furigana::accent_symbols::UnknownAlpha, String> {
+    use furigana::accent_symbols::UnknownAlpha;
+    match v.unwrap_or("drop") {
+        "drop" => Ok(UnknownAlpha::Drop),
+        "spell" => Ok(UnknownAlpha::Spell),
+        "romaji" => Ok(UnknownAlpha::Romaji),
+        other => Err(format!(
+            "unknown_alpha は drop / spell / romaji のどれか (受け取った値: {other})"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -581,9 +604,23 @@ mod tests {
             segmented: false,
             max_segment_len: default_max_seg(),
             devoice: true,
+            unknown_alpha: None,
             max_len: None,
             debug: false,
         }
+    }
+
+    #[test]
+    fn parse_unknown_alpha_accepts_known_values_only() {
+        use furigana::accent_symbols::UnknownAlpha;
+        assert_eq!(parse_unknown_alpha(None), Ok(UnknownAlpha::Drop));
+        assert_eq!(parse_unknown_alpha(Some("drop")), Ok(UnknownAlpha::Drop));
+        assert_eq!(parse_unknown_alpha(Some("spell")), Ok(UnknownAlpha::Spell));
+        assert_eq!(
+            parse_unknown_alpha(Some("romaji")),
+            Ok(UnknownAlpha::Romaji)
+        );
+        assert!(parse_unknown_alpha(Some("keep")).is_err());
     }
 
     #[test]

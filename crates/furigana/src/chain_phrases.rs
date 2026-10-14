@@ -269,9 +269,6 @@ impl ChainTable {
                 };
                 continue;
             }
-            if section.is_empty() || !t.starts_with('"') {
-                continue;
-            }
             let Some((key, end)) = quoted(t) else {
                 continue;
             };
@@ -459,31 +456,10 @@ fn map_pos(m: &MorphToken) -> (Pos, bool) {
         .conjugation_form
         .as_deref()
         .is_some_and(|f| f.starts_with("連用"));
-    let sub = |d: &str| match d {
-        "非自立" => Sub::Hijiritsu,
-        "接尾" => Sub::Setsubi,
-        _ => Sub::Jiritsu,
-    };
-    let pos = match p1 {
-        "名詞" => Pos::Meishi(match d1 {
-            "接尾" => MeishiKind::Setsubi,
-            "形容動詞語幹" => MeishiKind::KeiyoudoushiGokan,
-            "副詞可能" => MeishiKind::FukushiKanou,
-            "数" => MeishiKind::Kazu,
-            "固有名詞" if d2 == "人名" && d3 == "姓" => MeishiKind::Sei,
-            "固有名詞" if d2 == "人名" && d3 == "名" => MeishiKind::Mei,
-            _ => MeishiKind::General,
-        }),
-        "動詞" => Pos::Doushi(sub(d1)),
-        "形容詞" => Pos::Keiyoushi(sub(d1)),
-        "助詞" => Pos::Joshi(d1 == "接続助詞"),
-        "助動詞" => Pos::Jodoushi,
-        "副詞" => Pos::Fukushi,
-        "接続詞" => Pos::Setsuzokushi,
-        "連体詞" => Pos::Rentaishi,
-        "接頭詞" => Pos::Settoushi,
-        "記号" => Pos::Kigou(d1 == "数"),
-        _ => Pos::Other,
+    let pos = match (p1, d1, d2, d3) {
+        ("名詞", "固有名詞", "人名", "姓") => Pos::Meishi(MeishiKind::Sei),
+        ("名詞", "固有名詞", "人名", "名") => Pos::Meishi(MeishiKind::Mei),
+        _ => pos_of(p1, d1),
     };
     (pos, renyou)
 }
@@ -815,6 +791,7 @@ fn new_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accent_chain::AccentType;
     use crate::api::Furigana;
     use std::path::PathBuf;
 
@@ -1068,5 +1045,384 @@ format = \"accent_chain/1\"
         assert!(!g.to_mora_phrases("初心者の使い方です").phrases.is_empty());
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::remove_dir_all(&d2);
+    }
+
+    fn tok(p1: &str, d1: &str, d2: &str, d3: &str, form: &str) -> MorphToken {
+        MorphToken {
+            surface: String::new(),
+            reading: None,
+            pos: Some(p1.into()),
+            pos_detail: Some(d1.into()),
+            pos_detail2: Some(d2.into()),
+            pos_detail3: Some(d3.into()),
+            conjugation_type: None,
+            conjugation_form: Some(form.into()),
+            base_form: None,
+        }
+    }
+
+    #[test]
+    fn pos_of_covers_every_class() {
+        use MeishiKind as M;
+        use Sub::*;
+        let cases = [
+            (("名詞", "一般"), Pos::Meishi(M::General)),
+            (("名詞", "接尾"), Pos::Meishi(M::Setsubi)),
+            (("名詞", "形容動詞語幹"), Pos::Meishi(M::KeiyoudoushiGokan)),
+            (("名詞", "副詞可能"), Pos::Meishi(M::FukushiKanou)),
+            (("名詞", "数"), Pos::Meishi(M::Kazu)),
+            (("動詞", "自立"), Pos::Doushi(Jiritsu)),
+            (("動詞", "非自立"), Pos::Doushi(Hijiritsu)),
+            (("動詞", "接尾"), Pos::Doushi(Setsubi)),
+            (("形容詞", "自立"), Pos::Keiyoushi(Jiritsu)),
+            (("形容詞", "非自立"), Pos::Keiyoushi(Hijiritsu)),
+            (("形容詞", "接尾"), Pos::Keiyoushi(Setsubi)),
+            (("助詞", "接続助詞"), Pos::Joshi(true)),
+            (("助詞", "格助詞"), Pos::Joshi(false)),
+            (("助動詞", "*"), Pos::Jodoushi),
+            (("副詞", "一般"), Pos::Fukushi),
+            (("接続詞", "*"), Pos::Setsuzokushi),
+            (("連体詞", "*"), Pos::Rentaishi),
+            (("接頭詞", "名詞接続"), Pos::Settoushi),
+            (("記号", "数"), Pos::Kigou(true)),
+            (("記号", "一般"), Pos::Kigou(false)),
+            (("感動詞", "*"), Pos::Other),
+        ];
+        for ((p1, d1), want) in cases {
+            assert_eq!(pos_of(p1, d1), want, "{p1},{d1}");
+        }
+    }
+
+    #[test]
+    fn map_pos_names_and_conjugation() {
+        use MeishiKind as M;
+        let m = |p1, d1, d2, d3, f| map_pos(&tok(p1, d1, d2, d3, f));
+        assert_eq!(
+            m("名詞", "固有名詞", "人名", "姓", "*").0,
+            Pos::Meishi(M::Sei)
+        );
+        assert_eq!(
+            m("名詞", "固有名詞", "人名", "名", "*").0,
+            Pos::Meishi(M::Mei)
+        );
+        // 人名でない固有名詞 / 姓名どちらでもない人名は 一般
+        assert_eq!(
+            m("名詞", "固有名詞", "地域", "姓", "*").0,
+            Pos::Meishi(M::General)
+        );
+        assert_eq!(
+            m("名詞", "固有名詞", "人名", "一般", "*").0,
+            Pos::Meishi(M::General)
+        );
+        assert_eq!(
+            m("名詞", "固有名詞", "一般", "名", "*").0,
+            Pos::Meishi(M::General)
+        );
+        assert_eq!(
+            m("名詞", "一般", "人名", "姓", "*").0,
+            Pos::Meishi(M::General)
+        );
+        // 連用形か
+        assert!(m("動詞", "自立", "*", "*", "連用形").1);
+        assert!(m("動詞", "自立", "*", "*", "連用タ接続").1);
+        assert!(!m("動詞", "自立", "*", "*", "基本形").1);
+        // 欠けた項目は空文字扱い
+        let empty = MorphToken {
+            surface: String::new(),
+            reading: None,
+            pos: None,
+            pos_detail: None,
+            pos_detail2: None,
+            pos_detail3: None,
+            conjugation_type: None,
+            conjugation_form: None,
+            base_form: None,
+        };
+        assert_eq!(map_pos(&empty), (Pos::Other, false));
+    }
+
+    #[test]
+    fn count_mora_counts_kana_only() {
+        assert_eq!(count_mora("ショーテン"), 4);
+        assert_eq!(count_mora("キョウ"), 2);
+        assert_eq!(count_mora("ッ"), 1);
+        assert_eq!(count_mora("ア、イ!"), 2);
+        assert_eq!(count_mora("ABC"), 0);
+        assert_eq!(count_mora(""), 0);
+        assert_eq!(count_mora("ファイル"), 3);
+    }
+
+    #[test]
+    fn align_finds_surfaces_in_order_within_a_small_gap() {
+        let mk = |s: &str| MorphToken {
+            surface: s.to_string(),
+            ..tok("名詞", "一般", "*", "*", "*")
+        };
+        let text = "犬と猫";
+        let r = align(text, &[mk("犬"), mk("と"), mk("猫")]);
+        assert_eq!(r, vec![Some((0, 3)), Some((3, 6)), Some((6, 9))]);
+        // 見つからない形態素は None で、 次の探索位置は動かない
+        let r = align(text, &[mk("鳥"), mk("犬")]);
+        assert_eq!(r, vec![None, Some((0, 3))]);
+        // 8 バイト先までは許す / 9 バイト以上先は None
+        let near = format!("{}x", "あい"); // 6 バイト + x
+        assert_eq!(align(&near, &[mk("x")]), vec![Some((6, 7))]);
+        let eight = format!("{}x", "あい") + "yy"; // x は 6 バイト目
+        assert_eq!(align(&eight, &[mk("yy")]), vec![Some((7, 9))]);
+        let at8 = format!("{}z", "あいxx"); // z は 8 バイト目
+        assert_eq!(align(&at8, &[mk("z")]), vec![Some((8, 9))]);
+        let at9 = format!("{}z", "あいう"); // z は 9 バイト目
+        assert_eq!(align(&at9, &[mk("z")]), vec![None]);
+    }
+
+    #[test]
+    fn rule_pool_stops_at_255_rules() {
+        let mut t = ChainTable::default();
+        let mut last = 0u8;
+        for k in 0..300 {
+            last = t.rule_id(&format!("F4@{k}"));
+        }
+        assert_eq!(t.pool.len(), 255);
+        assert_eq!(last, u8::MAX);
+        // 登録済みの規則は同じ id
+        assert_eq!(t.rule_id("F4@0"), 0);
+        assert_eq!(t.rule_id("F4@254"), 254);
+    }
+
+    const FULL_TABLE: &str = "[meta]
+role = \"accent_chain\"
+format = \"accent_chain/1\"
+ids = [
+\"a\", \"b\"
+]
+[defaults]
+\"名詞,一般\" = \"C1\"
+[[test]]
+[\"x\"]
+\"動詞,自立\" = \"F4@1\"
+[functional]
+\"の,ノ,助詞,連体化\" = \"0/1|名詞%F1\"
+\"の,ノ,助詞,連体化\" = \"0/1|名詞%F1\"
+\"が,ガ,助詞,格助詞\" = \"0/1|F2@1\"
+\"bad,line\" = \"0/1|F1\"
+\"で,デ,助詞,格助詞\" = \"x/1|F1\"
+# コメント
+[exceptions]
+\"犬,イヌ,名詞,一般\" = \"C2\"
+\"犬,イヌ,名詞,一般\" = \"C3\"
+[words]
+\"猫,ネコ,名詞\" = \"1/2\"
+\"猫,ネコ,名詞\" = \"1/2\"
+\"鳥,トリ,名詞\" = \"x/2\"
+[splits]
+\"という,助詞,格助詞\" = \"と,ト,助詞,格助詞,1,0/1,動詞%F1;いう,イウ,動詞,自立,0,0/2,*\"
+\"単独,助詞,格助詞\" = \"と,ト,助詞,格助詞,1,0/1,動詞%F1\"
+[unknown]
+\"ignored,イグ,名詞,一般\" = \"C5\"
+";
+
+    fn full_table() -> ChainTable {
+        let mut t = ChainTable::default();
+        t.load_str(FULL_TABLE);
+        t.finish();
+        t
+    }
+
+    #[test]
+    fn load_str_reads_every_section_and_skips_noise() {
+        use crate::keyhash::hash_parts as h;
+        let t = full_table();
+        assert!(!t.is_empty());
+        // defaults: [[test]] や ["x"] の行では section が変わらない
+        assert_eq!(t.defaults.len(), 2);
+        // functional: 重複は 1 件に / 不正な行は読まない
+        assert_eq!(t.functional.len(), 2);
+        assert!(t
+            .functional_get(h(&["の", "ノ", "助詞", "連体化"]))
+            .is_some());
+        assert!(t
+            .functional_get(h(&["が", "ガ", "助詞", "格助詞"]))
+            .is_some());
+        assert!(t
+            .functional_get(h(&["で", "デ", "助詞", "格助詞"]))
+            .is_none());
+        // exceptions: 重複は 1 件に
+        assert_eq!(t.exceptions.len(), 1);
+        // words
+        assert_eq!(t.words.len(), 1);
+        assert_eq!(t.word_get(h(&["猫", "ネコ", "名詞"])), Some((1, 2)));
+        assert_eq!(t.word_get(h(&["鳥", "トリ", "名詞"])), None);
+        // splits: 部品が 2 つ以上の語だけ
+        assert_eq!(t.splits.len(), 1);
+        assert_eq!(
+            t.split_get(h(&["という", "助詞", "格助詞"]))
+                .map(<[_]>::len),
+            Some(2)
+        );
+        assert!(t.split_get(h(&["単独", "助詞", "格助詞"])).is_none());
+        // 知らないセクションは読まない
+        assert!(t
+            .rules_for_key(h(&["ignored", "イグ", "名詞", "一般"]), "名詞", "一般")
+            .get_rule(Pos::Fukushi)
+            .is_some_and(|r| r.accent_type == AccentType::C1));
+    }
+
+    #[test]
+    fn rules_for_key_prefers_exceptions_then_defaults() {
+        use crate::keyhash::hash_parts as h;
+        let t = full_table();
+        let ty = |r: ChainRules| r.get_rule(Pos::Fukushi).map(|x| x.accent_type);
+        // 例外
+        assert_eq!(
+            ty(t.rules_for_key(h(&["犬", "イヌ", "名詞", "一般"]), "名詞", "一般")),
+            Some(AccentType::C2)
+        );
+        // 例外でなければ 品詞の既定
+        assert_eq!(
+            ty(t.rules_for_key(h(&["猫", "ネコ", "名詞", "一般"]), "名詞", "一般")),
+            Some(AccentType::C1)
+        );
+        assert_eq!(
+            ty(t.rules_for_key(h(&["走る", "ハシル", "動詞", "自立"]), "動詞", "自立")),
+            Some(AccentType::F4)
+        );
+        // 既定の品詞1 だけ / 品詞2 だけが合う場合は使わない
+        assert_eq!(ty(t.rules_for_key(1, "名詞", "接尾")), None);
+        assert_eq!(ty(t.rules_for_key(1, "動詞", "一般")), None);
+        assert_eq!(ty(t.rules_for_key(1, "副詞", "一般")), None);
+    }
+
+    #[test]
+    fn is_empty_needs_both_tables_empty() {
+        assert!(ChainTable::default().is_empty());
+        let mut t = ChainTable::default();
+        t.load_str("[defaults]\n\"名詞,一般\" = \"C1\"\n");
+        assert!(!t.is_empty());
+        let mut t = ChainTable::default();
+        t.load_str("[functional]\n\"の,ノ,助詞,連体化\" = \"0/1|F1\"\n");
+        assert!(!t.is_empty());
+    }
+
+    #[test]
+    fn finish_sorts_and_dedups_each_table() {
+        use crate::keyhash::hash_parts as h;
+        let mut t = ChainTable::default();
+        t.load_str(
+            "[words]\n\"b,ビ,名詞\" = \"1/2\"\n\"a,ア,名詞\" = \"2/2\"\n\"b,ビ,名詞\" = \"1/2\"\n\"c,シ,名詞\" = \"0/2\"\n\
+             [exceptions]\n\"b,ビ,名詞,一般\" = \"C1\"\n\"a,ア,名詞,一般\" = \"C2\"\n\"b,ビ,名詞,一般\" = \"C1\"\n\
+             [functional]\n\"b,ビ,助詞,格助詞\" = \"0/1|F1\"\n\"a,ア,助詞,格助詞\" = \"0/1|F2@1\"\n\"b,ビ,助詞,格助詞\" = \"0/1|F1\"\n\
+             [splits]\n\"b,助詞,格助詞\" = \"と,ト,助詞,格助詞,0,0/1,F1;い,イ,動詞,自立,0,0/1,*\"\n\
+             \"a,助詞,格助詞\" = \"と,ト,助詞,格助詞,0,0/1,F1;い,イ,動詞,自立,0,0/1,*\"\n\
+             \"b,助詞,格助詞\" = \"と,ト,助詞,格助詞,0,0/1,F1;い,イ,動詞,自立,0,0/1,*\"\n",
+        );
+        t.finish();
+        assert_eq!(t.words.len(), 3);
+        assert_eq!(t.exceptions.len(), 2);
+        assert_eq!(t.functional.len(), 2);
+        assert_eq!(t.splits.len(), 2);
+        assert!(t.words.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(t.exceptions.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(t.functional.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(t.splits.windows(2).all(|w| w[0].0 < w[1].0));
+        assert_eq!(t.word_get(h(&["a", "ア", "名詞"])), Some((2, 2)));
+        assert_eq!(t.word_get(h(&["c", "シ", "名詞"])), Some((0, 2)));
+    }
+
+    #[test]
+    fn parse_part_reads_seven_fields() {
+        let mut t = ChainTable::default();
+        let p = t
+            .parse_part("と,ト,助詞,格助詞,1,2/3,動詞%F1")
+            .expect("読める");
+        assert_eq!(&*p.surface, "と");
+        assert_eq!(&*p.reading, "ト");
+        assert_eq!(p.pos, Pos::Joshi(false));
+        assert!(p.renyou);
+        assert_eq!((p.accent, p.mora), (2, 3));
+        assert_eq!(&*p.pos_label, "助詞,格助詞");
+        let q = t.parse_part("い,イ,動詞,自立,0,0/1,*").expect("読める");
+        assert!(!q.renyou);
+        assert_eq!(q.pos, Pos::Doushi(Sub::Jiritsu));
+        // 項目が足りない / 核の書式が違う
+        assert!(t.parse_part("と,ト,助詞,格助詞,1,2/3").is_none());
+        assert!(t.parse_part("と,ト,助詞,格助詞,1,23,F1").is_none());
+        assert!(t.parse_part("と,ト,助詞,格助詞,1,x/3,F1").is_none());
+        assert!(t.parse_part("と,ト,助詞,格助詞,1,2/y,F1").is_none());
+    }
+
+    #[test]
+    fn cache_roundtrip_keeps_split_renyou_and_sections() {
+        use crate::keyhash::hash_parts as h;
+        let t = full_table();
+        let mut w = crate::tablecache::Writer(Vec::new());
+        t.write_to(&mut w);
+        let mut r = crate::tablecache::Reader::new(&w.0);
+        let u = ChainTable::read_from(&mut r).expect("読める");
+        assert_eq!(u.defaults.len(), t.defaults.len());
+        assert_eq!(u.functional.len(), t.functional.len());
+        assert_eq!(u.exceptions.len(), t.exceptions.len());
+        assert_eq!(u.words.len(), t.words.len());
+        let parts = u
+            .split_get(h(&["という", "助詞", "格助詞"]))
+            .expect("分割表");
+        assert!(parts[0].renyou);
+        assert!(!parts[1].renyou);
+        assert_eq!(parts[0].pos, Pos::Joshi(false));
+        assert_eq!(parts[1].pos, Pos::Doushi(Sub::Jiritsu));
+    }
+
+    #[test]
+    fn load_dir_takes_only_supported_accent_chain_files() {
+        let d = tmp("loaddir");
+        let w = |name: &str, body: &str| std::fs::write(d.join(name), body).unwrap();
+        w(
+            "ok.toml",
+            "[meta]\nschema_version = \"2\"\nrole = \"accent_chain\"\nformat = \"accent_chain/1\"\n\n[defaults]\n\"名詞,一般\" = \"C1\"\n",
+        );
+        w(
+            "future.toml",
+            "[meta]\nschema_version = \"2\"\nrole = \"accent_chain\"\nformat = \"accent_chain/99\"\n\n[defaults]\n\"動詞,自立\" = \"F1\"\n",
+        );
+        w(
+            "other.toml",
+            "[meta]\nschema_version = \"2\"\nrole = \"accent\"\n\n[defaults]\n\"形容詞,自立\" = \"F2@1\"\n",
+        );
+        let mut t = ChainTable::default();
+        t.load_dir(&d, &[]).unwrap();
+        assert_eq!(t.defaults.len(), 1);
+        assert_eq!(&*t.defaults[0].0, "名詞");
+        // 無いディレクトリは空のまま
+        let mut e = ChainTable::default();
+        e.load_dir(&d.join("none"), &[]).unwrap();
+        assert!(e.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn particles_are_spoken_as_sounds() {
+        let (f, d) = mini("sound", true);
+        let s = |t: &str| {
+            f.to_mora_phrases(t)
+                .phrases
+                .iter()
+                .map(|p| p.morae.concat())
+                .collect::<String>()
+        };
+        assert_eq!(s("初心者は"), "ショシンシャワ");
+        assert_eq!(s("初心者へ"), "ショシンシャエ");
+        assert_eq!(s("初心者を"), "ショシンシャオ");
+        assert_eq!(s("初心者が"), "ショシンシャガ");
+        // 語中の は へ を は 読みのまま (助詞でない)
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn missing_accents_lists_only_unknown_words() {
+        let (f, d) = mini("missing2", true);
+        assert!(f.chain_missing_accents("初心者の使い方です").is_empty());
+        let m = f.chain_missing_accents("犬です");
+        assert!(m.iter().any(|x| x.0 == "犬"));
+        assert!(!m.iter().any(|x| x.0 == "です"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

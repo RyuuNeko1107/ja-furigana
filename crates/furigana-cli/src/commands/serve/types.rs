@@ -78,6 +78,9 @@ pub(super) struct FuriganaParams {
     /// `mode=aquestalk`: 無声化記号 `_` の自動付与 (default: true)
     #[serde(default = "default_true")]
     pub(super) devoice: bool,
+    /// `mode=aquestalk` / `voicevox-aques`: 辞書に無い英字語の扱い `drop` (default) / `spell` / `romaji` (実験的)
+    #[serde(default)]
+    pub(super) unknown_alpha: Option<String>,
     /// `mode=aquestalk` + `segmented=true`: 1 塊あたりの記号列の最大文字数。
     /// 省略時は AquesTalk エンジンの目安上限。
     #[serde(default)]
@@ -118,6 +121,9 @@ pub(super) struct FuriganaResponse {
     /// `mode=accent` の時のみ入る accent 中立 JSON (0.2.0)。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) accent: Option<AccentResult>,
+    /// `mode=aquestalk` / `voicevox-aques` の時のみ入る、 読めずに英字のまま残った語 (記号列には出ない)。 無ければ空配列
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) unknown: Option<Vec<String>>,
 }
 
 /// `/furigana` のエラーレスポンス (`{"error": "..."}` + HTTP ステータス)
