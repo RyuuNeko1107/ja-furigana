@@ -1,0 +1,4 @@
+[advisories]
+# unsafe-libyaml は 保守終了の通知のみ (脆弱性ではない)。 lindera 3.0.7 -> serde_yaml_ng 経由の推移依存で、
+# 辞書の設定 file の読み込みにしか使われず、 利用者の入力は渡らない。 lindera 側が差し替えたら外す。
+ignore = ["RUSTSEC-2024-0449"]
