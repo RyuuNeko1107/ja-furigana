@@ -96,6 +96,9 @@
 #![allow(clippy::tabs_in_doc_comments)]
 
 pub mod accent_symbols;
+pub(crate) mod accent_chain;
+pub(crate) mod keyhash;
+pub mod chain_phrases;
 pub mod analyzer;
 pub(crate) mod char_class;
 pub mod dict;

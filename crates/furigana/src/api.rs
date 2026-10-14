@@ -51,6 +51,8 @@ pub struct Furigana {
     loanwords: Arc<HashMap<String, String>>,
     /// アクセント専用の表 (dict の `role = "accent"`)。 bracket の無い token に 表記 + 読み一致で accent を付ける
     accent_lexicon: crate::scoring::accent_lexicon::AccentLexicon,
+    /// アクセント句の連結規則の表 (dict の `role = "accent_chain"`)。 [`Furigana::to_accent_phrases`] が使う
+    chain_table: crate::chain_phrases::ChainTable,
     /// rule-based accent 推定の opt-in flag (ADR-0007、 default false)。
     ///
     /// true のとき dict bracket を持たない token に外来語 -3 rule / 人名 rule で
@@ -358,6 +360,31 @@ impl Furigana {
     pub fn to_accent(&self, input: &str) -> AccentResult {
         AccentResult::from_analysis(self.analyze(input))
     }
+
+    /// 計測用: Lindera の再解析だけを走らせる (形態素数を返す)。 最適化の足場で、 公開 API ではない
+    #[doc(hidden)]
+    pub fn tokenize_pos_only(&self, input: &str) -> usize {
+        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        self.analyzer().tokenize(&norm.text).len()
+    }
+
+    /// 入力から OpenJTalk (VOICEVOX) 方式のアクセント句列を作る。
+    ///
+    /// [`Self::to_accent`] の token 単位の核を、 OpenJTalk と同じ **句の連結規則 / アクセント結合** で句にまとめ直す
+    /// (助詞は前の語にくっつく、 名詞 + 動詞は別の句、 複合語の核は後部の結合型で決まる、 等)。
+    /// 連結規則の表 (dict の `role = "accent_chain"`) が無いと、 句は作れず空の `Vec` を返す。
+    ///
+    /// 語単体の核が表に無い語は 平板で埋め、 その句に `estimated: true` を付ける。
+    #[must_use]
+    pub fn to_accent_phrases(&self, input: &str) -> Vec<crate::chain_phrases::ChainedPhrase> {
+        if self.chain_table.is_empty() {
+            return Vec::new();
+        }
+        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let analysis = self.pipeline().analyze(&norm.text);
+        let morphs = self.analyzer().tokenize(&norm.text);
+        crate::chain_phrases::build_chained_phrases(&norm.text, &analysis.tokens, &morphs, &self.accent_lexicon, &self.chain_table)
+    }
 }
 
 // ─── AccentResult / AccentToken ─────────────────────────────────────────────
@@ -607,6 +634,13 @@ impl FuriganaBuilder {
                 accent_lexicon.load_dir(d, &self.dict_excludes)?;
             }
         }
+        // アクセント句の連結規則の表 (role = "accent_chain")。 アクセント表と同じく --no-accent-lexicon で読まない
+        let mut chain_table = crate::chain_phrases::ChainTable::default();
+        if !self.no_accent_lexicon {
+            for d in self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()) {
+                chain_table.load_dir(d, &self.dict_excludes)?;
+            }
+        }
 
         Ok(Furigana {
             analyzer: OnceLock::new(),
@@ -615,6 +649,7 @@ impl FuriganaBuilder {
             number_provider,
             loanwords: Arc::new(loanwords_map),
             accent_lexicon,
+            chain_table,
             estimate_accent: self.estimate_accent,
             // 実験中の cost lattice engine (ADR-0011)。 環境変数で切り替えて A/B する。
             cost_engine: self.cost_engine

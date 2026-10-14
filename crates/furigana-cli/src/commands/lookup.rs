@@ -79,6 +79,9 @@ pub struct Args {
     /// (例: `--exclude-dict works --exclude-dict jukugo/society/mahjong`)
     #[arg(long = "exclude-dict", value_name = "PATH")]
     exclude_dict: Vec<String>,
+    /// --batch の並列数 (既定 = CPU 数、 1 で逐次)。 出力の順序は入力どおり
+    #[arg(short = 'j', long = "jobs", value_name = "N")]
+    jobs: Option<usize>,
 }
 
 /// 実行
@@ -120,9 +123,36 @@ pub fn run(args: &Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         use std::io::{BufRead, BufWriter, Write};
         let stdin = std::io::stdin();
         let mut out = BufWriter::new(std::io::stdout().lock());
-        for line in stdin.lock().lines() {
-            let line = line.context("read stdin")?;
-            writeln!(out, "{}", convert(&f, &line, args)?).context("write stdout")?;
+        let jobs = args
+            .jobs
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get))
+            .max(1);
+        // 一定行数ずつ読んで並列に変換し、 入力順に書き出す (メモリは 1 ブロック分で頭打ち)
+        const BLOCK: usize = 4096;
+        let mut lines = stdin.lock().lines();
+        loop {
+            let block: Vec<String> = lines.by_ref().take(BLOCK).collect::<std::io::Result<_>>().context("read stdin")?;
+            if block.is_empty() {
+                break;
+            }
+            let results: Vec<Result<String>> = if jobs == 1 || block.len() < 2 * jobs {
+                block.iter().map(|l| convert(&f, l, args)).collect()
+            } else {
+                let chunk = block.len().div_ceil(jobs);
+                std::thread::scope(|scope| {
+                    let handles: Vec<_> = block
+                        .chunks(chunk)
+                        .map(|part| {
+                            let f = &f;
+                            scope.spawn(move || part.iter().map(|l| convert(f, l, args)).collect::<Vec<_>>())
+                        })
+                        .collect();
+                    handles.into_iter().flat_map(|h| h.join().expect("batch worker panicked")).collect()
+                })
+            };
+            for r in results {
+                writeln!(out, "{}", r?).context("write stdout")?;
+            }
         }
         out.flush().context("flush stdout")?;
         return Ok(());
@@ -188,8 +218,10 @@ fn convert(f: &Furigana, text: &str, args: &Args) -> Result<String> {
             let result = f.to_accent(text);
             serde_json::to_string_pretty(&result).context("serialize AccentResult to JSON")?
         }
+        // OpenJTalk 方式のアクセント句列 (連結規則で組み立て)。 1 行の JSON なので --batch でも使える
+        "accent-phrases" => serde_json::to_string(&f.to_accent_phrases(text)).context("serialize accent phrases to JSON")?,
         other => bail!(
-            "未知の mode: {other} (使用可能: tts | bouyomi | hiragana | ruby | kanji | romaji | romaji-kunrei | analyze | accent | voicevox-aques | aquestalk)"
+            "未知の mode: {other} (使用可能: tts | bouyomi | hiragana | ruby | kanji | romaji | romaji-kunrei | analyze | accent | accent-phrases | voicevox-aques | aquestalk)"
         ),
     };
 
