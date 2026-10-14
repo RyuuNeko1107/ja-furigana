@@ -368,6 +368,26 @@ impl Furigana {
         self.analyzer().tokenize(&norm.text).len()
     }
 
+    /// 診断用: 語単体の核が表に無く 平板で埋めたノード (表記, 読み, 品詞)。 表を育てる作業の入力で、 公開 API ではない
+    #[doc(hidden)]
+    #[must_use]
+    pub fn chain_missing_accents(&self, input: &str) -> Vec<(String, String, String)> {
+        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let analysis = self.pipeline().analyze(&norm.text);
+        let morphs = self.analyzer().tokenize(&norm.text);
+        crate::chain_phrases::missing_accents(&norm.text, &analysis.tokens, &morphs, &self.accent_lexicon, &self.chain_table)
+    }
+
+    /// 診断用: 各ノードの (表記, 読み, 品詞, 前の語にくっついたか)。 公開 API ではない
+    #[doc(hidden)]
+    #[must_use]
+    pub fn chain_debug_nodes(&self, input: &str) -> Vec<(String, String, String, bool)> {
+        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let analysis = self.pipeline().analyze(&norm.text);
+        let morphs = self.analyzer().tokenize(&norm.text);
+        crate::chain_phrases::debug_nodes(&norm.text, &analysis.tokens, &morphs, &self.accent_lexicon, &self.chain_table)
+    }
+
     /// 入力から OpenJTalk (VOICEVOX) 方式のアクセント句列を作る。
     ///
     /// [`Self::to_accent`] の token 単位の核を、 OpenJTalk と同じ **句の連結規則 / アクセント結合** で句にまとめ直す
@@ -627,20 +647,14 @@ impl FuriganaBuilder {
         for d in &self.user_dict_dirs {
             load_loanwords_into(&mut loanwords_map, d, &self.dict_excludes)?;
         }
-        // アクセント専用の表 (role = "accent")。 core → user の順 (同じ表記 + 読みは先勝ち)
-        let mut accent_lexicon = crate::scoring::accent_lexicon::AccentLexicon::default();
-        if !self.no_accent_lexicon {
-            for d in self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()) {
-                accent_lexicon.load_dir(d, &self.dict_excludes)?;
-            }
-        }
-        // アクセント句の連結規則の表 (role = "accent_chain")。 アクセント表と同じく --no-accent-lexicon で読まない
-        let mut chain_table = crate::chain_phrases::ChainTable::default();
-        if !self.no_accent_lexicon {
-            for d in self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()) {
-                chain_table.load_dir(d, &self.dict_excludes)?;
-            }
-        }
+        // アクセント専用の表 (role = "accent") と 連結規則の表 (role = "accent_chain")。 core → user の順
+        // (同じ表記 + 読みは先勝ち)。 有効なバイナリキャッシュがあればそれを読む ([`crate::tablecache`])。
+        let (accent_lexicon, chain_table) = if self.no_accent_lexicon {
+            (crate::scoring::accent_lexicon::AccentLexicon::default(), crate::chain_phrases::ChainTable::default())
+        } else {
+            let dirs: Vec<std::path::PathBuf> = self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()).cloned().collect();
+            crate::tablecache::load_tables(&dirs, &self.dict_excludes)?
+        };
 
         Ok(Furigana {
             analyzer: OnceLock::new(),

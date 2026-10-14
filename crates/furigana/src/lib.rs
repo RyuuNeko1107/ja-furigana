@@ -98,6 +98,7 @@
 pub mod accent_symbols;
 pub(crate) mod accent_chain;
 pub(crate) mod keyhash;
+pub(crate) mod tablecache;
 pub mod chain_phrases;
 pub mod analyzer;
 pub(crate) mod char_class;

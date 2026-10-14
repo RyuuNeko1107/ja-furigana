@@ -32,6 +32,21 @@ pub struct ChainedPhrase {
     pub estimated: bool,
 }
 
+/// 分割表の部品 1 つ (OpenJTalk の形態素)。
+#[derive(Debug, Clone)]
+pub(crate) struct SplitPart {
+    surface: Box<str>,
+    reading: Box<str>,
+    pos: Pos,
+    renyou: bool,
+    accent: u8,
+    mora: u8,
+    rules: ChainRules,
+    rule_id: u8,
+    /// 品詞の文字列 (診断用。 「品詞1,品詞2」)
+    pos_label: Box<str>,
+}
+
 /// 付属語・内容語の結合型の表。
 #[derive(Debug, Default)]
 pub(crate) struct ChainTable {
@@ -41,6 +56,10 @@ pub(crate) struct ChainTable {
     functional: Vec<(u64, u8, u8, u8)>,
     /// 内容語の例外 (key は同じ形) → 規則。 key 昇順
     exceptions: Vec<(u64, u8)>,
+    /// 語単体の核 (key = 表記 / 読み / 品詞1 のハッシュ) → (核, 拍数)。 アクセント表に無い語 (活用形・かな語・外来語 等)。 key 昇順
+    words: Vec<(u64, u8, u8)>,
+    /// 分割表: Lindera が 1 語にして OpenJTalk が複数語にする語 (助詞連語など)。 key = (表記, 品詞1, 品詞2) のハッシュ。 key 昇順
+    splits: Vec<(u64, Box<[SplitPart]>)>,
     /// 規則の実体 (重複を畳んだ数十件)
     pool: Vec<ChainRules>,
     pool_index: HashMap<String, u8>,
@@ -69,6 +88,143 @@ fn quoted(s: &str) -> Option<(String, usize)> {
 }
 
 impl ChainTable {
+    /// バイナリキャッシュへ書く (`tablecache`)
+    pub(crate) fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        // 規則の実体: id 順の文字列
+        let mut by_id = vec![String::new(); self.pool.len()];
+        for (rule, &id) in &self.pool_index {
+            if let Some(slot) = by_id.get_mut(usize::from(id)) {
+                slot.clone_from(rule);
+            }
+        }
+        w.u64(by_id.len() as u64);
+        for r in &by_id {
+            w.str(r);
+        }
+        w.u64(self.defaults.len() as u64);
+        for d in &self.defaults {
+            w.str(&d.0);
+            w.str(&d.1);
+            w.u8(d.2);
+        }
+        w.u64(self.functional.len() as u64);
+        for e in &self.functional {
+            w.u64(e.0);
+            w.u8(e.1);
+            w.u8(e.2);
+            w.u8(e.3);
+        }
+        w.u64(self.exceptions.len() as u64);
+        for e in &self.exceptions {
+            w.u64(e.0);
+            w.u8(e.1);
+        }
+        w.u64(self.words.len() as u64);
+        for e in &self.words {
+            w.u64(e.0);
+            w.u8(e.1);
+            w.u8(e.2);
+        }
+        w.u64(self.splits.len() as u64);
+        for (key, parts) in &self.splits {
+            w.u64(*key);
+            w.u64(parts.len() as u64);
+            for p in parts {
+                w.str(&p.surface);
+                w.str(&p.reading);
+                w.str(&p.pos_label);
+                w.u8(u8::from(p.renyou));
+                w.u8(p.accent);
+                w.u8(p.mora);
+                w.u8(p.rule_id);
+            }
+        }
+    }
+
+    /// バイナリキャッシュから読む。 壊れていれば `None`
+    pub(crate) fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        let mut t = Self::default();
+        let n = r.len(4)?;
+        for _ in 0..n {
+            let rule = r.str()?;
+            // 規則の文字列を id 順に積み直す (id は書き出し時と同じ並びになる)
+            let id = u8::try_from(t.pool.len()).ok()?;
+            t.pool.push(ChainRules::parse(rule));
+            t.pool_index.insert(rule.to_string(), id);
+        }
+        let n = r.len(9)?;
+        for _ in 0..n {
+            let p1 = r.str()?;
+            let p2 = r.str()?;
+            t.defaults.push((p1.into(), p2.into(), r.u8()?));
+        }
+        let n = r.len(11)?;
+        t.functional.reserve_exact(n);
+        for _ in 0..n {
+            t.functional.push((r.u64()?, r.u8()?, r.u8()?, r.u8()?));
+        }
+        let n = r.len(9)?;
+        t.exceptions.reserve_exact(n);
+        for _ in 0..n {
+            t.exceptions.push((r.u64()?, r.u8()?));
+        }
+        let n = r.len(10)?;
+        t.words.reserve_exact(n);
+        for _ in 0..n {
+            t.words.push((r.u64()?, r.u8()?, r.u8()?));
+        }
+        let n = r.len(16)?;
+        t.splits.reserve_exact(n);
+        for _ in 0..n {
+            let key = r.u64()?;
+            let m = r.len(12)?;
+            let mut parts = Vec::with_capacity(m);
+            for _ in 0..m {
+                let surface = r.str()?;
+                let reading = r.str()?;
+                let label = r.str()?;
+                let (renyou, accent, mora, rule_id) = (r.u8()? == 1, r.u8()?, r.u8()?, r.u8()?);
+                let (p1, p2) = label.split_once(',').unwrap_or((label, "*"));
+                parts.push(SplitPart {
+                    surface: surface.into(),
+                    reading: reading.into(),
+                    pos: pos_of(p1, p2),
+                    renyou,
+                    accent,
+                    mora,
+                    rules: *t.pool.get(usize::from(rule_id))?,
+                    rule_id,
+                    pos_label: label.into(),
+                });
+            }
+            t.splits.push((key, parts.into_boxed_slice()));
+        }
+        Some(t)
+    }
+
+    /// 部品 「表記,読み,品詞1,品詞2,連用(0/1),核/拍数,結合型」 を読む
+    fn parse_part(&mut self, p: &str) -> Option<SplitPart> {
+        let f: Vec<&str> = p.splitn(7, ',').collect();
+        if f.len() < 7 {
+            return None;
+        }
+        let (a, m) = f[5].split_once('/')?;
+        let id = self.rule_id(f[6]);
+        let (p1, p2) = (f[2], f[3]);
+        let pos = pos_of(p1, p2);
+        Some(SplitPart {
+            surface: f[0].into(),
+            reading: f[1].into(),
+            pos,
+            renyou: f[4] == "1",
+            accent: a.parse().ok()?,
+            mora: m.parse().ok()?,
+            rules: self.pool[usize::from(id)],
+            rule_id: id,
+            pos_label: format!("{p1},{p2}").into(),
+        })
+    }
+
     fn rule_id(&mut self, rule: &str) -> u8 {
         if let Some(&i) = self.pool_index.get(rule) {
             return i;
@@ -97,6 +253,8 @@ impl ChainTable {
                     "[defaults]" => "defaults",
                     "[functional]" => "functional",
                     "[exceptions]" => "exceptions",
+                    "[words]" => "words",
+                    "[splits]" => "splits",
                     _ => "",
                 };
                 continue;
@@ -122,6 +280,21 @@ impl ChainTable {
                     let id = self.rule_id(rule);
                     self.functional.push((k, a, m, id));
                 }
+                "words" => {
+                    let mut it = key.splitn(3, ',');
+                    let (Some(a), Some(b), Some(c)) = (it.next(), it.next(), it.next()) else { continue };
+                    let Some((n, m)) = value.split_once('/') else { continue };
+                    let (Ok(n), Ok(m)) = (n.parse::<u8>(), m.parse::<u8>()) else { continue };
+                    self.words.push((crate::keyhash::hash_parts(&[a, b, c]), n, m));
+                }
+                "splits" => {
+                    let mut it = key.splitn(3, ',');
+                    let (Some(a), Some(b), Some(c)) = (it.next(), it.next(), it.next()) else { continue };
+                    let parts: Vec<SplitPart> = value.split(';').filter_map(|p| self.parse_part(p)).collect();
+                    if parts.len() >= 2 {
+                        self.splits.push((crate::keyhash::hash_parts(&[a, b, c]), parts.into_boxed_slice()));
+                    }
+                }
                 "exceptions" => {
                     let Some(k) = Self::key_of(&key) else { continue };
                     let id = self.rule_id(&value);
@@ -136,6 +309,12 @@ impl ChainTable {
         self.functional.sort_by_key(|e| e.0);
         self.functional.dedup_by(|b, a| a.0 == b.0);
         self.functional.shrink_to_fit();
+        self.splits.sort_by_key(|e| e.0);
+        self.splits.dedup_by(|b, a| a.0 == b.0);
+        self.splits.shrink_to_fit();
+        self.words.sort_by_key(|e| e.0);
+        self.words.dedup_by(|b, a| a.0 == b.0);
+        self.words.shrink_to_fit();
         self.exceptions.sort_by_key(|e| e.0);
         self.exceptions.dedup_by(|b, a| a.0 == b.0);
         self.exceptions.shrink_to_fit();
@@ -147,7 +326,7 @@ impl ChainTable {
             return Ok(());
         }
         crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, _from, role| {
-            if role == Some("accent_chain") {
+            if role == Some("accent_chain") && crate::tablecache::is_supported_table(content) {
                 self.load_str(content);
             }
             Ok(())
@@ -167,6 +346,16 @@ impl ChainTable {
             .map(|i| (self.functional[i].1, self.functional[i].2, self.pool[usize::from(self.functional[i].3)]))
     }
 
+    /// 分割表 (Lindera の 1 語 → OpenJTalk の複数語)。 `key` = (表記, 品詞1, 品詞2) のハッシュ
+    fn split_get(&self, key: u64) -> Option<&[SplitPart]> {
+        self.splits.binary_search_by_key(&key, |e| e.0).ok().map(|i| &*self.splits[i].1)
+    }
+
+    /// 語単体の核 (アクセント表に無い語用)。 `key` = (表記, 読み, 品詞1) のハッシュ
+    fn word_get(&self, key: u64) -> Option<(u8, u8)> {
+        self.words.binary_search_by_key(&key, |e| e.0).ok().map(|i| (self.words[i].1, self.words[i].2))
+    }
+
     /// 内容語の結合型。 `key` = (表記, 読み, 品詞1, 品詞2) のハッシュ
     fn rules_for_key(&self, key: u64, p1: &str, p2: &str) -> ChainRules {
         if let Ok(i) = self.exceptions.binary_search_by_key(&key, |e| e.0) {
@@ -176,6 +365,34 @@ impl ChainTable {
             .iter()
             .find(|d| &*d.0 == p1 && &*d.1 == p2)
             .map_or_else(ChainRules::default, |d| self.pool[usize::from(d.2)])
+    }
+}
+
+/// 品詞1 / 品詞2 の文字列 → 連結規則の品詞 (分割表の部品用)
+fn pos_of(p1: &str, d1: &str) -> Pos {
+    let sub = |d: &str| match d {
+        "非自立" => Sub::Hijiritsu,
+        "接尾" => Sub::Setsubi,
+        _ => Sub::Jiritsu,
+    };
+    match p1 {
+        "名詞" => Pos::Meishi(match d1 {
+            "接尾" => MeishiKind::Setsubi,
+            "形容動詞語幹" => MeishiKind::KeiyoudoushiGokan,
+            "副詞可能" => MeishiKind::FukushiKanou,
+            "数" => MeishiKind::Kazu,
+            _ => MeishiKind::General,
+        }),
+        "動詞" => Pos::Doushi(sub(d1)),
+        "形容詞" => Pos::Keiyoushi(sub(d1)),
+        "助詞" => Pos::Joshi(d1 == "接続助詞"),
+        "助動詞" => Pos::Jodoushi,
+        "副詞" => Pos::Fukushi,
+        "接続詞" => Pos::Setsuzokushi,
+        "連体詞" => Pos::Rentaishi,
+        "接頭詞" => Pos::Settoushi,
+        "記号" => Pos::Kigou(d1 == "数"),
+        _ => Pos::Other,
     }
 }
 
@@ -252,10 +469,72 @@ pub(crate) fn build_chained_phrases(
     lexicon: &AccentLexicon,
     table: &ChainTable,
 ) -> Vec<ChainedPhrase> {
+    let (mut nodes, meta) = make_nodes(text, tokens, morphs, lexicon, table);
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    let phrases = build_phrases(&mut nodes);
+    phrases
+        .into_iter()
+        .filter(|p| p.morae > 0)
+        .map(|p| {
+            let surface: String = meta[p.start..p.end].iter().map(|m| m.surface.as_str()).collect();
+            let reading: String = meta[p.start..p.end].iter().map(|m| m.reading.as_str()).collect();
+            let estimated = meta[p.start..p.end].iter().any(|m| m.estimated);
+            ChainedPhrase { surface, reading, mora: p.morae, accent: p.accent, estimated }
+        })
+        .collect()
+}
+
+/// 診断用: 語単体の核が表に無いノードの (表記, 読み, 品詞)
+pub(crate) fn missing_accents(
+    text: &str,
+    tokens: &[Token],
+    morphs: &[MorphToken],
+    lexicon: &AccentLexicon,
+    table: &ChainTable,
+) -> Vec<(String, String, String)> {
+    let (_, meta) = make_nodes(text, tokens, morphs, lexicon, table);
+    meta.into_iter().filter(|m| m.estimated && !m.reading.is_empty()).map(|m| (m.surface, m.reading, m.pos)).collect()
+}
+
+/// 診断用: 各ノードの (表記, 読み, 品詞, 前の語にくっついたか)
+pub(crate) fn debug_nodes(
+    text: &str,
+    tokens: &[Token],
+    morphs: &[MorphToken],
+    lexicon: &AccentLexicon,
+    table: &ChainTable,
+) -> Vec<(String, String, String, bool)> {
+    let (mut nodes, meta) = make_nodes(text, tokens, morphs, lexicon, table);
+    if nodes.is_empty() {
+        return Vec::new();
+    }
+    build_phrases(&mut nodes);
+    nodes.iter().zip(meta).map(|(n, m)| (m.surface, m.reading, m.pos, n.chain_flag == Some(true))).collect()
+}
+
+/// ノード 1 つの付随情報 (出力の組み立てと、 欠けている核の診断に使う)
+pub(crate) struct NodeMeta {
+    pub surface: String,
+    pub reading: String,
+    pub estimated: bool,
+    /// 品詞 (IPADIC の 大分類,細分類1)。 診断用
+    pub pos: String,
+}
+
+/// 採択 token と形態素から ノード列を作る。
+fn make_nodes(
+    text: &str,
+    tokens: &[Token],
+    morphs: &[MorphToken],
+    lexicon: &AccentLexicon,
+    table: &ChainTable,
+) -> (Vec<Node>, Vec<NodeMeta>) {
     let spans = align(text, morphs);
     // (Node, 表記, 読み, 推定か)
     let mut nodes: Vec<Node> = Vec::new();
-    let mut meta: Vec<(String, String, bool)> = Vec::new();
+    let mut meta: Vec<NodeMeta> = Vec::new();
 
     for tok in tokens {
         let (ts, te) = (tok.range.start, tok.range.end);
@@ -274,7 +553,7 @@ pub(crate) fn build_chained_phrases(
             let mut n = new_node(&tok.surface, 0, 0, Pos::Kigou(false), false, ChainRules::default());
             n.chain_flag = None;
             nodes.push(n);
-            meta.push((tok.surface.clone(), String::new(), false));
+            meta.push(NodeMeta { surface: tok.surface.clone(), reading: String::new(), estimated: false, pos: "記号".to_string() });
             continue;
         }
 
@@ -283,15 +562,31 @@ pub(crate) fn build_chained_phrases(
             for &i in &idx {
                 let m = &morphs[i];
                 let reading = crate::kana::hira_to_kata(m.reading.as_deref().unwrap_or(""));
+                // Lindera の 1 語を OpenJTalk の複数語に分ける (助詞連語 など)
+                let sp1 = m.pos.as_deref().unwrap_or("*");
+                let sp2 = m.pos_detail.as_deref().unwrap_or("*");
+                if let Some(parts) = table.split_get(crate::keyhash::hash_parts(&[&m.surface, sp1, sp2])) {
+                    let joined: String = parts.iter().map(|p| &*p.reading).collect();
+                    if joined == reading {
+                        for part in parts {
+                            let mut node = new_node(&part.surface, usize::from(part.mora), usize::from(part.accent), part.pos, part.renyou, part.rules);
+                            node.last_pos = part.pos;
+                            nodes.push(node);
+                            meta.push(NodeMeta { surface: part.surface.to_string(), reading: part.reading.to_string(), estimated: false, pos: part.pos_label.to_string() });
+                        }
+                        continue;
+                    }
+                }
                 let (pos, renyou) = map_pos(m);
-                let (p1, p2) = (m.pos.as_deref().unwrap_or(""), m.pos_detail.as_deref().unwrap_or(""));
+                // IPADIC の 「*」 は None で返る。 表のキーは 「*」 なので揃える
+                let (p1, p2) = (m.pos.as_deref().unwrap_or("*"), m.pos_detail.as_deref().unwrap_or("*"));
                 let mut estimated = false;
                 let key = crate::keyhash::hash_parts(&[&m.surface, &reading, p1, p2]);
                 let (accent, mora, rules) = if let Some((a, mo, r)) = table.functional_get(key) {
                     (usize::from(a), usize::from(mo), r)
                 } else {
                     let rules = table.rules_for_key(key, p1, p2);
-                    if let Some((a, mo)) = lexicon.lookup(&m.surface, &reading) {
+                    if let Some((a, mo)) = lexicon.lookup(&m.surface, &reading).or_else(|| table.word_get(crate::keyhash::hash_parts(&[&m.surface, &reading, p1]))) {
                         (usize::from(a), usize::from(mo), rules)
                     } else {
                         estimated = true;
@@ -302,7 +597,7 @@ pub(crate) fn build_chained_phrases(
                 let mut node = new_node(&m.surface, mora, accent, pos, renyou, rules);
                 node.last_pos = pos;
                 nodes.push(node);
-                meta.push((m.surface.clone(), reading, estimated));
+                meta.push(NodeMeta { surface: m.surface.clone(), reading, estimated, pos: format!("{},{}", p1, p2) });
             }
             continue;
         }
@@ -311,7 +606,7 @@ pub(crate) fn build_chained_phrases(
         let (first, last) = (idx.first().copied(), idx.last().copied());
         let (pos, renyou) = first.map_or((Pos::Meishi(MeishiKind::General), false), |i| map_pos(&morphs[i]));
         let last_pos = last.map_or(pos, |i| map_pos(&morphs[i]).0);
-        let (p1, p2) = first.map_or(("名詞", "一般"), |i| (morphs[i].pos.as_deref().unwrap_or(""), morphs[i].pos_detail.as_deref().unwrap_or("")));
+        let (p1, p2) = first.map_or(("名詞", "一般"), |i| (morphs[i].pos.as_deref().unwrap_or("*"), morphs[i].pos_detail.as_deref().unwrap_or("*")));
         let key = crate::keyhash::hash_parts(&[&tok.surface, &tok_reading, p1, p2]);
         let rules = table.rules_for_key(key, p1, p2);
         let mut estimated = false;
@@ -333,23 +628,10 @@ pub(crate) fn build_chained_phrases(
         let mut node = new_node(&tok.surface, mora, accent, pos, renyou, rules);
         node.last_pos = last_pos;
         nodes.push(node);
-        meta.push((tok.surface.clone(), tok_reading, estimated));
+        meta.push(NodeMeta { surface: tok.surface.clone(), reading: tok_reading, estimated, pos: format!("{p1},{p2}") });
     }
 
-    if nodes.is_empty() {
-        return Vec::new();
-    }
-    let phrases = build_phrases(&mut nodes);
-    phrases
-        .into_iter()
-        .filter(|p| p.morae > 0)
-        .map(|p| {
-            let surface: String = meta[p.start..p.end].iter().map(|m| m.0.as_str()).collect();
-            let reading: String = meta[p.start..p.end].iter().map(|m| m.1.as_str()).collect();
-            let estimated = meta[p.start..p.end].iter().any(|m| m.2);
-            ChainedPhrase { surface, reading, mora: p.morae, accent: p.accent, estimated }
-        })
-        .collect()
+    (nodes, meta)
 }
 
 fn new_node(surface: &str, morae: usize, accent: usize, pos: Pos, renyou: bool, rules: ChainRules) -> Node {

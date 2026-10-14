@@ -60,6 +60,26 @@ fn quoted(s: &str) -> Option<(String, usize)> {
 }
 
 impl AccentLexicon {
+    /// バイナリキャッシュへ書く (`tablecache`)
+    pub(crate) fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        w.u64(self.entries.len() as u64);
+        for e in &self.entries {
+            w.u64(e.0);
+            w.u8(e.1);
+            w.u8(e.2);
+        }
+    }
+
+    /// バイナリキャッシュから読む。 壊れていれば `None`
+    pub(crate) fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        let n = r.len(10)?;
+        let mut entries = Vec::with_capacity(n);
+        for _ in 0..n {
+            entries.push((r.u64()?, r.u8()?, r.u8()?));
+        }
+        Some(Self { entries })
+    }
+
     /// 1 件足す (1 句の bracket 付き読みだけ採る)
     fn push(&mut self, surface: &str, bracketed: &str) {
         let parsed = parse_bracket_notation(bracketed);
@@ -124,7 +144,7 @@ impl AccentLexicon {
             return Ok(());
         }
         crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, _from, role| {
-            if role == Some("accent") {
+            if role == Some("accent") && crate::tablecache::is_supported_table(content) {
                 self.load_str(content);
             }
             Ok(())
