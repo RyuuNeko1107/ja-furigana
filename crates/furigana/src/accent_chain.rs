@@ -216,8 +216,8 @@ pub(crate) struct Node {
 fn chain_flag(prev: &Node, node: &Node) -> bool {
     use MeishiKind as M;
     use Pos::{
-        Doushi as D, Fukushi as Fu, Jodoushi as Jo, Joshi as Js, Keiyoushi as K, Kigou as Ki, Meishi as Me,
-        Rentaishi as Re, Settoushi as Se, Setsuzokushi as Sz,
+        Doushi as D, Fukushi as Fu, Jodoushi as Jo, Joshi as Js, Keiyoushi as K, Kigou as Ki,
+        Meishi as Me, Rentaishi as Re, Setsuzokushi as Sz, Settoushi as Se,
     };
     use Sub::{Hijiritsu as H, Setsubi as S};
     match (prev.last_pos, node.pos) {
@@ -306,7 +306,16 @@ fn calc_digit_acc(prev: &Node, current: &Node, _next: Option<&Node>) -> Option<u
     let pm = prev.morae;
     let cm = current.morae;
     match (p, c) {
-        ("五" | "六" | "八", "十") if _next.is_some_and(|n| matches!(n.surface.as_str(), "一" | "二" | "三" | "四" | "五" | "六" | "七" | "八" | "九")) => Some(0),
+        ("五" | "六" | "八", "十")
+            if _next.is_some_and(|n| {
+                matches!(
+                    n.surface.as_str(),
+                    "一" | "二" | "三" | "四" | "五" | "六" | "七" | "八" | "九"
+                )
+            }) =>
+        {
+            Some(0)
+        }
         (_, "十") => Some(1),
         ("七", "百") => Some(2),
         ("三" | "四" | "九" | "何", "百") => Some(1),
@@ -340,7 +349,12 @@ pub(crate) fn set_accent_type(nodes: &mut [Node]) {
                 }
             } else {
                 let prev = &nodes[i - 1];
-                top_acc = Some(calc_top_node_acc(current, prev, nodes[top_i].accent, mora_size));
+                top_acc = Some(calc_top_node_acc(
+                    current,
+                    prev,
+                    nodes[top_i].accent,
+                    mora_size,
+                ));
                 if prev.last_pos.is_kazu() && current.pos.is_kazu() {
                     prev_acc = calc_digit_acc(prev, current, next);
                 }
@@ -415,11 +429,29 @@ mod tests {
     #[test]
     fn rules_parse_variants() {
         let r = ChainRules::parse("動詞%F4@1/助詞%F2@1");
-        assert_eq!(r.doushi, Some(ChainRule { accent_type: AccentType::F4, add_type: 1 }));
-        assert_eq!(r.joshi, Some(ChainRule { accent_type: AccentType::F2, add_type: 1 }));
+        assert_eq!(
+            r.doushi,
+            Some(ChainRule {
+                accent_type: AccentType::F4,
+                add_type: 1
+            })
+        );
+        assert_eq!(
+            r.joshi,
+            Some(ChainRule {
+                accent_type: AccentType::F2,
+                add_type: 1
+            })
+        );
         assert_eq!(r.default, None);
         let r = ChainRules::parse("C2");
-        assert_eq!(r.default, Some(ChainRule { accent_type: AccentType::C2, add_type: 0 }));
+        assert_eq!(
+            r.default,
+            Some(ChainRule {
+                accent_type: AccentType::C2,
+                add_type: 0
+            })
+        );
         assert_eq!(ChainRules::parse("*"), ChainRules::default());
         assert_eq!(ChainRules::parse(""), ChainRules::default());
         // 助動詞 は 動詞扱い
@@ -436,7 +468,15 @@ mod tests {
             node("の", 1, 0, Pos::Joshi(false), "名詞%F1"),
         ];
         let p = build_phrases(&mut v);
-        assert_eq!(p, vec![ChainPhrase { start: 0, end: 2, morae: 5, accent: 1 }]);
+        assert_eq!(
+            p,
+            vec![ChainPhrase {
+                start: 0,
+                end: 2,
+                morae: 5,
+                accent: 1
+            }]
+        );
     }
 
     #[test]

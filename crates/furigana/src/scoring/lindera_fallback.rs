@@ -653,7 +653,10 @@ mod tests {
         let a = analyzer();
         assert_eq!(edge_reading(&a, "ロング使い", "使い"), "ツカイ");
         assert_eq!(edge_reading(&a, "ユミン使いになったの", "使い"), "ツカイ");
-        assert_eq!(edge_reading(&a, "カーボンローラーデコ使いです", "使い"), "ツカイ");
+        assert_eq!(
+            edge_reading(&a, "カーボンローラーデコ使いです", "使い"),
+            "ツカイ"
+        );
         // 漢字の語の後ろ (魔物使い / 人使い) は連濁のまま
         assert_eq!(edge_reading(&a, "魔物使い", "使い"), "ヅカイ");
         assert_eq!(edge_reading(&a, "野菜使い", "使い"), "ヅカイ");

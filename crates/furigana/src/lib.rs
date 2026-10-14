@@ -95,22 +95,22 @@
 
 #![allow(clippy::tabs_in_doc_comments)]
 
-pub mod accent_symbols;
 pub(crate) mod accent_chain;
-pub(crate) mod keyhash;
-pub(crate) mod tablecache;
-pub mod chain_phrases;
+pub mod accent_symbols;
 pub mod analyzer;
+pub mod chain_phrases;
 pub(crate) mod char_class;
 pub mod dict;
 pub mod error;
 pub mod kana;
+pub(crate) mod keyhash;
 pub mod loader;
 pub mod numbers;
 pub mod reading;
 pub mod romaji;
 pub mod rules;
 pub(crate) mod scoring;
+pub(crate) mod tablecache;
 pub mod tts;
 
 mod api;

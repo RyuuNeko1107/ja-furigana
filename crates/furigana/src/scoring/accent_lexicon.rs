@@ -87,11 +87,8 @@ impl AccentLexicon {
             return;
         };
         let Some(accent) = phrase.accent else { return };
-        self.entries.push((
-            key(surface, &parsed.reading),
-            accent,
-            phrase.mora,
-        ));
+        self.entries
+            .push((key(surface, &parsed.reading), accent, phrase.mora));
     }
 
     fn finish(&mut self) {

@@ -125,13 +125,19 @@ pub fn run(args: &Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         let mut out = BufWriter::new(std::io::stdout().lock());
         let jobs = args
             .jobs
-            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get))
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+            })
             .max(1);
         // 一定行数ずつ読んで並列に変換し、 入力順に書き出す (メモリは 1 ブロック分で頭打ち)
         const BLOCK: usize = 4096;
         let mut lines = stdin.lock().lines();
         loop {
-            let block: Vec<String> = lines.by_ref().take(BLOCK).collect::<std::io::Result<_>>().context("read stdin")?;
+            let block: Vec<String> = lines
+                .by_ref()
+                .take(BLOCK)
+                .collect::<std::io::Result<_>>()
+                .context("read stdin")?;
             if block.is_empty() {
                 break;
             }
@@ -144,10 +150,15 @@ pub fn run(args: &Args, paths: &Paths, _cfg: &Config) -> Result<()> {
                         .chunks(chunk)
                         .map(|part| {
                             let f = &f;
-                            scope.spawn(move || part.iter().map(|l| convert(f, l, args)).collect::<Vec<_>>())
+                            scope.spawn(move || {
+                                part.iter().map(|l| convert(f, l, args)).collect::<Vec<_>>()
+                            })
                         })
                         .collect();
-                    handles.into_iter().flat_map(|h| h.join().expect("batch worker panicked")).collect()
+                    handles
+                        .into_iter()
+                        .flat_map(|h| h.join().expect("batch worker panicked"))
+                        .collect()
                 })
             };
             for r in results {

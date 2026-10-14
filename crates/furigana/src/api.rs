@@ -375,7 +375,13 @@ impl Furigana {
         let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
-        crate::chain_phrases::missing_accents(&norm.text, &analysis.tokens, &morphs, &self.accent_lexicon, &self.chain_table)
+        crate::chain_phrases::missing_accents(
+            &norm.text,
+            &analysis.tokens,
+            &morphs,
+            &self.accent_lexicon,
+            &self.chain_table,
+        )
     }
 
     /// 診断用: 各ノードの (表記, 読み, 品詞, 前の語にくっついたか)。 公開 API ではない
@@ -385,7 +391,13 @@ impl Furigana {
         let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
-        crate::chain_phrases::debug_nodes(&norm.text, &analysis.tokens, &morphs, &self.accent_lexicon, &self.chain_table)
+        crate::chain_phrases::debug_nodes(
+            &norm.text,
+            &analysis.tokens,
+            &morphs,
+            &self.accent_lexicon,
+            &self.chain_table,
+        )
     }
 
     /// 入力から OpenJTalk (VOICEVOX) 方式のアクセント句列を作る。
@@ -403,7 +415,13 @@ impl Furigana {
         let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
-        crate::chain_phrases::build_chained_phrases(&norm.text, &analysis.tokens, &morphs, &self.accent_lexicon, &self.chain_table)
+        crate::chain_phrases::build_chained_phrases(
+            &norm.text,
+            &analysis.tokens,
+            &morphs,
+            &self.accent_lexicon,
+            &self.chain_table,
+        )
     }
 }
 
@@ -650,9 +668,17 @@ impl FuriganaBuilder {
         // アクセント専用の表 (role = "accent") と 連結規則の表 (role = "accent_chain")。 core → user の順
         // (同じ表記 + 読みは先勝ち)。 有効なバイナリキャッシュがあればそれを読む ([`crate::tablecache`])。
         let (accent_lexicon, chain_table) = if self.no_accent_lexicon {
-            (crate::scoring::accent_lexicon::AccentLexicon::default(), crate::chain_phrases::ChainTable::default())
+            (
+                crate::scoring::accent_lexicon::AccentLexicon::default(),
+                crate::chain_phrases::ChainTable::default(),
+            )
         } else {
-            let dirs: Vec<std::path::PathBuf> = self.core_dict_dirs.iter().chain(self.user_dict_dirs.iter()).cloned().collect();
+            let dirs: Vec<std::path::PathBuf> = self
+                .core_dict_dirs
+                .iter()
+                .chain(self.user_dict_dirs.iter())
+                .cloned()
+                .collect();
             crate::tablecache::load_tables(&dirs, &self.dict_excludes)?
         };
 

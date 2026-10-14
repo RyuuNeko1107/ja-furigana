@@ -50,9 +50,18 @@ mod tests {
     #[test]
     fn stable_across_runs_and_sensitive_to_parts() {
         // 値を固定: 実行ごとに変わらないこと (表の key は この値で並べる)
-        assert_eq!(hash_parts(&["天気", "テンキ"]), hash_parts(&["天気", "テンキ"]));
-        assert_ne!(hash_parts(&["天気", "テンキ"]), hash_parts(&["天気テ", "ンキ"]));
-        assert_ne!(hash_parts(&["a", "b", "c", "d"]), hash_parts(&["a", "b", "cd"]));
+        assert_eq!(
+            hash_parts(&["天気", "テンキ"]),
+            hash_parts(&["天気", "テンキ"])
+        );
+        assert_ne!(
+            hash_parts(&["天気", "テンキ"]),
+            hash_parts(&["天気テ", "ンキ"])
+        );
+        assert_ne!(
+            hash_parts(&["a", "b", "c", "d"]),
+            hash_parts(&["a", "b", "cd"])
+        );
         assert_ne!(hash_parts(&["雨", "アメ"]), hash_parts(&["雨", "アマ"]));
     }
 

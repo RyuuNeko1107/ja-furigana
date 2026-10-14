@@ -73,10 +73,12 @@ impl<'a> Reader<'a> {
         self.take(1).map(|b| b[0])
     }
     pub(crate) fn u32(&mut self) -> Option<u32> {
-        self.take(4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        self.take(4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
     pub(crate) fn u64(&mut self) -> Option<u64> {
-        self.take(8).map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+        self.take(8)
+            .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
     }
     pub(crate) fn str(&mut self) -> Option<&'a str> {
         let n = self.u32()? as usize;
@@ -112,8 +114,15 @@ fn head_value(head: &str, key: &str) -> Option<String> {
 /// (将来の辞書が形式を変えても、 古い lib は壊れずに その file を使わないだけ)。 `format` が無い file は 従来どおり role で読む。
 pub(crate) fn is_supported_table(content: &str) -> bool {
     // [meta] は先頭にあるので、 先頭の約 1KB (char 境界に切る) だけ見る
-    let head = &content[..content.char_indices().map(|(i, _)| i).take_while(|&i| i <= 1024).last().unwrap_or(0)];
-    let Some(role) = head_value(head, "role") else { return false };
+    let head = &content[..content
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= 1024)
+        .last()
+        .unwrap_or(0)];
+    let Some(role) = head_value(head, "role") else {
+        return false;
+    };
     if !matches!(role.as_str(), "accent" | "accent_chain") {
         return false;
     }
@@ -144,7 +153,9 @@ fn mtime_ns(meta: &std::fs::Metadata) -> u64 {
 fn collect_sources(dirs: &[PathBuf], excludes: &[String]) -> Vec<Source> {
     let mut out = Vec::new();
     for (i, dir) in dirs.iter().enumerate() {
-        let Ok(files) = crate::loader::walk_toml_files(dir) else { continue };
+        let Ok(files) = crate::loader::walk_toml_files(dir) else {
+            continue;
+        };
         for path in files {
             if crate::loader::is_excluded(dir, &path, excludes) {
                 continue;
@@ -152,9 +163,22 @@ fn collect_sources(dirs: &[PathBuf], excludes: &[String]) -> Vec<Source> {
             if !head_of(&path).is_some_and(|h| is_supported_table(&h)) {
                 continue;
             }
-            let Ok(meta) = std::fs::metadata(&path) else { continue };
-            let rel = path.strip_prefix(dir).unwrap_or(&path).components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/");
-            out.push(Source { rel: format!("{i}:{rel}"), size: meta.len(), mtime_ns: mtime_ns(&meta), path });
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let rel = path
+                .strip_prefix(dir)
+                .unwrap_or(&path)
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            out.push(Source {
+                rel: format!("{i}:{rel}"),
+                size: meta.len(),
+                mtime_ns: mtime_ns(&meta),
+                path,
+            });
         }
     }
     out.sort_by(|a, b| a.rel.cmp(&b.rel));
@@ -232,7 +256,9 @@ fn fast_checksum(body: &[u8]) -> u64 {
     for chunk in body.chunks(8) {
         let mut b = [0u8; 8];
         b[..chunk.len()].copy_from_slice(chunk);
-        h = (h ^ u64::from_le_bytes(b)).wrapping_mul(0x0000_0100_0000_01b3).rotate_left(23);
+        h = (h ^ u64::from_le_bytes(b))
+            .wrapping_mul(0x0000_0100_0000_01b3)
+            .rotate_left(23);
     }
     h
 }
@@ -259,7 +285,9 @@ fn build_bytes(sources: &[Source], lex: &AccentLexicon, chain: &ChainTable) -> O
 fn write_cache(dirs: &[PathBuf], key: u64, bytes: &[u8]) {
     for dir in dirs {
         let target = cache_path(dir, key);
-        let Some(parent) = target.parent() else { continue };
+        let Some(parent) = target.parent() else {
+            continue;
+        };
         if std::fs::create_dir_all(parent).is_err() {
             continue;
         }
@@ -276,7 +304,10 @@ fn write_cache(dirs: &[PathBuf], key: u64, bytes: &[u8]) {
 }
 
 /// アクセント表と連結表を読む。 有効なキャッシュがあればそれを使い、 無ければ TOML から作ってキャッシュを書く。
-pub(crate) fn load_tables(dirs: &[PathBuf], excludes: &[String]) -> crate::error::Result<(AccentLexicon, ChainTable)> {
+pub(crate) fn load_tables(
+    dirs: &[PathBuf],
+    excludes: &[String],
+) -> crate::error::Result<(AccentLexicon, ChainTable)> {
     let use_cache = std::env::var("FURIGANA_NO_TABLE_CACHE").map_or(true, |v| v != "1");
     let sources = collect_sources(dirs, excludes);
     if use_cache && !sources.is_empty() {
@@ -317,14 +348,17 @@ mod tests {
     const CHAIN: &str = "[meta]\nschema_version = \"2\"\nrole = \"accent_chain\"\n\n[defaults]\n\"名詞,一般\" = \"C1\"\n\n[functional]\n\"が,ガ,助詞,格助詞\" = \"0/1|名詞%F1\"\n\n[words]\n\"猫,ネコ,名詞\" = \"1/2\"\n";
 
     fn tmpdir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("furigana_tablecache_{name}_{}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("furigana_tablecache_{name}_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
     }
 
     fn cache_files(dir: &Path) -> Vec<PathBuf> {
-        std::fs::read_dir(dir.join(CACHE_DIR)).map(|r| r.filter_map(Result::ok).map(|e| e.path()).collect()).unwrap_or_default()
+        std::fs::read_dir(dir.join(CACHE_DIR))
+            .map(|r| r.filter_map(Result::ok).map(|e| e.path()).collect())
+            .unwrap_or_default()
     }
 
     #[test]
@@ -354,7 +388,11 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(20));
         write(&d, "accent/a.toml", &ACCENT.replace("[テ]ンキ", "[テン]キ"));
         let (lex, _) = load_tables(&dirs, &[]).unwrap();
-        assert_eq!(lex.lookup("天気", "テンキ"), Some((2, 3)), "古いキャッシュを使わない");
+        assert_eq!(
+            lex.lookup("天気", "テンキ"),
+            Some((2, 3)),
+            "古いキャッシュを使わない"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -378,12 +416,21 @@ mod tests {
     fn excluded_files_get_a_separate_cache() {
         let d = tmpdir("exclude");
         write(&d, "accent/a.toml", ACCENT);
-        write(&d, "accent/b.toml", &ACCENT.replace("天気", "空気").replace("[テ]ンキ", "[ク]ウキ"));
+        write(
+            &d,
+            "accent/b.toml",
+            &ACCENT
+                .replace("天気", "空気")
+                .replace("[テ]ンキ", "[ク]ウキ"),
+        );
         let dirs = vec![d.clone()];
         let (all, _) = load_tables(&dirs, &[]).unwrap();
         let (part, _) = load_tables(&dirs, &["accent/b.toml".to_string()]).unwrap();
         assert!(all.lookup("空気", "クウキ").is_some());
-        assert!(part.lookup("空気", "クウキ").is_none(), "除外したファイルの内容がキャッシュ経由で漏れない");
+        assert!(
+            part.lookup("空気", "クウキ").is_none(),
+            "除外したファイルの内容がキャッシュ経由で漏れない"
+        );
         assert_eq!(cache_files(&d).len(), 2);
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -394,24 +441,32 @@ mod tests {
         // format 無し (従来の file) は読む
         write(&d, "accent/a.toml", ACCENT);
         // 未来の版は無視 (同じ表記を別の核にしておく)
-        write(&d, "accent/future.toml", "[meta]
+        write(
+            &d,
+            "accent/future.toml",
+            "[meta]
 schema_version = \"2\"
 role = \"accent\"
 format = \"accent/99\"
 
 [entries]
 \"空気\" = \"[クウ]キ\"
-");
+",
+        );
         // 対応する版は読む
-        write(&d, "accent/ok.toml", "[meta]
+        write(
+            &d,
+            "accent/ok.toml",
+            "[meta]
 schema_version = \"2\"
 role = \"accent\"
 format = \"accent/1\"
 
 [entries]
 \"風\" = \"[カ]ゼ\"
-");
-        let (lex, _) = load_tables(&[d.clone()], &[]).unwrap();
+",
+        );
+        let (lex, _) = load_tables(std::slice::from_ref(&d), &[]).unwrap();
         assert!(lex.lookup("天気", "テンキ").is_some(), "format 無しは読む");
         assert!(lex.lookup("風", "カゼ").is_some(), "対応する版は読む");
         assert!(lex.lookup("空気", "クウキ").is_none(), "未知の版は無視する");
@@ -424,7 +479,7 @@ format = \"accent/1\"
         write(&d, "accent/a.toml", ACCENT);
         // .furigana-cache をファイルとして置いて ディレクトリを作れないようにする
         std::fs::write(d.join(CACHE_DIR), b"x").unwrap();
-        let (lex, _) = load_tables(&[d.clone()], &[]).unwrap();
+        let (lex, _) = load_tables(std::slice::from_ref(&d), &[]).unwrap();
         assert_eq!(lex.lookup("天気", "テンキ"), Some((1, 3)));
         let _ = std::fs::remove_dir_all(&d);
     }

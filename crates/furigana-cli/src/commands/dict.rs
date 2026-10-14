@@ -88,11 +88,17 @@ fn build_cache(paths: &Paths) -> Result<()> {
     // キャッシュは 辞書ディレクトリ (core / user) 直下の `.furigana-cache/` に置かれる
     let mut n = 0usize;
     for base in [paths.dict_core_dir(), paths.dict_user_dir()] {
-        let Ok(rd) = fs::read_dir(base.join(".furigana-cache")) else { continue };
+        let Ok(rd) = fs::read_dir(base.join(".furigana-cache")) else {
+            continue;
+        };
         for e in rd.flatten() {
             if e.path().extension().is_some_and(|x| x == "fgtb") {
                 n += 1;
-                println!("{}  ({} bytes)", e.path().display(), e.metadata().map_or(0, |m| m.len()));
+                println!(
+                    "{}  ({} bytes)",
+                    e.path().display(),
+                    e.metadata().map_or(0, |m| m.len())
+                );
             }
         }
     }

@@ -14,7 +14,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("usage: missing_accents <rules_dir> <core_dict_dir> < corpus.txt");
         std::process::exit(2);
     }
-    let f = furigana::Furigana::builder().rules_dir(&args[1]).core_dict_dir(&args[2]).build()?;
+    let f = furigana::Furigana::builder()
+        .rules_dir(&args[1])
+        .core_dict_dir(&args[2])
+        .build()?;
     let mut cnt: HashMap<(String, String, String), u64> = HashMap::new();
     for line in std::io::stdin().lock().lines() {
         for k in f.chain_missing_accents(&line?) {

@@ -248,7 +248,11 @@ impl ChainTable {
         let mut section = "";
         for line in content.lines() {
             let t = line.trim();
-            if t.starts_with('[') && !t.starts_with("[[") && t.ends_with(']') && !t.starts_with("[\"") {
+            if t.starts_with('[')
+                && !t.starts_with("[[")
+                && t.ends_with(']')
+                && !t.starts_with("[\"")
+            {
                 section = match t {
                     "[defaults]" => "defaults",
                     "[functional]" => "functional",
@@ -262,9 +266,15 @@ impl ChainTable {
             if section.is_empty() || !t.starts_with('"') {
                 continue;
             }
-            let Some((key, end)) = quoted(t) else { continue };
-            let Some(rest) = t[end..].trim_start().strip_prefix('=') else { continue };
-            let Some((value, _)) = quoted(rest.trim_start()) else { continue };
+            let Some((key, end)) = quoted(t) else {
+                continue;
+            };
+            let Some(rest) = t[end..].trim_start().strip_prefix('=') else {
+                continue;
+            };
+            let Some((value, _)) = quoted(rest.trim_start()) else {
+                continue;
+            };
             match section {
                 "defaults" => {
                     if let Some((p1, p2)) = key.split_once(',') {
@@ -273,30 +283,55 @@ impl ChainTable {
                     }
                 }
                 "functional" => {
-                    let Some(k) = Self::key_of(&key) else { continue };
-                    let Some((am, rule)) = value.split_once('|') else { continue };
-                    let Some((a, m)) = am.split_once('/') else { continue };
-                    let (Ok(a), Ok(m)) = (a.parse::<u8>(), m.parse::<u8>()) else { continue };
+                    let Some(k) = Self::key_of(&key) else {
+                        continue;
+                    };
+                    let Some((am, rule)) = value.split_once('|') else {
+                        continue;
+                    };
+                    let Some((a, m)) = am.split_once('/') else {
+                        continue;
+                    };
+                    let (Ok(a), Ok(m)) = (a.parse::<u8>(), m.parse::<u8>()) else {
+                        continue;
+                    };
                     let id = self.rule_id(rule);
                     self.functional.push((k, a, m, id));
                 }
                 "words" => {
                     let mut it = key.splitn(3, ',');
-                    let (Some(a), Some(b), Some(c)) = (it.next(), it.next(), it.next()) else { continue };
-                    let Some((n, m)) = value.split_once('/') else { continue };
-                    let (Ok(n), Ok(m)) = (n.parse::<u8>(), m.parse::<u8>()) else { continue };
-                    self.words.push((crate::keyhash::hash_parts(&[a, b, c]), n, m));
+                    let (Some(a), Some(b), Some(c)) = (it.next(), it.next(), it.next()) else {
+                        continue;
+                    };
+                    let Some((n, m)) = value.split_once('/') else {
+                        continue;
+                    };
+                    let (Ok(n), Ok(m)) = (n.parse::<u8>(), m.parse::<u8>()) else {
+                        continue;
+                    };
+                    self.words
+                        .push((crate::keyhash::hash_parts(&[a, b, c]), n, m));
                 }
                 "splits" => {
                     let mut it = key.splitn(3, ',');
-                    let (Some(a), Some(b), Some(c)) = (it.next(), it.next(), it.next()) else { continue };
-                    let parts: Vec<SplitPart> = value.split(';').filter_map(|p| self.parse_part(p)).collect();
+                    let (Some(a), Some(b), Some(c)) = (it.next(), it.next(), it.next()) else {
+                        continue;
+                    };
+                    let parts: Vec<SplitPart> = value
+                        .split(';')
+                        .filter_map(|p| self.parse_part(p))
+                        .collect();
                     if parts.len() >= 2 {
-                        self.splits.push((crate::keyhash::hash_parts(&[a, b, c]), parts.into_boxed_slice()));
+                        self.splits.push((
+                            crate::keyhash::hash_parts(&[a, b, c]),
+                            parts.into_boxed_slice(),
+                        ));
                     }
                 }
                 "exceptions" => {
-                    let Some(k) = Self::key_of(&key) else { continue };
+                    let Some(k) = Self::key_of(&key) else {
+                        continue;
+                    };
                     let id = self.rule_id(&value);
                     self.exceptions.push((k, id));
                 }
@@ -343,17 +378,29 @@ impl ChainTable {
         self.functional
             .binary_search_by_key(&key, |e| e.0)
             .ok()
-            .map(|i| (self.functional[i].1, self.functional[i].2, self.pool[usize::from(self.functional[i].3)]))
+            .map(|i| {
+                (
+                    self.functional[i].1,
+                    self.functional[i].2,
+                    self.pool[usize::from(self.functional[i].3)],
+                )
+            })
     }
 
     /// 分割表 (Lindera の 1 語 → OpenJTalk の複数語)。 `key` = (表記, 品詞1, 品詞2) のハッシュ
     fn split_get(&self, key: u64) -> Option<&[SplitPart]> {
-        self.splits.binary_search_by_key(&key, |e| e.0).ok().map(|i| &*self.splits[i].1)
+        self.splits
+            .binary_search_by_key(&key, |e| e.0)
+            .ok()
+            .map(|i| &*self.splits[i].1)
     }
 
     /// 語単体の核 (アクセント表に無い語用)。 `key` = (表記, 読み, 品詞1) のハッシュ
     fn word_get(&self, key: u64) -> Option<(u8, u8)> {
-        self.words.binary_search_by_key(&key, |e| e.0).ok().map(|i| (self.words[i].1, self.words[i].2))
+        self.words
+            .binary_search_by_key(&key, |e| e.0)
+            .ok()
+            .map(|i| (self.words[i].1, self.words[i].2))
     }
 
     /// 内容語の結合型。 `key` = (表記, 読み, 品詞1, 品詞2) のハッシュ
@@ -402,7 +449,10 @@ fn map_pos(m: &MorphToken) -> (Pos, bool) {
     let d1 = m.pos_detail.as_deref().unwrap_or("");
     let d2 = m.pos_detail2.as_deref().unwrap_or("");
     let d3 = m.pos_detail3.as_deref().unwrap_or("");
-    let renyou = m.conjugation_form.as_deref().is_some_and(|f| f.starts_with("連用"));
+    let renyou = m
+        .conjugation_form
+        .as_deref()
+        .is_some_and(|f| f.starts_with("連用"));
     let sub = |d: &str| match d {
         "非自立" => Sub::Hijiritsu,
         "接尾" => Sub::Setsubi,
@@ -432,12 +482,17 @@ fn map_pos(m: &MorphToken) -> (Pos, bool) {
     (pos, renyou)
 }
 
-fn count_mora(kata: &str) -> usize {
-    kata.chars().filter(|c| !matches!(c, 'ャ' | 'ュ' | 'ョ' | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ')).count()
+fn is_kana_char(c: char) -> bool {
+    matches!(c, 'ァ'..='ヶ' | 'ー')
 }
 
-fn is_kata(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| matches!(c, 'ァ'..='ヶ' | 'ー'))
+/// 拍数 (カナだけを数える。 小書きの拗音は前の拍に含める。 句読点などの記号は 0 拍)
+fn count_mora(kata: &str) -> usize {
+    kata.chars()
+        .filter(|&c| {
+            is_kana_char(c) && !matches!(c, 'ャ' | 'ュ' | 'ョ' | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ')
+        })
+        .count()
 }
 
 /// 形態素を 入力テキスト上の byte 範囲に並べる (順に surface を探す)。 見つからない形態素は `None`
@@ -478,10 +533,22 @@ pub(crate) fn build_chained_phrases(
         .into_iter()
         .filter(|p| p.morae > 0)
         .map(|p| {
-            let surface: String = meta[p.start..p.end].iter().map(|m| m.surface.as_str()).collect();
-            let reading: String = meta[p.start..p.end].iter().map(|m| m.reading.as_str()).collect();
+            let surface: String = meta[p.start..p.end]
+                .iter()
+                .map(|m| m.surface.as_str())
+                .collect();
+            let reading: String = meta[p.start..p.end]
+                .iter()
+                .map(|m| m.reading.as_str())
+                .collect();
             let estimated = meta[p.start..p.end].iter().any(|m| m.estimated);
-            ChainedPhrase { surface, reading, mora: p.morae, accent: p.accent, estimated }
+            ChainedPhrase {
+                surface,
+                reading,
+                mora: p.morae,
+                accent: p.accent,
+                estimated,
+            }
         })
         .collect()
 }
@@ -495,7 +562,10 @@ pub(crate) fn missing_accents(
     table: &ChainTable,
 ) -> Vec<(String, String, String)> {
     let (_, meta) = make_nodes(text, tokens, morphs, lexicon, table);
-    meta.into_iter().filter(|m| m.estimated && !m.reading.is_empty()).map(|m| (m.surface, m.reading, m.pos)).collect()
+    meta.into_iter()
+        .filter(|m| m.estimated && !m.reading.is_empty())
+        .map(|m| (m.surface, m.reading, m.pos))
+        .collect()
 }
 
 /// 診断用: 各ノードの (表記, 読み, 品詞, 前の語にくっついたか)
@@ -511,7 +581,11 @@ pub(crate) fn debug_nodes(
         return Vec::new();
     }
     build_phrases(&mut nodes);
-    nodes.iter().zip(meta).map(|(n, m)| (m.surface, m.reading, m.pos, n.chain_flag == Some(true))).collect()
+    nodes
+        .iter()
+        .zip(meta)
+        .map(|(n, m)| (m.surface, m.reading, m.pos, n.chain_flag == Some(true)))
+        .collect()
 }
 
 /// ノード 1 つの付随情報 (出力の組み立てと、 欠けている核の診断に使う)
@@ -545,19 +619,40 @@ fn make_nodes(
             .filter_map(|(i, s)| s.and_then(|(a, b)| (a < te && b > ts).then_some(i)))
             .collect();
         let tok_reading = crate::kana::hira_to_kata(&tok.reading);
-        let inside = !idx.is_empty() && idx.iter().all(|&i| spans[i].is_some_and(|(a, b)| a >= ts && b <= te));
-        let morph_reading: String = idx.iter().map(|&i| morphs[i].reading.as_deref().unwrap_or("")).collect();
+        let inside = !idx.is_empty()
+            && idx
+                .iter()
+                .all(|&i| spans[i].is_some_and(|(a, b)| a >= ts && b <= te));
+        let morph_reading: String = idx
+            .iter()
+            .map(|&i| morphs[i].reading.as_deref().unwrap_or(""))
+            .collect();
 
-        if tok_reading.is_empty() {
+        if tok_reading.is_empty() || !tok_reading.chars().any(is_kana_char) {
             // 読めない token (記号 / 絵文字 / 空白) は句を切る記号として扱う
-            let mut n = new_node(&tok.surface, 0, 0, Pos::Kigou(false), false, ChainRules::default());
+            let mut n = new_node(
+                &tok.surface,
+                0,
+                0,
+                Pos::Kigou(false),
+                false,
+                ChainRules::default(),
+            );
             n.chain_flag = None;
             nodes.push(n);
-            meta.push(NodeMeta { surface: tok.surface.clone(), reading: String::new(), estimated: false, pos: "記号".to_string() });
+            meta.push(NodeMeta {
+                surface: tok.surface.clone(),
+                reading: String::new(),
+                estimated: false,
+                pos: "記号".to_string(),
+            });
             continue;
         }
 
-        if inside && !morph_reading.is_empty() && crate::kana::hira_to_kata(&morph_reading) == tok_reading {
+        if inside
+            && !morph_reading.is_empty()
+            && crate::kana::hira_to_kata(&morph_reading) == tok_reading
+        {
             // 形態素ごとのノードに展開
             for &i in &idx {
                 let m = &morphs[i];
@@ -565,48 +660,83 @@ fn make_nodes(
                 // Lindera の 1 語を OpenJTalk の複数語に分ける (助詞連語 など)
                 let sp1 = m.pos.as_deref().unwrap_or("*");
                 let sp2 = m.pos_detail.as_deref().unwrap_or("*");
-                if let Some(parts) = table.split_get(crate::keyhash::hash_parts(&[&m.surface, sp1, sp2])) {
+                if let Some(parts) =
+                    table.split_get(crate::keyhash::hash_parts(&[&m.surface, sp1, sp2]))
+                {
                     let joined: String = parts.iter().map(|p| &*p.reading).collect();
                     if joined == reading {
                         for part in parts {
-                            let mut node = new_node(&part.surface, usize::from(part.mora), usize::from(part.accent), part.pos, part.renyou, part.rules);
+                            let mut node = new_node(
+                                &part.surface,
+                                usize::from(part.mora),
+                                usize::from(part.accent),
+                                part.pos,
+                                part.renyou,
+                                part.rules,
+                            );
                             node.last_pos = part.pos;
                             nodes.push(node);
-                            meta.push(NodeMeta { surface: part.surface.to_string(), reading: part.reading.to_string(), estimated: false, pos: part.pos_label.to_string() });
+                            meta.push(NodeMeta {
+                                surface: part.surface.to_string(),
+                                reading: part.reading.to_string(),
+                                estimated: false,
+                                pos: part.pos_label.to_string(),
+                            });
                         }
                         continue;
                     }
                 }
                 let (pos, renyou) = map_pos(m);
                 // IPADIC の 「*」 は None で返る。 表のキーは 「*」 なので揃える
-                let (p1, p2) = (m.pos.as_deref().unwrap_or("*"), m.pos_detail.as_deref().unwrap_or("*"));
+                let (p1, p2) = (
+                    m.pos.as_deref().unwrap_or("*"),
+                    m.pos_detail.as_deref().unwrap_or("*"),
+                );
                 let mut estimated = false;
                 let key = crate::keyhash::hash_parts(&[&m.surface, &reading, p1, p2]);
                 let (accent, mora, rules) = if let Some((a, mo, r)) = table.functional_get(key) {
                     (usize::from(a), usize::from(mo), r)
                 } else {
                     let rules = table.rules_for_key(key, p1, p2);
-                    if let Some((a, mo)) = lexicon.lookup(&m.surface, &reading).or_else(|| table.word_get(crate::keyhash::hash_parts(&[&m.surface, &reading, p1]))) {
+                    if let Some((a, mo)) = lexicon.lookup(&m.surface, &reading).or_else(|| {
+                        table.word_get(crate::keyhash::hash_parts(&[&m.surface, &reading, p1]))
+                    }) {
                         (usize::from(a), usize::from(mo), rules)
                     } else {
                         estimated = true;
                         (0, count_mora(&reading), rules)
                     }
                 };
-                let mora = if mora == 0 { count_mora(&reading) } else { mora };
+                let mora = if mora == 0 {
+                    count_mora(&reading)
+                } else {
+                    mora
+                };
                 let mut node = new_node(&m.surface, mora, accent, pos, renyou, rules);
                 node.last_pos = pos;
                 nodes.push(node);
-                meta.push(NodeMeta { surface: m.surface.clone(), reading, estimated, pos: format!("{},{}", p1, p2) });
+                meta.push(NodeMeta {
+                    surface: m.surface.clone(),
+                    reading,
+                    estimated,
+                    pos: format!("{},{}", p1, p2),
+                });
             }
             continue;
         }
 
         // 辞書で読みを直した token など: token 全体を 1 ノード。 品詞は左端 / 右端の形態素から
         let (first, last) = (idx.first().copied(), idx.last().copied());
-        let (pos, renyou) = first.map_or((Pos::Meishi(MeishiKind::General), false), |i| map_pos(&morphs[i]));
+        let (pos, renyou) = first.map_or((Pos::Meishi(MeishiKind::General), false), |i| {
+            map_pos(&morphs[i])
+        });
         let last_pos = last.map_or(pos, |i| map_pos(&morphs[i]).0);
-        let (p1, p2) = first.map_or(("名詞", "一般"), |i| (morphs[i].pos.as_deref().unwrap_or("*"), morphs[i].pos_detail.as_deref().unwrap_or("*")));
+        let (p1, p2) = first.map_or(("名詞", "一般"), |i| {
+            (
+                morphs[i].pos.as_deref().unwrap_or("*"),
+                morphs[i].pos_detail.as_deref().unwrap_or("*"),
+            )
+        });
         let key = crate::keyhash::hash_parts(&[&tok.surface, &tok_reading, p1, p2]);
         let rules = table.rules_for_key(key, p1, p2);
         let mut estimated = false;
@@ -628,17 +758,274 @@ fn make_nodes(
         let mut node = new_node(&tok.surface, mora, accent, pos, renyou, rules);
         node.last_pos = last_pos;
         nodes.push(node);
-        meta.push(NodeMeta { surface: tok.surface.clone(), reading: tok_reading, estimated, pos: format!("{p1},{p2}") });
+        meta.push(NodeMeta {
+            surface: tok.surface.clone(),
+            reading: tok_reading,
+            estimated,
+            pos: format!("{p1},{p2}"),
+        });
     }
 
     (nodes, meta)
 }
 
-fn new_node(surface: &str, morae: usize, accent: usize, pos: Pos, renyou: bool, rules: ChainRules) -> Node {
-    Node { surface: surface.to_string(), morae, accent, pos, last_pos: pos, renyou, rules, chain_flag: None }
+fn new_node(
+    surface: &str,
+    morae: usize,
+    accent: usize,
+    pos: Pos,
+    renyou: bool,
+    rules: ChainRules,
+) -> Node {
+    Node {
+        surface: surface.to_string(),
+        morae,
+        accent,
+        pos,
+        last_pos: pos,
+        renyou,
+        rules,
+        chain_flag: None,
+    }
 }
 
-#[allow(dead_code)]
-fn _unused(_: &str) -> bool {
-    is_kata("")
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::Furigana;
+    use std::path::PathBuf;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "furigana_chain_phrases_{name}_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(d.join("accent")).unwrap();
+        d
+    }
+
+    /// 最小の辞書 + 表。 初心者(4拍 1型) / の(助詞) / 使い方(5拍 平板) / です(助動詞)
+    fn mini(name: &str, with_chain: bool) -> (Furigana, PathBuf) {
+        let d = tmp(name);
+        std::fs::write(
+            d.join("entries.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"初心者\" = \"ショシンシャ\"
+\"使い方\" = \"ツカイカタ\"
+",
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("accent/a.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"accent\"
+
+[entries]
+\"初心者\" = \"[ショ]シンシャ\"
+\"使い方\" = \"[ツカイカタ\"
+",
+        )
+        .unwrap();
+        if with_chain {
+            std::fs::write(
+                d.join("accent/chain.toml"),
+                "[meta]
+schema_version = \"2\"
+role = \"accent_chain\"
+format = \"accent_chain/1\"
+
+[defaults]
+\"名詞,一般\" = \"C1\"
+
+[functional]
+\"の,ノ,助詞,連体化\" = \"0/1|名詞%F1\"
+\"です,デス,助動詞,*\" = \"1/2|名詞%F2@1/動詞%F1\"
+
+[words]
+\"猫,ネコ,名詞\" = \"1/2\"
+",
+            )
+            .unwrap();
+        }
+        let f = Furigana::builder().core_dict_dir(&d).build().unwrap();
+        (f, d)
+    }
+
+    #[test]
+    fn particles_attach_and_desu_moves_the_nucleus() {
+        let (f, d) = mini("attach", true);
+        let ph = f.to_accent_phrases("初心者の使い方です");
+        // 初心者 + の → 1 句 (核 1 を維持)。 使い方 + です → 1 句 (平板の名詞 + です = F2@1 で 5+1 = 6 型)
+        assert_eq!(ph.len(), 2, "{ph:?}");
+        assert_eq!(
+            (ph[0].reading.as_str(), ph[0].mora, ph[0].accent),
+            ("ショシンシャノ", 5, 1)
+        );
+        assert_eq!(
+            (ph[1].reading.as_str(), ph[1].mora, ph[1].accent),
+            ("ツカイカタデス", 7, 6)
+        );
+        assert!(!ph[0].estimated && !ph[1].estimated);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn empty_without_chain_table() {
+        let (f, d) = mini("nochain", false);
+        assert!(f.to_accent_phrases("初心者の使い方です").is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn missing_standalone_accent_is_estimated_and_listed() {
+        let (f, d) = mini("missing", true);
+        // 犬 は 表に無い (単体の核が不明 → 平板で埋めて estimated)
+        let ph = f.to_accent_phrases("犬です");
+        assert!(ph.iter().any(|p| p.estimated), "{ph:?}");
+        let missing = f.chain_missing_accents("犬です");
+        assert!(missing.iter().any(|m| m.0 == "犬"), "{missing:?}");
+        let nodes = f.chain_debug_nodes("初心者の使い方です");
+        assert_eq!(nodes.len(), 4, "{nodes:?}");
+        assert!(!nodes[0].3 && nodes[1].3, "の は前にくっつく");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn unreadable_tokens_split_phrases() {
+        let (f, d) = mini("sym", true);
+        let ph = f.to_accent_phrases("初心者、使い方");
+        assert_eq!(ph.len(), 2, "{ph:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn table_roundtrips_through_the_binary_cache() {
+        let d = tmp("roundtrip");
+        let chain = "[meta]
+schema_version = \"2\"
+role = \"accent_chain\"
+format = \"accent_chain/1\"
+
+[defaults]
+\"名詞,一般\" = \"C1\"
+
+[functional]
+\"の,ノ,助詞,連体化\" = \"0/1|名詞%F1\"
+
+[exceptions]
+\"猫,ネコ,名詞,一般\" = \"C2\"
+
+[words]
+\"猫,ネコ,名詞\" = \"1/2\"
+
+[splits]
+\"という,助詞,格助詞\" = \"と,ト,助詞,格助詞,0,0/1,動詞%F1;いう,イウ,動詞,自立,0,0/2,*\"
+";
+        let mut t = ChainTable::default();
+        t.load_str(chain);
+        t.finish();
+        let mut w = crate::tablecache::Writer(Vec::new());
+        t.write_to(&mut w);
+        let mut r = crate::tablecache::Reader::new(&w.0);
+        let u = ChainTable::read_from(&mut r).expect("読める");
+        let k = |a: &str, b: &str, c: &str, d_: &str| crate::keyhash::hash_parts(&[a, b, c, d_]);
+        assert_eq!(
+            t.functional_get(k("の", "ノ", "助詞", "連体化"))
+                .map(|x| (x.0, x.1)),
+            u.functional_get(k("の", "ノ", "助詞", "連体化"))
+                .map(|x| (x.0, x.1))
+        );
+        assert_eq!(
+            u.word_get(crate::keyhash::hash_parts(&["猫", "ネコ", "名詞"])),
+            Some((1, 2))
+        );
+        assert_eq!(
+            u.rules_for_key(k("猫", "ネコ", "名詞", "一般"), "名詞", "一般"),
+            t.rules_for_key(k("猫", "ネコ", "名詞", "一般"), "名詞", "一般")
+        );
+        let parts = u
+            .split_get(crate::keyhash::hash_parts(&["という", "助詞", "格助詞"]))
+            .expect("分割表");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(&*parts[1].surface, "いう");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn map_pos_covers_the_ipadic_classes() {
+        let m = |p: &str, d1: &str, d2: &str, d3: &str, cf: &str| MorphToken {
+            surface: String::new(),
+            reading: None,
+            pos: Some(p.into()),
+            pos_detail: Some(d1.into()),
+            pos_detail2: Some(d2.into()),
+            pos_detail3: Some(d3.into()),
+            conjugation_type: None,
+            conjugation_form: Some(cf.into()),
+            base_form: None,
+        };
+        assert_eq!(
+            map_pos(&m("名詞", "接尾", "*", "*", "*")).0,
+            Pos::Meishi(MeishiKind::Setsubi)
+        );
+        assert_eq!(
+            map_pos(&m("名詞", "固有名詞", "人名", "姓", "*")).0,
+            Pos::Meishi(MeishiKind::Sei)
+        );
+        assert_eq!(
+            map_pos(&m("名詞", "固有名詞", "人名", "名", "*")).0,
+            Pos::Meishi(MeishiKind::Mei)
+        );
+        assert_eq!(
+            map_pos(&m("名詞", "副詞可能", "*", "*", "*")).0,
+            Pos::Meishi(MeishiKind::FukushiKanou)
+        );
+        assert_eq!(
+            map_pos(&m("名詞", "数", "*", "*", "*")).0,
+            Pos::Meishi(MeishiKind::Kazu)
+        );
+        assert_eq!(
+            map_pos(&m("助詞", "接続助詞", "*", "*", "*")).0,
+            Pos::Joshi(true)
+        );
+        assert_eq!(
+            map_pos(&m("助動詞", "*", "*", "*", "基本形")).0,
+            Pos::Jodoushi
+        );
+        let (pos, renyou) = map_pos(&m("動詞", "非自立", "*", "*", "連用形"));
+        assert_eq!((pos, renyou), (Pos::Doushi(Sub::Hijiritsu), true));
+        assert_eq!(
+            map_pos(&m("形容詞", "自立", "*", "*", "基本形")).0,
+            Pos::Keiyoushi(Sub::Jiritsu)
+        );
+        assert_eq!(
+            map_pos(&m("接頭詞", "名詞接続", "*", "*", "*")).0,
+            Pos::Settoushi
+        );
+        assert_eq!(map_pos(&m("記号", "数", "*", "*", "*")).0, Pos::Kigou(true));
+        assert_eq!(map_pos(&m("副詞", "一般", "*", "*", "*")).0, Pos::Fukushi);
+        assert_eq!(map_pos(&m("感動詞", "*", "*", "*", "*")).0, Pos::Other);
+        for (p1, d1) in [
+            ("名詞", "一般"),
+            ("動詞", "自立"),
+            ("接続詞", "*"),
+            ("連体詞", "*"),
+            ("記号", "一般"),
+        ] {
+            assert_eq!(
+                map_pos(&m(p1, d1, "*", "*", "*")).0,
+                pos_of(p1, d1),
+                "{p1},{d1}"
+            );
+        }
+    }
 }

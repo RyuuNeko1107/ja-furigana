@@ -6,7 +6,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for m in a.tokenize(&t) {
             println!(
                 "{}\t{:?}\t{:?}/{:?}/{:?}/{:?}\t{:?}/{:?}",
-                m.surface, m.reading, m.pos, m.pos_detail, m.pos_detail2, m.pos_detail3, m.conjugation_type, m.conjugation_form
+                m.surface,
+                m.reading,
+                m.pos,
+                m.pos_detail,
+                m.pos_detail2,
+                m.pos_detail3,
+                m.conjugation_type,
+                m.conjugation_form
             );
         }
     }

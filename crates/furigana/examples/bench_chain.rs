@@ -15,11 +15,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("usage: bench_chain <rules_dir> <core_dict_dir> < corpus.txt");
         std::process::exit(2);
     }
-    let lines: Vec<String> = std::io::stdin().lock().lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).collect();
+    let lines: Vec<String> = std::io::stdin()
+        .lock()
+        .lines()
+        .map_while(Result::ok)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
     let t0 = Instant::now();
-    let f = furigana::Furigana::builder().rules_dir(&args[1]).core_dict_dir(&args[2]).build()?;
+    let f = furigana::Furigana::builder()
+        .rules_dir(&args[1])
+        .core_dict_dir(&args[2])
+        .build()?;
     f.preload()?;
-    println!("読み込み: {:.0} ms ({} 文)", t0.elapsed().as_secs_f64() * 1e3, lines.len());
+    println!(
+        "読み込み: {:.0} ms ({} 文)",
+        t0.elapsed().as_secs_f64() * 1e3,
+        lines.len()
+    );
 
     // 暖機
     for l in lines.iter().take(200) {
@@ -33,11 +45,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             n += run(l);
         }
         let dt = t.elapsed().as_secs_f64();
-        println!("{name:<28} {:>7.0} ms  ({:>6.0} 文/秒)  [{n}]", dt * 1e3, lines.len() as f64 / dt);
+        println!(
+            "{name:<28} {:>7.0} ms  ({:>6.0} 文/秒)  [{n}]",
+            dt * 1e3,
+            lines.len() as f64 / dt
+        );
     };
     bench("to_hiragana", &|l| f.to_hiragana(l).len());
     bench("to_accent (token の核)", &|l| f.to_accent(l).tokens.len());
     bench("tokenize (Lindera だけ)", &|l| f.tokenize_pos_only(l));
-    bench("to_accent_phrases (連結)", &|l| f.to_accent_phrases(l).len());
+    bench("to_accent_phrases (連結)", &|l| {
+        f.to_accent_phrases(l).len()
+    });
     Ok(())
 }
