@@ -13,6 +13,7 @@
 - **OpenJTalk (VOICEVOX) 方式のアクセント句** — `Furigana::to_accent_phrases(&str)` と CLI `--mode accent-phrases`。 OpenJTalk の `njd_set_accent_phrase` / `njd_set_accent_type` (句の連結 18 規則 + 結合型 C1〜C5 / F1〜F5 / P) を移植し (`accent_chain.rs`、 jpreprocess と実文 3,000 文・19,046 句で完全一致を確認)、 Lindera の品詞と辞書の表 (`role = "accent_chain"`) から句を組み立てる。 助詞は前の語にくっつく、 名詞 + 動詞は別の句、 複合語の核は後部の結合型で決まる、 など。 既存の `to_accent` / 各 mode の出力は変わらない。 表が無い辞書では空の `Vec` を返す
 - **アクセント表・連結表のバイナリキャッシュ** (`tablecache.rs`) — 読み込んだ表を `<辞書ディレクトリ>/.furigana-cache/tables-<key>.fgtb` に保存し、 次回以降はそれを読む (起動 約 530 ms → 約 220 ms)。 元ファイルの (大きさ, 更新時刻, 内容のハッシュ) で古いキャッシュを検出する。 書けない場所では黙って諦める。 `FURIGANA_NO_TABLE_CACHE=1` で無効。 `furigana dict build-cache` で先に作れる
 - **形式の版** — `[meta] format = "<役割>/<版>"` (`accent/1`, `accent_chain/1`)。 lib は自分が対応する版だけ読み、 知らない版は無視する (`format` の無い file は従来どおり)
+- **VOICEVOX / AquesTalk の記号列が OpenJTalk 方式のアクセント句になる** — 辞書に連結規則の表 (`role = "accent_chain"`) があれば、 `Furigana::to_mora_phrases` が `to_accent_phrases` の句から 「モーラ列 + 核 + 区切り」 を作り、 `ja_furigana_aquestalk::Converter::convert` / `ja_furigana_voicevox::to_aques_kana_phrases` / `to_aquestalk_phrases` / CLI `--mode voicevox|aquestalk` / HTTP がそれを使う (助詞の は / へ / を は ワ / エ / オ)。 表が無ければ従来どおり。 `accent_lexicon(false)` なら表も読まない。 既存の `to_aquestalk(_with)` / `to_aques_kana` (AccentResult を受ける版) は従来のまま
 - CLI `--batch` の並列化 (`-j N`、 既定は CPU 数。 出力順は入力どおり)
 - `MorphToken::pos_detail3` (IPADIC の細分類 3 = 姓 / 名)
 - 計測用の examples (`bench_chain` / `bench_load` / `missing_accents` / `pos_pairs` / `dump_morphs`)

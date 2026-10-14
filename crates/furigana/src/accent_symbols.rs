@@ -125,6 +125,43 @@ fn token_break(surface: &str) -> Option<PhraseBreak> {
     brk
 }
 
+/// 読みの無い token の並び (句読点・空白・記号) から、 句の切れ目の強さを決める (強い方を採る。 該当する記号が無ければ `None`)
+fn gap_break(gap: &str) -> PhraseBreak {
+    gap.chars()
+        .filter_map(|c| token_break(c.encode_utf8(&mut [0; 4])))
+        .max()
+        .unwrap_or(PhraseBreak::None)
+}
+
+/// 連結規則で組み立てたアクセント句 ([`crate::Furigana::to_accent_phrases`]) を 記号列の骨格へ落とす。
+///
+/// `trailing_gap` = 最後の句の後ろに残った読みの無い token (入力末の `。` や `？` など)。
+/// 句の核は OpenJTalk と同じ連結規則で決まっているので、 [`to_mora_phrases`] にある ます / です の個別規則は要らない。
+#[must_use]
+pub(crate) fn chained_to_mora_phrases(
+    phrases: &[crate::chain_phrases::ChainedPhrase],
+    trailing_gap: &str,
+) -> MoraPhrases {
+    let mut out = MoraPhrases::default();
+    for p in phrases {
+        let morae = mora_split(&symbol_reading(&p.sound));
+        if morae.is_empty() {
+            continue;
+        }
+        out.phrases.push(MoraPhrase {
+            nucleus: (p.accent > 0).then_some(p.accent),
+            morae,
+            break_before: if out.phrases.is_empty() {
+                PhraseBreak::None
+            } else {
+                gap_break(&p.gap_before)
+            },
+        });
+    }
+    out.trailing = gap_break(trailing_gap);
+    out
+}
+
 /// 記号列に出せない文字を落としたカタカナ読み。
 fn symbol_reading(reading: &str) -> String {
     hira_to_kata(reading)

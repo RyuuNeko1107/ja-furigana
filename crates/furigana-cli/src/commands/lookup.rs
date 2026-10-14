@@ -199,14 +199,14 @@ fn convert(f: &Furigana, text: &str, args: &Args) -> Result<String> {
         // POST /accent_phrases?is_kana=true にそのまま渡せる。
         // dict bracket / --estimate-accent が無い token は平板 fallback。
         "voicevox-aques" | "voicevox" => {
-            ja_furigana_voicevox::to_aques_kana(&f.to_accent(text))
+            ja_furigana_voicevox::to_aques_kana_phrases(&f.to_mora_phrases(text))
         }
         // 本家 AquesTalk 音声記号列 (ADR-0001 adapter crate 経由)。
         // AquesTalk2 / AquesTalk10 の合成 API へそのまま渡せる。
         // VOICEVOX kana 記法との差分 = 半角 `?` / `。` と `、` の pause 区別 / 無声化 `_`。
         "aquestalk" => {
-            let symbols = ja_furigana_aquestalk::to_aquestalk_with(
-                &f.to_accent(text),
+            let symbols = ja_furigana_aquestalk::to_aquestalk_phrases(
+                &f.to_mora_phrases(text),
                 ja_furigana_aquestalk::Options {
                     devoice: !args.no_devoice,
                     trailing_period: !args.drop_period,

@@ -31,7 +31,7 @@
 //! // VOICEVOX の POST /accent_phrases?is_kana=true にそのまま渡せる
 //! ```
 
-use furigana::accent_symbols::{to_mora_phrases, MoraPhrase, PhraseBreak};
+use furigana::accent_symbols::{to_mora_phrases, MoraPhrase, MoraPhrases, PhraseBreak};
 use furigana::AccentResult;
 
 /// 1 accent phrase を kana 記法へ (平板 / 不明は句末 `'`)。
@@ -62,8 +62,13 @@ fn render_phrase(phrase: &MoraPhrase) -> String {
 /// - 疑問文は全角 `？` を発話末に 1 個 (kana 記法は文中に置けない)
 #[must_use]
 pub fn to_aques_kana(result: &AccentResult) -> String {
-    let symbols = to_mora_phrases(result);
+    to_aques_kana_phrases(&to_mora_phrases(result))
+}
 
+/// [`MoraPhrases`] (`Furigana::to_mora_phrases` の戻り値) を VOICEVOX の kana 記法へ。
+/// 連結規則の表があれば OpenJTalk 方式のアクセント句で作られる (VOICEVOX 本体と同じ句の分け方)。
+#[must_use]
+pub fn to_aques_kana_phrases(symbols: &MoraPhrases) -> String {
     let mut out = String::new();
     let mut question = symbols.trailing == PhraseBreak::Question;
     for (i, phrase) in symbols.phrases.iter().enumerate() {

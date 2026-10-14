@@ -423,6 +423,29 @@ impl Furigana {
             &self.chain_table,
         )
     }
+
+    /// TTS engine 向けの音声記号列 ([`crate::accent_symbols`]) の元になる 「モーラ列 + 核位置 + 区切り」。
+    ///
+    /// 辞書に連結規則の表 (`role = "accent_chain"`) があれば、 OpenJTalk と同じ句の連結規則で アクセント句を作る
+    /// ([`Self::to_accent_phrases`])。 無ければ 従来どおり [`Self::to_accent`] の token 単位の核から作る。
+    /// adapter crate (`ja-furigana-aquestalk` / `-voicevox`) の `Converter` と CLI / HTTP はこれを使う。
+    #[must_use]
+    pub fn to_mora_phrases(&self, input: &str) -> crate::accent_symbols::MoraPhrases {
+        if self.chain_table.is_empty() {
+            return crate::accent_symbols::to_mora_phrases(&self.to_accent(input));
+        }
+        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let analysis = self.pipeline().analyze(&norm.text);
+        let morphs = self.analyzer().tokenize(&norm.text);
+        let (phrases, gap) = crate::chain_phrases::build_chained_with_gap(
+            &norm.text,
+            &analysis.tokens,
+            &morphs,
+            &self.accent_lexicon,
+            &self.chain_table,
+        );
+        crate::accent_symbols::chained_to_mora_phrases(&phrases, &gap)
+    }
 }
 
 // ─── AccentResult / AccentToken ─────────────────────────────────────────────

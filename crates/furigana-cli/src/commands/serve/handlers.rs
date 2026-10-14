@@ -278,12 +278,12 @@ fn process(
         // - voicevox-aques: そのまま POST /accent_phrases?is_kana=true へ渡せる kana 記法
         // - aquestalk: 本家 AquesTalk (AquesTalk2 / AquesTalk10) の音声記号列
         let convert_start = Instant::now();
-        let accent = f.to_accent(&text);
+        let symbols_in = f.to_mora_phrases(&text);
         // aquestalk は engine 側に記号列長の上限があるので、 `segmented=true` の時は
         // アクセント句境界で分割した列も `segments` に載せる (pause 記号は保持される)。
         let (result, segments) = if mode == "aquestalk" {
-            let symbols = ja_furigana_aquestalk::to_aquestalk_with(
-                &accent,
+            let symbols = ja_furigana_aquestalk::to_aquestalk_phrases(
+                &symbols_in,
                 ja_furigana_aquestalk::Options {
                     devoice: params.devoice,
                     trailing_period: params.keep_period,
@@ -295,7 +295,10 @@ fn process(
             });
             (symbols, segments)
         } else {
-            (ja_furigana_voicevox::to_aques_kana(&accent), None)
+            (
+                ja_furigana_voicevox::to_aques_kana_phrases(&symbols_in),
+                None,
+            )
         };
         let t_convert_ms = convert_start.elapsed().as_secs_f64() * 1000.0;
         let t_total_ms = t_start.elapsed().as_secs_f64() * 1000.0;

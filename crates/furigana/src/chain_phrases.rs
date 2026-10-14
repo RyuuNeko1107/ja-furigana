@@ -30,6 +30,12 @@ pub struct ChainedPhrase {
     /// 核に推定が混ざっているか (語単体の核が表に無く 平板で埋めた / rule 推定の核を使った)
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub estimated: bool,
+    /// 発音表記の読み (助詞の は / へ / を を ワ / エ / オ にしたもの。 TTS の記号列用)
+    #[serde(skip)]
+    pub sound: String,
+    /// この句の前にあった、 読みの無い token (句読点・空白・記号) の表記。 句の切れ目の強さの元
+    #[serde(skip)]
+    pub gap_before: String,
 }
 
 /// 分割表の部品 1 つ (OpenJTalk の形態素)。
@@ -524,33 +530,50 @@ pub(crate) fn build_chained_phrases(
     lexicon: &AccentLexicon,
     table: &ChainTable,
 ) -> Vec<ChainedPhrase> {
+    build_chained_with_gap(text, tokens, morphs, lexicon, table).0
+}
+
+/// [`build_chained_phrases`] に加えて、 最後の句の後ろに残った読みの無い token の表記 (入力末の句読点など) を返す。
+pub(crate) fn build_chained_with_gap(
+    text: &str,
+    tokens: &[Token],
+    morphs: &[MorphToken],
+    lexicon: &AccentLexicon,
+    table: &ChainTable,
+) -> (Vec<ChainedPhrase>, String) {
     let (mut nodes, meta) = make_nodes(text, tokens, morphs, lexicon, table);
     if nodes.is_empty() {
-        return Vec::new();
+        return (Vec::new(), String::new());
     }
     let phrases = build_phrases(&mut nodes);
-    phrases
-        .into_iter()
-        .filter(|p| p.morae > 0)
-        .map(|p| {
-            let surface: String = meta[p.start..p.end]
-                .iter()
-                .map(|m| m.surface.as_str())
-                .collect();
-            let reading: String = meta[p.start..p.end]
-                .iter()
-                .map(|m| m.reading.as_str())
-                .collect();
-            let estimated = meta[p.start..p.end].iter().any(|m| m.estimated);
-            ChainedPhrase {
-                surface,
-                reading,
-                mora: p.morae,
-                accent: p.accent,
-                estimated,
-            }
-        })
-        .collect()
+    let mut out = Vec::new();
+    let mut gap = String::new();
+    for p in phrases {
+        let part = &meta[p.start..p.end];
+        if p.morae == 0 {
+            gap.extend(part.iter().map(|m| m.surface.as_str()));
+            continue;
+        }
+        let sound: String = part
+            .iter()
+            .map(|m| match (m.surface.as_str(), m.pos.starts_with("助詞")) {
+                ("は", true) => "ワ",
+                ("へ", true) => "エ",
+                ("を", true) => "オ",
+                _ => m.reading.as_str(),
+            })
+            .collect();
+        out.push(ChainedPhrase {
+            surface: part.iter().map(|m| m.surface.as_str()).collect(),
+            reading: part.iter().map(|m| m.reading.as_str()).collect(),
+            mora: p.morae,
+            accent: p.accent,
+            estimated: part.iter().any(|m| m.estimated),
+            sound,
+            gap_before: std::mem::take(&mut gap),
+        });
+    }
+    (out, gap)
 }
 
 /// 診断用: 語単体の核が表に無いノードの (表記, 読み, 品詞)
@@ -1027,5 +1050,23 @@ format = \"accent_chain/1\"
                 "{p1},{d1}"
             );
         }
+    }
+    #[test]
+    fn mora_phrases_use_chain_rules_sound_and_breaks() {
+        use crate::accent_symbols::PhraseBreak;
+        let (f, d) = mini("mora", true);
+        let m = f.to_mora_phrases("初心者、使い方です。");
+        assert_eq!(m.phrases.len(), 2, "{m:?}");
+        assert_eq!(m.phrases[0].morae.concat(), "ショシンシャ");
+        assert_eq!(m.phrases[0].nucleus, Some(1));
+        assert_eq!(m.phrases[1].break_before, PhraseBreak::Short);
+        assert_eq!(m.phrases[1].morae.concat(), "ツカイカタデス");
+        assert_eq!(m.phrases[1].nucleus, Some(6));
+        assert_eq!(m.trailing, PhraseBreak::Long);
+        // 連結表が無ければ 従来の token 単位の経路 (出力は to_accent 由来)
+        let (g, d2) = mini("mora_nochain", false);
+        assert!(!g.to_mora_phrases("初心者の使い方です").phrases.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&d2);
     }
 }
