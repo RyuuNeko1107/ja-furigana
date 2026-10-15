@@ -144,6 +144,8 @@ furigana lookup '灰桜の散る道'                   # → tts (default)
 furigana lookup '灰桜の散る道' --mode ruby       # → {灰桜|はいざくら}...
 
 # 出力ルール: 漢字 → ひらがな、 アルファベット / 数字 / 記号 → カタカナ統一
+furigana lookup 'AviUtlで編集します' --mode aquestalk --unknown-alpha spell --report-unknown
+furigana lookup '今日は天気です' --mode accent-phrases    # OpenJTalk 方式のアクセント句 (JSON)
 furigana lookup 'Anthropic の Claude を使う' --mode hiragana
 # → アンソロピックのクロードをつかう
 

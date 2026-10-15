@@ -85,6 +85,7 @@ curl -X POST http://127.0.0.1:8000/furigana \
 | `silence_symbols` | bool | `false` | `tts`: 絵文字 / 顔文字パーツを読み上げから外す |
 | `segmented` | bool | `false` | `tts` / `hiragana` のとき分割配列を `segments` に同梱。 `aquestalk` ではアクセント句境界で分割した記号列を同梱 |
 | `max_segment_len` | int | `60` | `tts` / `hiragana` で `segmented=true` のときの 1 セグメント最大文字数 |
+| `unknown_alpha` | string | `drop` | `voicevox-aques` / `aquestalk`: 辞書に無い英字語の扱い。 `drop` (記号列から落とす) / `spell` (1 文字ずつ英字の名前で読む: `AviUtl` → エーブイアイユーティーエル) / `romaji` (ローマ字読み・**実験的**)。 それ以外の値は 400 |
 | `devoice` | bool | `true` | `aquestalk`: 無声化記号 `_` を自動付与するか |
 | `max_len` | int | `255` | `aquestalk` + `segmented=true` のときの 1 塊の最大文字数 (省略時は AquesTalk の目安上限) |
 | `debug` | bool | `false` | `timings_ms` を同梱 (tokenize / convert / total) |
@@ -105,6 +106,14 @@ curl -X POST http://127.0.0.1:8000/furigana \
 | `aquestalk` | 本家 AquesTalk の音声記号列 |
 
 alias: `bouyomi` = `tts` / `voicevox` = `voicevox-aques` (レスポンスの `mode` は正式名になる)。
+
+`voicevox-aques` / `aquestalk` は OpenJTalk 方式の連結規則 (0.6.1〜) でアクセント句を作る。 辞書に連結表 (`core/accent/chain*.toml`) が無ければ従来の token 単位の経路になる。
+これらの mode のレスポンスには `unknown` (配列) が付く: 辞書に無く英字のまま残り、 記号列に出せなかった語 (`unknown_alpha` を `spell` / `romaji` にしても、 読ませた語を含めて並ぶ)。
+
+```sh
+curl 'http://127.0.0.1:8000/furigana?text=AviUtlで編集します&mode=aquestalk&unknown_alpha=spell'
+# → {"result":"エーブイアイユーティーエル'/デ'/ヘンシュウシマ'_ス。","mode":"aquestalk","unknown":["AviUtl"]}
+```
 
 未知の `mode` 値は **silently `tts` (default) にフォールバック** (エラーにはならない)。
 

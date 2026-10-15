@@ -22,7 +22,8 @@ ja-furigana が **何をするか** をまとめたもの。 内部の作りは 
 | `kanji` | 入力をそのまま返す (no-op) | `灰桜の散る道` |
 | `tts` (default、 別名 `bouyomi`) | 読み上げ用。 句読点の間 (ポーズ) を整える。 `--silence-symbols` で絵文字・顔文字を外す | `はいざくらのちるみち` |
 | `accent` | アクセント付きの JSON (アクセント句・モーラ・型) | `{"schema_version": "1", …}` |
-| `voicevox-aques` / `aquestalk` | VOICEVOX / AquesTalk のアクセント記号列 | `ハイザクラノ'/チル'/ミチ'` |
+| `voicevox-aques` / `aquestalk` | VOICEVOX / AquesTalk のアクセント記号列 (OpenJTalk 方式の連結規則つき)。 辞書に無い英字語は `--unknown-alpha` で読ませられる | `ハイザクラノ'/チル'/ミチ'` |
+| `accent-phrases` (CLI のみ) | OpenJTalk 方式のアクセント句 (表記・読み・モーラ数・型・品詞) の JSON | `[{"surface":"灰桜の",…}]` |
 | `romaji` / `romaji-kunrei` | ローマ字 (ヘボン式 / 訓令式) | `haizakuranochirumichi` / `haizakuranotirumiti` |
 | `analyze` | 候補・採用 path・各 band を JSON で | デバッグ用 |
 
@@ -78,6 +79,7 @@ CLI (`furigana lookup`)、 HTTP サーバー (`furigana serve`)、 Rust lib (`Fu
 - **連結した英語** (`thankyou` / `iloveyou` / `GameOver`): 辞書の語に区切れるときだけ読む。 略語・数字まじり・短いものは対象外
 - **単独の `w`**: 笑い (`ゆっくりw` = ゆっくりワラ)。 直後が助詞なら文字名 (`キーwを押す` = キーダブリューをおす)。 式の中 (`w=2`) も文字名
 - **英字の記号込み語**: `C++` / `C#` / `Wi-Fi` / `Node.js`
+- **辞書に無い英字語の TTS 記号列** (0.6.1〜): `voicevox-aques` / `aquestalk` では英字のままの語は記号列から落ちる (既定 `drop`)。 CLI `--unknown-alpha spell` / HTTP `unknown_alpha=spell` で 1 文字ずつ英字の名前で読ませられる (`AviUtl` → エーブイアイユーティーエル)。 `romaji` はローマ字読み (実験的)。 読めなかった語は CLI `--report-unknown` (stderr) / HTTP の `unknown` 配列で分かる
 - **読まないもの**: URL・メール・絵文字 (保護トークンとしてそのまま)。 括弧の顔文字 (`(´・ω・`)`) は読みを空にして除外
 
 ## 5. 記号
@@ -112,6 +114,8 @@ tts では英数字にはさまれた `.` `?` は文の区切りにしない (`e
 
 - **辞書の穴の抽出**: `extract_dict_gap_candidates` で辞書にない漢字 token を context つきで取り出す (lib は telemetry を持たない)
 - **hot reload**: 辞書を差し替えても再起動不要 (サーバー)
+- **起動の高速化** (0.6.1〜): アクセント表・連結表を `.furigana-cache/*.fgtb` にバイナリで保存し、 次回から読む (起動 約 530 → 約 220 ms)。 元ファイルの大きさ・更新時刻・内容で古さを判定する。 `furigana dict build-cache` で事前に作れる。 環境変数 `FURIGANA_NO_TABLE_CACHE=1` で無効
+- **並列バッチ**: `furigana lookup --batch -j N` で行を並列に処理する
 - **性能**: 1 万行/秒以上。 辞書は先頭 2 文字で区間を絞って引く
 - **品質ゲート**: 回帰 corpus (約 1.2 万 case)、 mutation test、 diff coverage、 license / security audit を CI で必須化
 - **互換**: 0.x のため minor version で破壊的変更がありうる ([MIGRATION.md](../MIGRATION.md))
