@@ -218,10 +218,10 @@ fn cache_path(dir: &Path, key: u64) -> PathBuf {
 
 /// キャッシュのバイト列を 元ファイルと照らして読む。 古い / 壊れていれば `None`
 fn try_load(bytes: &[u8], sources: &[Source]) -> Option<(AccentLexicon, ChainTable)> {
-    if bytes.len() < 16 || &bytes[..4] != MAGIC {
+    let (body, tail) = bytes.split_at(bytes.len().checked_sub(8)?);
+    if body.get(..4)? != MAGIC {
         return None;
     }
-    let (body, tail) = bytes.split_at(bytes.len() - 8);
     let want = u64::from_le_bytes(tail.try_into().ok()?);
     if fast_checksum(body) != want {
         return None;
@@ -309,6 +309,14 @@ pub(crate) fn load_tables(
     excludes: &[String],
 ) -> crate::error::Result<(AccentLexicon, ChainTable)> {
     let use_cache = std::env::var("FURIGANA_NO_TABLE_CACHE").map_or(true, |v| v != "1");
+    load_tables_with(dirs, excludes, use_cache)
+}
+
+fn load_tables_with(
+    dirs: &[PathBuf],
+    excludes: &[String],
+    use_cache: bool,
+) -> crate::error::Result<(AccentLexicon, ChainTable)> {
     let sources = collect_sources(dirs, excludes);
     if use_cache && !sources.is_empty() {
         let key = cache_key(&sources);
@@ -481,6 +489,155 @@ format = \"accent/1\"
         std::fs::write(d.join(CACHE_DIR), b"x").unwrap();
         let (lex, _) = load_tables(std::slice::from_ref(&d), &[]).unwrap();
         assert_eq!(lex.lookup("天気", "テンキ"), Some((1, 3)));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 検証用: 辞書を置き、 元ファイルの一覧と キャッシュのバイト列を作る
+    fn built(name: &str) -> (PathBuf, Vec<Source>, Vec<u8>) {
+        let d = tmpdir(name);
+        write(&d, "accent/a.toml", ACCENT);
+        write(&d, "accent/c.toml", CHAIN);
+        let sources = collect_sources(std::slice::from_ref(&d), &[]);
+        assert_eq!(sources.len(), 2);
+        let mut lex = AccentLexicon::default();
+        let mut chain = ChainTable::default();
+        lex.load_dir(&d, &[]).unwrap();
+        chain.load_dir(&d, &[]).unwrap();
+        let bytes = build_bytes(&sources, &lex, &chain).unwrap();
+        (d, sources, bytes)
+    }
+
+    /// 本体を書き換えたあと 検査値を付け直す (検査値以外の検証を通すため)
+    fn reseal(mut bytes: Vec<u8>) -> Vec<u8> {
+        let n = bytes.len() - 8;
+        bytes.truncate(n);
+        let sum = fast_checksum(&bytes);
+        bytes.extend_from_slice(&sum.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn hashes_match_known_values() {
+        assert_eq!(fast_checksum(b""), 0x9e37_79b9_7f4a_7c15);
+        assert_eq!(fast_checksum(b"abcdefgh"), 0x8113_6f66_5a59_a24f);
+        assert_eq!(fast_checksum(b"abcdefghi"), 0xae8d_6753_6dd6_d442);
+        let d = tmpdir("hash");
+        write(&d, "a", "a");
+        write(&d, "empty", "");
+        assert_eq!(content_hash(&d.join("a")), Some(0xaf63_dc4c_8601_ec8c));
+        assert_eq!(content_hash(&d.join("empty")), Some(0xcbf2_9ce4_8422_2325));
+        assert_eq!(content_hash(&d.join("none")), None);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn try_load_accepts_its_own_bytes_with_full_tables() {
+        let (d, sources, bytes) = built("roundtrip");
+        let (lex, chain) = try_load(&bytes, &sources).unwrap();
+        assert_eq!(lex.lookup("天気", "テンキ"), Some((1, 3)));
+        assert_eq!(lex.lookup("雨", "アメ"), Some((1, 2)));
+        assert!(!chain.is_empty());
+        assert!(bytes.len() > 100, "表の中身が入っている");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn try_load_rejects_bad_headers() {
+        let (d, sources, bytes) = built("headers");
+        // 短すぎる / 空
+        assert!(try_load(&[], &sources).is_none());
+        assert!(try_load(&bytes[..7], &sources).is_none());
+        assert!(try_load(&bytes[..11], &sources).is_none());
+        // 検査値だけ違う
+        let mut b = bytes.clone();
+        *b.last_mut().unwrap() ^= 1;
+        assert!(try_load(&b, &sources).is_none());
+        // 検査値は合っているが magic が違う
+        let mut b = bytes.clone();
+        b[0] = b'X';
+        assert!(try_load(&reseal(b), &sources).is_none());
+        // 形式の版が違う
+        let mut b = bytes.clone();
+        b[4..8].copy_from_slice(&(FORMAT_VERSION + 1).to_le_bytes());
+        assert!(try_load(&reseal(b), &sources).is_none());
+        // 元ファイルの数が違う
+        assert!(try_load(&bytes, &sources[..1]).is_none());
+        let mut more = sources.clone();
+        more.push(sources[0].clone());
+        assert!(try_load(&bytes, &more).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn try_load_checks_each_source() {
+        let (d, sources, bytes) = built("sources");
+        // 名前だけ違う / 大きさだけ違う
+        let mut s = sources.clone();
+        s[1].rel.push('x');
+        assert!(try_load(&bytes, &s).is_none());
+        let mut s = sources.clone();
+        s[1].size += 1;
+        assert!(try_load(&bytes, &s).is_none());
+        // 更新時刻だけ違う (内容は同じ) → 使える
+        let mut s = sources.clone();
+        for x in &mut s {
+            x.mtime_ns += 1;
+        }
+        assert!(try_load(&bytes, &s).is_some());
+        // 更新時刻も内容も違う (大きさは同じ) → 使わない
+        write(&d, "accent/a.toml", &ACCENT.replace("[テ]ンキ", "[テン]キ"));
+        let mut s = collect_sources(std::slice::from_ref(&d), &[]);
+        assert_eq!(s[0].size, sources[0].size);
+        s[0].mtime_ns += 1;
+        assert!(try_load(&bytes, &s).is_none());
+        // 内容が違っても 大きさと更新時刻が同じなら 速い判定で使う
+        s[0].mtime_ns = sources[0].mtime_ns;
+        assert!(try_load(&bytes, &s).is_some());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cache_is_used_only_when_enabled_and_not_for_empty_dirs() {
+        let d = tmpdir("enabled");
+        write(&d, "accent/a.toml", ACCENT);
+        let dirs = vec![d.clone()];
+        let (_, _) = load_tables_with(&dirs, &[], true).unwrap();
+        assert_eq!(cache_files(&d).len(), 1);
+        // 同じ大きさで 内容を変え 更新時刻を戻す → キャッシュが使われていれば 古い値のまま
+        let p = d.join("accent/a.toml");
+        let old = std::fs::metadata(&p).unwrap().modified().unwrap();
+        std::fs::write(&p, ACCENT.replace("[テ]ンキ", "[テン]キ")).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&p)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        let (lex, _) = load_tables_with(&dirs, &[], true).unwrap();
+        assert_eq!(
+            lex.lookup("天気", "テンキ"),
+            Some((1, 3)),
+            "キャッシュを使う"
+        );
+        let (lex, _) = load_tables_with(&dirs, &[], false).unwrap();
+        assert_eq!(
+            lex.lookup("天気", "テンキ"),
+            Some((2, 3)),
+            "無効なら TOML を読む"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+
+        // 無効のときは 書かない
+        let d = tmpdir("disabled");
+        write(&d, "accent/a.toml", ACCENT);
+        let _ = load_tables_with(std::slice::from_ref(&d), &[], false).unwrap();
+        assert!(cache_files(&d).is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+
+        // 表が 1 つも無い辞書には 書かない
+        let d = tmpdir("none");
+        let _ = load_tables_with(std::slice::from_ref(&d), &[], true).unwrap();
+        assert!(cache_files(&d).is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 }

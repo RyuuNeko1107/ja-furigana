@@ -245,8 +245,9 @@ fn spell_word(word: &str) -> String {
 
 /// ローマ字として読んだ簡易のカタカナ (実験的)。
 fn romaji_word(word: &str) -> String {
-    const ROWS: [(&str, [&str; 5]); 19] = [
+    const ROWS: [(&str, [&str; 5]); 20] = [
         ("k", ["カ", "キ", "ク", "ケ", "コ"]),
+        ("c", ["カ", "キ", "ク", "ケ", "コ"]),
         ("s", ["サ", "シ", "ス", "セ", "ソ"]),
         ("t", ["タ", "ティ", "トゥ", "テ", "ト"]),
         ("n", ["ナ", "ニ", "ヌ", "ネ", "ノ"]),
@@ -282,12 +283,7 @@ fn romaji_word(word: &str) -> String {
     let mut out = String::new();
     let mut i = 0;
     while i < w.len() {
-        // c は ch 以外では k として読む
-        let c = if w[i] == 'c' && w.get(i + 1) != Some(&'h') {
-            'k'
-        } else {
-            w[i]
-        };
+        let c = w[i];
         if let Some(v) = vowel_idx(c) {
             out.push_str(["ア", "イ", "ウ", "エ", "オ"][v]);
             i += 1;
@@ -663,6 +659,14 @@ mod tests {
             ("tea", "テア"),
             ("ra", "ラ"),
             ("lamp", "ランプ"),
+            ("cat", "カト"),
+            ("nyan", "ニャン"),
+            ("yuki", "ユキ"),
+            ("yoru", "ヨル"),
+            ("ash", "アシ"),
+            ("bunch", "ブンチ"),
+            ("kyu", "キュ"),
+            ("rakuda", "ラクダ"),
         ];
         for (w, want) in cases {
             assert_eq!(romaji_word(w), want, "{w}");
@@ -941,5 +945,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn unknown_words_come_from_alpha_runs_only() {
+        use crate::api::{AccentResult, AccentToken};
+        let result = AccentResult {
+            schema_version: "1".to_string(),
+            tokens: vec![AccentToken {
+                surface: "AB.C".to_string(),
+                reading: "AB.C".to_string(),
+                accent_phrases: Vec::new(),
+                ambiguous: false,
+                alternatives: Vec::new(),
+            }],
+        };
+        let spell = SymbolOptions {
+            unknown_alpha: UnknownAlpha::Spell,
+            ..SymbolOptions::default()
+        };
+        let out = to_mora_phrases_with(&result, spell);
+        assert_eq!(out.unknown, vec!["AB".to_string(), "C".to_string()]);
+        assert_eq!(out.phrases.phrases.len(), 2);
+        assert_eq!(out.phrases.phrases[0].morae.concat(), "エービー");
+        assert_eq!(out.phrases.phrases[1].morae.concat(), "シー");
+        let out = to_mora_phrases_with(&result, SymbolOptions::default());
+        assert_eq!(out.unknown.len(), 2);
+        assert!(out.phrases.phrases.is_empty());
     }
 }

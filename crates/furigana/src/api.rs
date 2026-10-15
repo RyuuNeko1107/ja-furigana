@@ -361,13 +361,6 @@ impl Furigana {
         AccentResult::from_analysis(self.analyze(input))
     }
 
-    /// 計測用: Lindera の再解析だけを走らせる (形態素数を返す)。 最適化の足場で、 公開 API ではない
-    #[doc(hidden)]
-    pub fn tokenize_pos_only(&self, input: &str) -> usize {
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
-        self.analyzer().tokenize(&norm.text).len()
-    }
-
     /// 診断用: 語単体の核が表に無く 平板で埋めたノード (表記, 読み, 品詞)。 表を育てる作業の入力で、 公開 API ではない
     #[doc(hidden)]
     #[must_use]

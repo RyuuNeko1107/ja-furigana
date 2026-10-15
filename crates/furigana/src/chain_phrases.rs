@@ -618,10 +618,9 @@ fn make_nodes(
             .filter_map(|(i, s)| s.and_then(|(a, b)| (a < te && b > ts).then_some(i)))
             .collect();
         let tok_reading = crate::kana::hira_to_kata(&tok.reading);
-        let inside = !idx.is_empty()
-            && idx
-                .iter()
-                .all(|&i| spans[i].is_some_and(|(a, b)| a >= ts && b <= te));
+        let inside = idx
+            .iter()
+            .all(|&i| spans[i].is_some_and(|(a, b)| a >= ts && b <= te));
         let morph_reading: String = idx
             .iter()
             .map(|&i| morphs[i].reading.as_deref().unwrap_or(""))
@@ -1423,6 +1422,145 @@ ids = [
         let m = f.chain_missing_accents("犬です");
         assert!(m.iter().any(|x| x.0 == "犬"));
         assert!(!m.iter().any(|x| x.0 == "です"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn morph(surface: &str, reading: &str, p1: &str, d1: &str) -> MorphToken {
+        MorphToken {
+            surface: surface.to_string(),
+            reading: Some(reading.to_string()),
+            ..tok(p1, d1, "*", "*", "*")
+        }
+    }
+
+    fn token(surface: &str, reading: &str, range: std::ops::Range<usize>) -> Token {
+        Token {
+            surface: surface.to_string(),
+            reading: reading.to_string(),
+            range,
+            accent_phrases: Vec::new(),
+            ambiguous: false,
+            alternatives: Vec::new(),
+            is_name: false,
+        }
+    }
+
+    fn table_of(body: &str) -> ChainTable {
+        let mut t = ChainTable::default();
+        t.load_str(&format!(
+            "[meta]\nrole = \"accent_chain\"\nformat = \"accent_chain/1\"\n{body}"
+        ));
+        t.finish();
+        t
+    }
+
+    #[test]
+    fn make_nodes_splits_a_morph_only_when_the_parts_rejoin() {
+        let t = full_table();
+        let lex = AccentLexicon::default();
+        let m = morph("という", "トイウ", "助詞", "格助詞");
+        let (nodes, meta) =
+            make_nodes("という", &[token("という", "トイウ", 0..9)], &[m], &lex, &t);
+        let surfaces: Vec<&str> = meta.iter().map(|x| x.surface.as_str()).collect();
+        assert_eq!(surfaces, ["と", "いう"]);
+        assert_eq!(nodes.len(), 2);
+        // 読みが分割表と合わなければ 分けない
+        let m = morph("という", "トユウ", "助詞", "格助詞");
+        let (nodes, _) = make_nodes("という", &[token("という", "トユウ", 0..9)], &[m], &lex, &t);
+        assert_eq!(nodes.len(), 1);
+    }
+
+    #[test]
+    fn make_nodes_uses_the_table_mora_unless_it_is_zero() {
+        let t = table_of("[words]\n\"猫,ネコ,名詞\" = \"1/3\"\n\"鳥,トリ,名詞\" = \"1/0\"\n");
+        let lex = AccentLexicon::default();
+        let run = |s: &str, r: &str| {
+            let m = morph(s, r, "名詞", "一般");
+            make_nodes(s, &[token(s, r, 0..s.len())], &[m], &lex, &t).0
+        };
+        let n = run("猫", "ネコ");
+        assert_eq!((n[0].morae, n[0].accent), (3, 1));
+        let n = run("鳥", "トリ");
+        assert_eq!((n[0].morae, n[0].accent), (2, 1));
+    }
+
+    #[test]
+    fn make_nodes_treats_readings_without_kana_as_symbols() {
+        let t = ChainTable::default();
+        let lex = AccentLexicon::default();
+        let m = morph("ABC", "ABC", "名詞", "一般");
+        let (nodes, meta) = make_nodes("ABC", &[token("ABC", "ABC", 0..3)], &[m], &lex, &t);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(meta[0].pos, "記号");
+        assert_eq!(meta[0].reading, "");
+        // 読みが空の token も 記号
+        let (_, meta) = make_nodes("x", &[token("x", "", 0..1)], &[], &lex, &t);
+        assert_eq!(meta[0].pos, "記号");
+    }
+
+    #[test]
+    fn make_nodes_does_not_expand_morphs_that_straddle_the_token() {
+        let t = ChainTable::default();
+        let lex = AccentLexicon::default();
+        // 形態素 「あい」 が token 「いう」 の外へはみ出す。 読みを偽って 連結が token と一致するようにしてある
+        let morphs = [
+            morph("あい", "イ", "名詞", "一般"),
+            morph("う", "ウ", "名詞", "一般"),
+        ];
+        let (nodes, _) = make_nodes("あいう", &[token("いう", "イウ", 3..9)], &morphs, &lex, &t);
+        assert_eq!(nodes.len(), 1, "token 全体を 1 ノードにする");
+        assert_eq!(nodes[0].morae, 2);
+        // 同じ形でも token に収まっていれば 形態素ごとに展開する
+        let (nodes, _) = make_nodes(
+            "あいう",
+            &[token("あいう", "イウ", 0..9)],
+            &morphs,
+            &lex,
+            &t,
+        );
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn make_nodes_prefers_the_token_accent_over_the_lexicon() {
+        let d = tmp("nodes_accent");
+        std::fs::create_dir_all(d.join("accent")).unwrap();
+        std::fs::write(
+            d.join("accent/a.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"accent\"\n\n[entries]\n\"猫\" = \"[ネ]コ\"\n",
+        )
+        .unwrap();
+        let mut lex = AccentLexicon::default();
+        lex.load_dir(&d, &[]).unwrap();
+        let t = ChainTable::default();
+        // 形態素の読みが token と違うので token 全体を 1 ノードにする経路
+        let morphs = [morph("猫", "ニャン", "名詞", "一般")];
+        let phrase = |accent: Option<u8>, estimated: bool| {
+            let mut tk = token("猫", "ネコ", 0..3);
+            tk.accent_phrases = vec![crate::AccentPhrase {
+                reading: "ネコ".to_string(),
+                mora: 2,
+                accent,
+                estimated,
+            }];
+            tk
+        };
+        let (nodes, meta) = make_nodes("猫", &[phrase(Some(2), false)], &morphs, &lex, &t);
+        assert_eq!((nodes[0].accent, meta[0].estimated), (2, false));
+        let (nodes, meta) = make_nodes("猫", &[phrase(Some(2), true)], &morphs, &lex, &t);
+        assert_eq!((nodes[0].accent, meta[0].estimated), (2, true));
+        // 核が不明なら 辞書の表を引く
+        let (nodes, meta) = make_nodes("猫", &[phrase(None, false)], &morphs, &lex, &t);
+        assert_eq!((nodes[0].accent, meta[0].estimated), (1, false));
+        // 句が無く 表にも無ければ 平板で埋めて推定扱い
+        let (nodes, meta) = make_nodes(
+            "犬",
+            &[token("犬", "イヌ", 0..3)],
+            &[morph("犬", "ニャン", "名詞", "一般")],
+            &lex,
+            &t,
+        );
+        assert_eq!((nodes[0].accent, meta[0].estimated), (0, true));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -53,7 +53,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     bench("to_hiragana", &|l| f.to_hiragana(l).len());
     bench("to_accent (token の核)", &|l| f.to_accent(l).tokens.len());
-    bench("tokenize (Lindera だけ)", &|l| f.tokenize_pos_only(l));
     bench("to_accent_phrases (連結)", &|l| {
         f.to_accent_phrases(l).len()
     });
