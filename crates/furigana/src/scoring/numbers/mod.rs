@@ -1046,7 +1046,16 @@ impl NumberCandidateProvider {
             } else {
                 base
             };
-            let reading = self.read_counter(num, counter);
+            let mut reading = self.read_counter(num, counter);
+            // % / ‰ の直後が閉じ括弧 ((100%) / [5%] / 「50%」) だと、 Lindera が 「%)」 を 1 つの記号 token にまとめて、
+            // 助数詞の候補が 「%」 の位置で token 境界に着かず落ちていた (% が読まれず素通し)。 閉じ括弧も一緒に取る
+            let m_end = match (base, rest[m_end..].chars().next()) {
+                ("%" | "％" | "‰", Some(c)) if is_closing_bracket(c) => {
+                    reading.push(c);
+                    m_end + c.len_utf8()
+                }
+                _ => m_end,
+            };
             // かなの助数詞 (2つ / 3つ) だけ match_hits を付ける。
             // Lindera が 「つね」 「つまで」 を 1 語にすると 3つ + ね と 3 + つね が
             // どちらも 2 edge / 最弱 band 50 で並び、 hits が無いと列挙順で さんつね になる。
@@ -1979,6 +1988,14 @@ fn approx_pair(num: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// 閉じ括弧か (`)` `]` `}` と全角・かぎ括弧・隅付き括弧)
+fn is_closing_bracket(c: char) -> bool {
+    matches!(
+        c,
+        ')' | ']' | '}' | '）' | '］' | '｝' | '」' | '』' | '】' | '〕' | '〉' | '》'
+    )
 }
 
 /// 〇〜九 だけの列を桁を並べた算用数字に (一二 = 12)
