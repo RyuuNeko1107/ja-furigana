@@ -114,6 +114,37 @@ fn single_counter_basic() {
 }
 
 #[test]
+fn percent_counter_takes_following_closing_bracket() {
+    // (100%) / [5%] / 「50%」: Lindera は 「%)」 を 1 つの記号 token にまとめるので、 閉じ括弧まで一緒に取らないと
+    // 助数詞の候補が token 境界に着かず、 % が読まれず素通しになる
+    let p = provider();
+    for (input, surface) in [
+        ("(100%)です", "100%)"),
+        ("[5%]です", "5%]"),
+        ("「50%」です", "50%」"),
+        ("【3%】です", "3%】"),
+    ] {
+        let start = input.find(|c: char| c.is_ascii_digit()).unwrap();
+        let cands = p.candidates_vec(&ctx(input), start);
+        let c = find(&cands, surface).unwrap_or_else(|| panic!("{surface} candidate"));
+        assert!(
+            c.reading.contains("パーセント") || c.reading.contains("パーセン"),
+            "{surface}: {}",
+            c.reading
+        );
+        assert!(
+            c.reading.ends_with([')', ']', '」', '】']),
+            "{surface}: {}",
+            c.reading
+        );
+    }
+    // 閉じ括弧が無い時は従来どおり 「%」 まで
+    let cands = p.candidates_vec(&ctx("100%です"), 0);
+    assert!(find(&cands, "100%").is_some());
+    assert!(find(&cands, "100%です").is_none());
+}
+
+#[test]
 fn recursive_counter_me_through_provider() {
     // 「2 個目」 = 個 (base) + 目 (recursive) を 1 token 化 → ニコメ。
     // regression: 以前は 「2個」 で止まり 「目」 が単漢字 fallback で 「モク」 と
