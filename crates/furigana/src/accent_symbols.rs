@@ -973,4 +973,23 @@ mod tests {
         assert_eq!(out.unknown.len(), 2);
         assert!(out.phrases.phrases.is_empty());
     }
+
+    #[test]
+    fn particles_are_spoken_as_sounds_in_token_results() {
+        use crate::api::{AccentResult, AccentToken};
+        for (surface, want) in [("は", "ワ"), ("へ", "エ"), ("を", "オ")] {
+            let result = AccentResult {
+                schema_version: "1".to_string(),
+                tokens: vec![AccentToken {
+                    surface: surface.to_string(),
+                    reading: hira_to_kata(surface),
+                    accent_phrases: Vec::new(),
+                    ambiguous: false,
+                    alternatives: Vec::new(),
+                }],
+            };
+            let out = to_mora_phrases(&result);
+            assert_eq!(out.phrases[0].morae.concat(), want, "{surface}");
+        }
+    }
 }

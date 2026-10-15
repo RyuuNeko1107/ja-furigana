@@ -308,8 +308,13 @@ pub(crate) fn load_tables(
     dirs: &[PathBuf],
     excludes: &[String],
 ) -> crate::error::Result<(AccentLexicon, ChainTable)> {
-    let use_cache = std::env::var("FURIGANA_NO_TABLE_CACHE").map_or(true, |v| v != "1");
+    let use_cache = cache_enabled(std::env::var("FURIGANA_NO_TABLE_CACHE").ok().as_deref());
     load_tables_with(dirs, excludes, use_cache)
+}
+
+/// 環境変数 `FURIGANA_NO_TABLE_CACHE` の値からキャッシュを使うか決める
+fn cache_enabled(var: Option<&str>) -> bool {
+    var != Some("1")
 }
 
 fn load_tables_with(
@@ -639,5 +644,12 @@ format = \"accent/1\"
         let _ = load_tables_with(std::slice::from_ref(&d), &[], true).unwrap();
         assert!(cache_files(&d).is_empty());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cache_enabled_only_when_not_disabled() {
+        assert!(cache_enabled(None));
+        assert!(cache_enabled(Some("0")));
+        assert!(!cache_enabled(Some("1")));
     }
 }
