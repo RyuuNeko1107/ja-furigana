@@ -42,6 +42,9 @@ pub enum ProtectedKind {
     Emoji,
     /// 括弧で囲んだ顔文字 ((´・ω・`) / (;´Д`) / ヽ(^o^)ノ)。 読みは空 (丸ごと除外)
     Kaomoji,
+    /// HTML 文字参照 (`&#8230;` / `&#x2026;` / `&amp;` / `&lt;`)。 bot の投稿や RSS 由来で混ざる。
+    /// 数字の羅列として読まれるのを避けるため読みは空 (`&` 単体も読まないので揃う)
+    Entity,
 }
 
 /// 入力中の保護対象 1 件 (range + 種別)。
@@ -54,6 +57,11 @@ pub struct ProtectedToken {
 }
 
 // ─── regex (URL / Email) ─────────────────────────────────────────────────────
+
+static ENTITY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|amp|lt|gt|quot|apos|nbsp);")
+        .expect("ENTITY_RE compile")
+});
 
 static URL_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
@@ -201,6 +209,21 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
         tokens.push(ProtectedToken {
             range: m.range(),
             kind: ProtectedKind::Email,
+        });
+    }
+
+    // HTML 文字参照。 URL の中 (`?a=1&amp;b=2`) のものは URL が取る
+    for m in ENTITY_RE.find_iter(input) {
+        let range = m.range();
+        if tokens
+            .iter()
+            .any(|t| t.range.start < range.end && range.start < t.range.end)
+        {
+            continue;
+        }
+        tokens.push(ProtectedToken {
+            range,
+            kind: ProtectedKind::Entity,
         });
     }
 
@@ -525,7 +548,7 @@ impl CandidateProvider for ProtectTokenProvider {
                 let length = u8::try_from(char_count).unwrap_or(u8::MAX);
                 // 顔文字は読みを空にして丸ごと除外、 絵文字は辞書の読み (無ければ表記のまま)、 それ以外は表記のまま素通し
                 let reading: std::borrow::Cow<'_, str> = match token.kind {
-                    ProtectedKind::Kaomoji => "".into(),
+                    ProtectedKind::Kaomoji | ProtectedKind::Entity => "".into(),
                     ProtectedKind::Emoji => emoji_reading(
                         surface,
                         &self.emoji,
@@ -1848,6 +1871,32 @@ mod tests {
         assert!(extract_protected_tokens(&ok)
             .iter()
             .any(|t| t.kind == ProtectedKind::Kaomoji));
+    }
+
+    #[test]
+    fn html_entities_are_protected_as_silent_tokens() {
+        for ent in [
+            "&#8230;", "&#x2026;", "&amp;", "&lt;", "&gt;", "&quot;", "&nbsp;",
+        ] {
+            let input = format!("あ{ent}い");
+            let tokens = extract_protected_tokens(&input);
+            assert_eq!(tokens.len(), 1, "{ent}");
+            assert_eq!(tokens[0].kind, ProtectedKind::Entity, "{ent}");
+            assert_eq!(&input[tokens[0].range.clone()], ent);
+        }
+        // 実体参照ではない & は取らない
+        for plain in ["A&B", "R&D", "&amp", "&#;", "&foo;", "a & b"] {
+            assert!(
+                extract_protected_tokens(plain)
+                    .iter()
+                    .all(|t| t.kind != ProtectedKind::Entity),
+                "{plain}"
+            );
+        }
+        // URL の中のものは URL が取る
+        let url = "https://example.com/?a=1&amp;b=2";
+        let tokens = extract_protected_tokens(url);
+        assert!(tokens.iter().all(|t| t.kind != ProtectedKind::Entity));
     }
 
     #[test]
