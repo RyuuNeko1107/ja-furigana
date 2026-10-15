@@ -31,6 +31,8 @@ pub struct MorphToken {
     pub pos_detail: Option<String>,
     /// 品詞細分類 2 (IPADIC details[2]) — 人名 / 地域 / 組織 等 (固有名詞の下位分類)
     pub pos_detail2: Option<String>,
+    /// 品詞細分類 3 (IPADIC details[3]) — 姓 / 名 等 (人名の下位分類)
+    pub pos_detail3: Option<String>,
     /// 活用型 (IPADIC details[4]) — 五段・カ行イ音便 / 一段 等
     pub conjugation_type: Option<String>,
     /// 活用形 (IPADIC details[5]) — 基本形 / 連用形 等
@@ -48,6 +50,7 @@ impl MorphToken {
             pos: None,
             pos_detail: None,
             pos_detail2: None,
+            pos_detail3: None,
             conjugation_type: None,
             conjugation_form: None,
             base_form: None,
@@ -134,6 +137,7 @@ impl Analyzer {
                 pos: details.first().map(ToString::to_string),
                 pos_detail: get_detail(1),
                 pos_detail2: get_detail(2),
+                pos_detail3: get_detail(3),
                 conjugation_type: get_detail(4),
                 conjugation_form: get_detail(5),
                 base_form: get_detail(FIELD_BASE_FORM),

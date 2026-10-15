@@ -29,17 +29,11 @@ use std::path::Path;
 /// 1 件 = (「表記 \u{1} 読み (カタカナ)」, 核位置 (0 = 平板), モーラ数)。 key 昇順
 #[derive(Debug, Default)]
 pub(crate) struct AccentLexicon {
-    entries: Vec<(Box<str>, u8, u8)>,
+    entries: Vec<(u64, u8, u8)>,
 }
 
-const SEP: char = '\u{1}';
-
-fn key(surface: &str, reading: &str) -> String {
-    let mut k = String::with_capacity(surface.len() + 1 + reading.len() * 3 / 2);
-    k.push_str(surface);
-    k.push(SEP);
-    k.push_str(&crate::kana::hira_to_kata(reading));
-    k
+fn key(surface: &str, reading: &str) -> u64 {
+    crate::keyhash::hash_parts(&[surface, &crate::kana::hira_to_kata(reading)])
 }
 
 /// `"..."` の中身を取り出す (`\"` `\\` だけ解く)。 戻り値 = (中身, 閉じ引用符の次の位置)
@@ -66,6 +60,26 @@ fn quoted(s: &str) -> Option<(String, usize)> {
 }
 
 impl AccentLexicon {
+    /// バイナリキャッシュへ書く (`tablecache`)
+    pub(crate) fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        w.u64(self.entries.len() as u64);
+        for e in &self.entries {
+            w.u64(e.0);
+            w.u8(e.1);
+            w.u8(e.2);
+        }
+    }
+
+    /// バイナリキャッシュから読む。 壊れていれば `None`
+    pub(crate) fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        let n = r.len(10)?;
+        let mut entries = Vec::with_capacity(n);
+        for _ in 0..n {
+            entries.push((r.u64()?, r.u8()?, r.u8()?));
+        }
+        Some(Self { entries })
+    }
+
     /// 1 件足す (1 句の bracket 付き読みだけ採る)
     fn push(&mut self, surface: &str, bracketed: &str) {
         let parsed = parse_bracket_notation(bracketed);
@@ -73,16 +87,13 @@ impl AccentLexicon {
             return;
         };
         let Some(accent) = phrase.accent else { return };
-        self.entries.push((
-            key(surface, &parsed.reading).into_boxed_str(),
-            accent,
-            phrase.mora,
-        ));
+        self.entries
+            .push((key(surface, &parsed.reading), accent, phrase.mora));
     }
 
     fn finish(&mut self) {
         // 同じ key は先勝ち (stable sort + dedup で最初の 1 件を残す)
-        self.entries.sort_by(|a, b| a.0.cmp(&b.0));
+        self.entries.sort_by_key(|e| e.0);
         self.entries.dedup_by(|b, a| a.0 == b.0);
         self.entries.shrink_to_fit();
     }
@@ -130,7 +141,7 @@ impl AccentLexicon {
             return Ok(());
         }
         crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, _from, role| {
-            if role == Some("accent") {
+            if role == Some("accent") && crate::tablecache::is_supported_table(content) {
                 self.load_str(content);
             }
             Ok(())
@@ -139,10 +150,15 @@ impl AccentLexicon {
         Ok(())
     }
 
+    /// 表記 + 読み (カタカナ / ひらがな) で (核位置, 拍数) を引く
+    pub(crate) fn lookup(&self, surface: &str, reading: &str) -> Option<(u8, u8)> {
+        self.get(surface, reading)
+    }
+
     fn get(&self, surface: &str, reading: &str) -> Option<(u8, u8)> {
         let k = key(surface, reading);
         self.entries
-            .binary_search_by(|e| (*e.0).cmp(k.as_str()))
+            .binary_search_by_key(&k, |e| e.0)
             .ok()
             .map(|i| (self.entries[i].1, self.entries[i].2))
     }

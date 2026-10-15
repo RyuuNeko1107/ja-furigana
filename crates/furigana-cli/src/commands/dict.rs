@@ -5,6 +5,7 @@
 //! - `remove <surface>`         : `cli-added.toml` から削除
 //! - `import <path>`            : TOML ファイルを user dict にコピー
 //! - `pull [--version v...]`    : core 辞書を GitHub Release から取得 (未実装)
+//! - `build-cache`              : アクセント表 / 連結表のバイナリキャッシュ (`.furigana-cache/*.fgtb`) を作る
 
 use crate::config::Config;
 use crate::paths::Paths;
@@ -54,6 +55,10 @@ pub enum Action {
         path: PathBuf,
     },
 
+    /// アクセント表 / 連結表のバイナリキャッシュを作る (次回以降の起動が速くなる)。
+    /// 配布物の作成や Docker image の build 時に 先に作っておく用途。 辞書を編集した後に 実行しても 古いキャッシュは使われない
+    BuildCache,
+
     /// GitHub Release から core 辞書 + rules を取得して `<data_dir>` に展開
     Pull {
         /// ピン留めバージョン (例: `v0.1.0`)。未指定で最新。
@@ -68,8 +73,41 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         Action::List { limit } => list(paths, limit),
         Action::Remove { surface } => remove(paths, &surface),
         Action::Import { path } => import(paths, &path),
+        Action::BuildCache => build_cache(paths),
         Action::Pull { version } => super::dict_pull::run(paths, version.as_deref()),
     }
+}
+
+// ─── build-cache ─────────────────────────────────────────────────────────────
+
+fn build_cache(paths: &Paths) -> Result<()> {
+    // 辞書を読み込む (表が TOML から作られ、 有効なキャッシュが無ければ書かれる)。 要した時間を表示する
+    let t = std::time::Instant::now();
+    let _f = super::build_furigana(paths)?;
+    let ms = t.elapsed().as_millis();
+    // キャッシュは 辞書ディレクトリ (core / user) 直下の `.furigana-cache/` に置かれる
+    let mut n = 0usize;
+    for base in [paths.dict_core_dir(), paths.dict_user_dir()] {
+        let Ok(rd) = fs::read_dir(base.join(".furigana-cache")) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            if e.path().extension().is_some_and(|x| x == "fgtb") {
+                n += 1;
+                println!(
+                    "{}  ({} bytes)",
+                    e.path().display(),
+                    e.metadata().map_or(0, |m| m.len())
+                );
+            }
+        }
+    }
+    if n == 0 {
+        println!("キャッシュは作られませんでした (辞書ディレクトリに書き込めないか、 アクセント表が見つかりません)");
+    } else {
+        println!("辞書の読み込み {ms} ms。 キャッシュ {n} 件");
+    }
+    Ok(())
 }
 
 // ─── add ─────────────────────────────────────────────────────────────────────

@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-14
+
+(0.6.0 は欠番。 公開前に 下の英字語の扱いを足して 0.6.1 としてまとめた)
+
+### Added
+
+- **OpenJTalk (VOICEVOX) 方式のアクセント句** — `Furigana::to_accent_phrases(&str)` と CLI `--mode accent-phrases`。 OpenJTalk の `njd_set_accent_phrase` / `njd_set_accent_type` (句の連結 18 規則 + 結合型 C1〜C5 / F1〜F5 / P) を移植し (`accent_chain.rs`、 jpreprocess と実文 3,000 文・19,046 句で完全一致を確認)、 Lindera の品詞と辞書の表 (`role = "accent_chain"`) から句を組み立てる。 助詞は前の語にくっつく、 名詞 + 動詞は別の句、 複合語の核は後部の結合型で決まる、 など。 既存の `to_accent` / 各 mode の出力は変わらない。 表が無い辞書では空の `Vec` を返す
+- **アクセント表・連結表のバイナリキャッシュ** (`tablecache.rs`) — 読み込んだ表を `<辞書ディレクトリ>/.furigana-cache/tables-<key>.fgtb` に保存し、 次回以降はそれを読む (起動 約 530 ms → 約 220 ms)。 元ファイルの (大きさ, 更新時刻, 内容のハッシュ) で古いキャッシュを検出する。 書けない場所では黙って諦める。 `FURIGANA_NO_TABLE_CACHE=1` で無効。 `furigana dict build-cache` で先に作れる
+- **形式の版** — `[meta] format = "<役割>/<版>"` (`accent/1`, `accent_chain/1`)。 lib は自分が対応する版だけ読み、 知らない版は無視する (`format` の無い file は従来どおり)
+- **VOICEVOX / AquesTalk の記号列が OpenJTalk 方式のアクセント句になる** — 辞書に連結規則の表 (`role = "accent_chain"`) があれば、 `Furigana::to_mora_phrases` が `to_accent_phrases` の句から 「モーラ列 + 核 + 区切り」 を作り、 `ja_furigana_aquestalk::Converter::convert` / `ja_furigana_voicevox::to_aques_kana_phrases` / `to_aquestalk_phrases` / CLI `--mode voicevox|aquestalk` / HTTP がそれを使う (助詞の は / へ / を は ワ / エ / オ)。 表が無ければ従来どおり。 `accent_lexicon(false)` なら表も読まない。 既存の `to_aquestalk(_with)` / `to_aques_kana` (AccentResult を受ける版) は従来のまま
+- **辞書に無い英字語 (`AviUtl` など) の扱い** — VOICEVOX / AquesTalk の記号列はカタカナしか出せないので、 読みが英字のまま残った語は 記号列から黙って落ちていた。 `Furigana::to_mora_phrases_with(text, SymbolOptions { unknown_alpha, .. })` が 落とした語の一覧 (`SymbolOutput::unknown`) を返し、 `UnknownAlpha::Spell` (1 文字ずつ英字の名前で読む: `AviUtl` → エーブイアイユーティーエル) / `UnknownAlpha::Romaji` (ローマ字として読む簡易の読み: アビウトル。 **実験的**、 呼び方が割れる語では外れる) で読ませることもできる。 既定は従来どおり落とす (`Drop`)。 CLI は `--unknown-alpha drop|spell|romaji` と `--report-unknown` (stderr に `unknown<TAB>語…`)。 HTTP は `unknown_alpha` パラメータと、 `voicevox-aques` / `aquestalk` の応答の `unknown` 配列
+- CLI `--batch` の並列化 (`-j N`、 既定は CPU 数。 出力順は入力どおり)
+- `MorphToken::pos_detail3` (IPADIC の細分類 3 = 姓 / 名)
+- 計測用の examples (`bench_chain` / `bench_load` / `missing_accents` / `pos_pairs` / `dump_morphs`)
+
+### Changed
+
+- アクセント表・連結表の key を文字列から 64 bit の決定的ハッシュ (`keyhash.rs`) に変更。 表の分のメモリが 約 16MB → 約 5MB (連結表を含めても 全体で 100MB → 82MB)。 衝突の確率は 30 万件で 約 2e-9
+- `MorphToken` に公開 field `pos_detail3` を足した (外部で `MorphToken` を直接組み立てている場合は 要追従。 0.5.x からの minor bump の理由)
+
 ## [0.5.28] - 2026-10-14
 
 ### Fixed

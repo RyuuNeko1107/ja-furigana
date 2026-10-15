@@ -56,7 +56,7 @@
 /// 組み込み時はこちらを使うのが安全。
 pub use furigana;
 
-use furigana::accent_symbols::{to_mora_phrases, MoraPhrase, PhraseBreak};
+use furigana::accent_symbols::{to_mora_phrases, MoraPhrase, MoraPhrases, PhraseBreak};
 use furigana::{AccentResult, Furigana};
 
 /// エンジンが 1 回の合成で受け取れる音声記号列の目安 (文字数)。
@@ -229,7 +229,13 @@ pub fn to_aquestalk(result: &AccentResult) -> String {
 /// [`to_aquestalk`] の option 指定版。
 #[must_use]
 pub fn to_aquestalk_with(result: &AccentResult, opts: Options) -> String {
-    let symbols = to_mora_phrases(result);
+    to_aquestalk_phrases(&to_mora_phrases(result), opts)
+}
+
+/// [`MoraPhrases`] (`Furigana::to_mora_phrases` の戻り値) を AquesTalk 音声記号列へ。
+/// 連結規則の表があれば OpenJTalk 方式のアクセント句で作られる。
+#[must_use]
+pub fn to_aquestalk_phrases(symbols: &MoraPhrases, opts: Options) -> String {
     let last = symbols.phrases.len().saturating_sub(1);
 
     let mut out = String::new();
@@ -311,7 +317,7 @@ impl Converter {
     /// 読める token が 1 つも無ければ空文字列を返す (合成を skip すること)。
     #[must_use]
     pub fn convert(&self, text: &str) -> String {
-        to_aquestalk_with(&self.furigana.to_accent(text), self.options)
+        to_aquestalk_phrases(&self.furigana.to_mora_phrases(text), self.options)
     }
 
     /// テキストを `max_len` 文字以下の音声記号列の列へ変換する (逐次合成用)。
