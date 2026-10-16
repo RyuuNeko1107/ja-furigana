@@ -36,7 +36,7 @@ impl<'a> DictBridgeProvider<'a> {
         Self { dict }
     }
 
-    fn build_match_context(input: &str, pos: usize, end_pos: usize) -> MatchContext<'_> {
+    pub(crate) fn build_match_context(input: &str, pos: usize, end_pos: usize) -> MatchContext<'_> {
         let span = same_char_run(input, pos, end_pos);
         let prev = if span.no_prev {
             ""

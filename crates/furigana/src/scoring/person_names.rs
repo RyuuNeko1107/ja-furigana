@@ -283,6 +283,8 @@ impl ReadingPostPass for PersonNamePass<'_> {
             head.ambiguous = false;
             head.alternatives = vec![alt];
             head.is_name = true;
+            head.why = Some("name: 人名表 (敬称・肩書きの手がかり)".to_string());
+            let head_why = head.why.clone();
             replacement.push(head);
             if let Some((mei, mei_reading)) = &p.mei {
                 let mut tail = tokens[c - 1].clone();
@@ -293,6 +295,7 @@ impl ReadingPostPass for PersonNamePass<'_> {
                 tail.ambiguous = false;
                 tail.alternatives = Vec::new();
                 tail.is_name = true;
+                tail.why = head_why;
                 replacement.push(tail);
             }
             let added = replacement.len();
@@ -316,6 +319,7 @@ mod tests {
             ambiguous: false,
             alternatives: Vec::new(),
             is_name: false,
+            why: None,
         }
     }
 

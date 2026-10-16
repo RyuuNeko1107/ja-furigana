@@ -101,6 +101,8 @@ impl<'a> Pipeline<'a> {
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
         let mut result = self.with_providers(input, run_analyze);
         postpass::apply_all(&mut result.tokens, self.dict, self.analyzer);
+        // 採用した読みの理由と、 採用しなかった読み (debug 経路だけ。 path は変えない)
+        crate::scoring::explain::explain(&mut result.tokens, input, self.dict);
         self.accent_lexicon.fill(&mut result.tokens);
         if self.estimate_accent {
             accent_estimate::estimate(&mut result.tokens, self.analyzer);

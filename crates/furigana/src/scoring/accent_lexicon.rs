@@ -345,6 +345,7 @@ mod tests {
             ambiguous: false,
             alternatives: Vec::new(),
             is_name: false,
+            why: None,
         }
     }
 

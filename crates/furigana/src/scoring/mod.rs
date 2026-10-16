@@ -43,6 +43,7 @@ pub mod contextual;
 pub mod dict_bridge;
 pub mod digit_reading;
 pub mod engine;
+pub(crate) mod explain;
 pub mod format;
 pub mod inspect;
 pub mod lattice;

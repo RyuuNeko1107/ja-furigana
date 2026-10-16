@@ -170,6 +170,7 @@ mod tests {
                 ambiguous: false,
                 alternatives: Vec::new(),
                 is_name: false,
+                why: None,
             },
             Token {
                 surface: "の".into(),
@@ -179,6 +180,7 @@ mod tests {
                 ambiguous: false,
                 alternatives: Vec::new(),
                 is_name: false,
+                why: None,
             },
             Token {
                 surface: "道".into(),
@@ -188,6 +190,7 @@ mod tests {
                 ambiguous: false,
                 alternatives: Vec::new(),
                 is_name: false,
+                why: None,
             },
         ];
         let candidates = vec![
