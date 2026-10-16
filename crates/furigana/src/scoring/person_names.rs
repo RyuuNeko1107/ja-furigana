@@ -198,6 +198,17 @@ impl<'a> PersonNamePass<'a> {
         // 姓 + 名: 姓は 2 字を優先 (水田 | 雄一郎)、 次に 3 字、 1 字。
         // 辞書にフルネームがあれば辞書が正 (江川卓 = えがわすぐる。 名の表は多数派の たかし)。
         let in_dict = self.dict.lookup_jukugo(run).is_some();
+        // 3 字以上で、 そのまま姓の表にあるもの (太田原 = おおたわら) は、 姓 + 名に割る前に採る
+        // (割ると 太田 | 原 になり、 姓の表の読みに届かない)。
+        if n >= 3 {
+            if let Some(s) = self.dict.lookup_name_sei(run) {
+                return Some(Parsed {
+                    sei: run.to_string(),
+                    sei_reading: s.to_string(),
+                    mei: None,
+                });
+            }
+        }
         // 2 字は姓だけとみる (久保 を 久 | 保 に割らない)。 姓 + 名は 3 字以上。
         for k in [2usize, 3, 1] {
             if in_dict || n < 3 || k >= n || n - k > 4 {
@@ -231,11 +242,75 @@ impl<'a> PersonNamePass<'a> {
     }
 }
 
+impl PersonNamePass<'_> {
+    /// 「太田 | 原さん」 のように、 形態素解析が 「名前の末尾の漢字 + 敬称」 を 1 token にした所を、
+    /// 直前の漢字 token と合わせて姓 (または 姓 + 名) の表に当たる時だけ 「原 | さん」 に分ける。
+    fn split_merged_honorific(&self, tokens: &mut Vec<Token>) {
+        let mut i = 1;
+        while i < tokens.len() {
+            let Some((head, suffix)) = HONORIFICS.iter().find_map(|h| {
+                tokens[i]
+                    .surface
+                    .strip_suffix(h)
+                    .filter(|head| all_kanji(head) && head.chars().count() <= 3)
+                    .map(|head| (head.to_string(), *h))
+            }) else {
+                i += 1;
+                continue;
+            };
+            let suffix_kata = hira_to_kata(suffix);
+            let reading = hira_to_kata(&tokens[i].reading);
+            let Some(head_reading) = reading.strip_suffix(suffix_kata.as_str()) else {
+                i += 1;
+                continue;
+            };
+            // 直前の漢字 token 列 + head が表に当たるか
+            let mut run = head.clone();
+            let mut hit = false;
+            for s in (i.saturating_sub(MAX_RUN_TOKENS)..i).rev() {
+                if !all_kanji(&tokens[s].surface) {
+                    break;
+                }
+                run.insert_str(0, &tokens[s].surface);
+                if run.chars().count() > MAX_RUN_CHARS {
+                    break;
+                }
+                if self.parse(&run).is_some() {
+                    hit = true;
+                    break;
+                }
+            }
+            if !hit {
+                i += 1;
+                continue;
+            }
+            let start = tokens[i].range.start;
+            let end = tokens[i].range.end;
+            let mut left = tokens[i].clone();
+            left.surface = head.clone();
+            left.reading = head_reading.to_string();
+            left.range = start..start + head.len();
+            left.accent_phrases = Vec::new();
+            let mut right = tokens[i].clone();
+            right.surface = suffix.to_string();
+            right.reading = suffix_kata;
+            right.range = start + head.len()..end;
+            right.accent_phrases = Vec::new();
+            right.alternatives = Vec::new();
+            right.ambiguous = false;
+            right.is_name = false;
+            tokens.splice(i..=i, [left, right]);
+            i += 2;
+        }
+    }
+}
+
 impl ReadingPostPass for PersonNamePass<'_> {
     fn apply(&self, tokens: &mut Vec<Token>) {
         if self.hint == NameHint::NotName {
             return;
         }
+        self.split_merged_honorific(tokens);
         let mut c = 1;
         while c <= tokens.len() {
             // 手がかりの位置 c (この token の直前までが名前候補)。 Name ヒントの時は、 漢字 token 列の
@@ -513,6 +588,50 @@ mod tests {
         ];
         p.apply(&mut t);
         assert_eq!(t[0].reading, "スイデン");
+    }
+
+    #[test]
+    fn whole_three_char_surname_beats_surname_plus_given_split() {
+        let mut d = dict();
+        d.insert_name(true, "太田", "おおた");
+        d.insert_name(false, "原", "はら");
+        d.insert_name(true, "太田原", "おおたわら");
+        let mut t = vec![
+            token("太田", "オオタ", 0..6),
+            token("原", "ハラ", 6..9),
+            token("さん", "サン", 9..15),
+        ];
+        PersonNamePass::new(&d).apply(&mut t);
+        assert_eq!(t[0].surface, "太田原");
+        assert_eq!(t[0].reading, "オオタワラ");
+    }
+
+    #[test]
+    fn merged_honorific_token_is_split_when_table_hits() {
+        let mut d = dict();
+        d.insert_name(true, "太田原", "おおたわら");
+        // Lindera が 太田 | 原さん と切った所
+        let mut t = vec![
+            token("太田", "オオタ", 0..6),
+            token("原さん", "ハラサン", 6..15),
+        ];
+        PersonNamePass::new(&d).apply(&mut t);
+        let s: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
+        assert_eq!(s, ["太田原", "さん"]);
+        assert_eq!(t[0].reading, "オオタワラ");
+        assert_eq!(t[1].range, 9..15);
+    }
+
+    #[test]
+    fn merged_honorific_token_untouched_without_table_hit() {
+        let d = dict();
+        let mut t = vec![
+            token("太田", "オオタ", 0..6),
+            token("原さん", "ハラサン", 6..15),
+        ];
+        PersonNamePass::new(&d).apply(&mut t);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[1].surface, "原さん");
     }
 
     #[test]
