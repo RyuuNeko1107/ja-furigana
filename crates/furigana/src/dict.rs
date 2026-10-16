@@ -120,6 +120,11 @@ pub struct Dict {
     /// `[[kanji]]` block の prefix index (char → `kanji` vec 内 index 群)。
     /// rich_index と同趣旨で、 kanji block の毎位置 linear scan を回避する。
     kanji_index: OnceLock<HashMap<char, Vec<usize>>>,
+    /// 人名の専用経路の表 (`role = "name_sei"` / `"name_mei"`)。 表記 → 読み (カタカナ)。
+    /// 熟語辞書とは別に持ち、 [`crate::scoring::person_names::PersonNamePass`] だけが引く
+    /// (一般語と衝突しないよう、 通常の辞書引きには混ぜない)。
+    name_sei: HashMap<String, String>,
+    name_mei: HashMap<String, String>,
 }
 
 impl Dict {
@@ -326,9 +331,51 @@ impl Dict {
             if load_into_dict {
                 merged.merge(Self::from_toml_str(content, from)?);
             }
+            match role {
+                Some("name_sei") => merged.load_name_table(content, true),
+                Some("name_mei") => merged.load_name_table(content, false),
+                _ => {}
+            }
             Ok(())
         })?;
         Ok(merged)
+    }
+
+    /// 人名表 (`[entries]` の `"表記" = "読み"` 行) を行単位で取り込む。 読みはカタカナにそろえる。
+    /// 10 万件規模なので serde で全体を展開しない。 同じ表記は先勝ち (表は多数派の読み順に並べる)。
+    fn load_name_table(&mut self, content: &str, sei: bool) {
+        let map = if sei {
+            &mut self.name_sei
+        } else {
+            &mut self.name_mei
+        };
+        for (surface, reading) in crate::scoring::person_names::parse_name_table(content) {
+            map.entry(surface)
+                .or_insert_with(|| crate::kana::hira_to_kata(&reading));
+        }
+    }
+
+    /// 姓の表で表記の読み (カタカナ) を引く。 人名の専用経路だけが使う
+    #[must_use]
+    pub(crate) fn lookup_name_sei(&self, surface: &str) -> Option<&str> {
+        self.name_sei.get(surface).map(String::as_str)
+    }
+
+    /// 名の表で表記の読み (カタカナ) を引く
+    #[must_use]
+    pub(crate) fn lookup_name_mei(&self, surface: &str) -> Option<&str> {
+        self.name_mei.get(surface).map(String::as_str)
+    }
+
+    /// 人名表を (表記, 読み) の組で足す (テスト用)
+    #[cfg(test)]
+    pub(crate) fn insert_name(&mut self, sei: bool, surface: &str, reading: &str) {
+        let map = if sei {
+            &mut self.name_sei
+        } else {
+            &mut self.name_mei
+        };
+        map.insert(surface.to_string(), crate::kana::hira_to_kata(reading));
     }
 
     /// surface に対応する読みを返す (jukugo 優先で fallback で unihan を見る、互換 API)
@@ -393,6 +440,8 @@ impl Dict {
         // ★A2 alpha.12: [[kanji]] block も merge (= append、 重複 char は両方残るので
         // 「後勝ち」 ではなく order 依存。 同 char の重複は validate.py で reject 想定)
         self.kanji.extend(other.kanji);
+        self.name_sei.extend(other.name_sei);
+        self.name_mei.extend(other.name_mei);
         // rich / kanji を変更したので prefix index を invalidate。
         self.rich_index = OnceLock::new();
         self.kanji_index = OnceLock::new();

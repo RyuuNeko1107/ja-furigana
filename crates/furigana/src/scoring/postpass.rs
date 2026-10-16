@@ -21,6 +21,7 @@ use crate::scoring::analyze::Token;
 use crate::scoring::contextual::HaraSukuPass;
 use crate::scoring::names::NameBoundaryPass;
 use crate::scoring::odoriji::RendakuPass;
+use crate::scoring::person_names::PersonNamePass;
 use crate::scoring::phonojoin::SokuonJoinPass;
 
 /// path 確定後の token 列を in-place で補正する post-pass。
@@ -44,8 +45,14 @@ pub trait ReadingPostPass {
 /// 最後に置く (先に走ると NameBoundaryPass が merge する単漢字対を触りうる)。
 pub fn apply_all(tokens: &mut Vec<Token>, dict: &Dict, analyzer: &Analyzer) {
     let name_boundary = NameBoundaryPass::new(dict, analyzer);
-    let passes: [&dyn ReadingPostPass; 4] =
-        [&RendakuPass, &HaraSukuPass, &name_boundary, &SokuonJoinPass];
+    let person = PersonNamePass::new(dict);
+    let passes: [&dyn ReadingPostPass; 5] = [
+        &RendakuPass,
+        &HaraSukuPass,
+        &name_boundary,
+        &person,
+        &SokuonJoinPass,
+    ];
     for pass in passes {
         pass.apply(tokens);
     }
