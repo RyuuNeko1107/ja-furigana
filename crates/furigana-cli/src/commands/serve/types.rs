@@ -87,6 +87,22 @@ pub(super) struct FuriganaParams {
     pub(super) max_len: Option<usize>,
     #[serde(default)]
     pub(super) debug: bool,
+    /// 入力が人名かどうかのヒント。 `1` / `name` = 人名として読む (手がかり無しで姓 + 名の表を引く)、
+    /// `0` / `off` = 人名の専用経路を使わない、 省略 / `auto` = 敬称・肩書きを手がかりに自動。
+    /// tts / ruby / hiragana / analyze / accent などの token 経路に効く (voicevox / aquestalk の記号列 mode は対象外)
+    #[serde(default)]
+    pub(super) name: Option<String>,
+}
+
+impl FuriganaParams {
+    /// `name` パラメータを [`furigana::NameHint`] にする (未知の値は Auto)
+    pub(super) fn name_hint(&self) -> furigana::NameHint {
+        match self.name.as_deref().map(str::trim) {
+            Some("1" | "name" | "true") => furigana::NameHint::Name,
+            Some("0" | "off" | "false") => furigana::NameHint::NotName,
+            _ => furigana::NameHint::Auto,
+        }
+    }
 }
 
 pub(super) fn default_mode() -> String {

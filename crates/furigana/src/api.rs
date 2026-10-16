@@ -12,6 +12,7 @@ use crate::rules::{CompatData, RulesData};
 use crate::scoring::analyze::{AlternativeReading, AnalyzeResult, Token as AnalyzeToken};
 use crate::scoring::bracket::AccentPhrase;
 use crate::scoring::numbers::NumberCandidateProvider;
+use crate::scoring::person_names::NameHint;
 use crate::scoring::pipeline::Pipeline;
 use crate::scoring::special::normalize_alphabet;
 use crate::tts::{self, TtsOptions};
@@ -147,12 +148,21 @@ impl Furigana {
     /// と判定される。
     #[must_use]
     pub fn tokenize(&self, text: &str) -> Vec<ReadingToken> {
+        self.tokenize_with_hint(text, NameHint::Auto)
+    }
+
+    /// [`Self::tokenize`] に、 入力が人名かどうかのヒントを添える版。
+    ///
+    /// `NameHint::Name` = 入力は人名 (ユーザー名・名簿の欄など。 手がかり無しで姓 + 名の表を引く) /
+    /// `NameHint::NotName` = 人名の専用経路を使わない。 `Auto` は [`Self::tokenize`] と同じ。
+    #[must_use]
+    pub fn tokenize_with_hint(&self, text: &str, hint: NameHint) -> Vec<ReadingToken> {
         // Step 1: lookup 用に入力を正規化 (異体字→標準字 [compat]、 IVS/変異セレクタ除去、
         // NFKC)。 髙→高 / 葛󠄀→葛 / ①→1 等を解決してから形態素解析・辞書 lookup に渡す。
         // **表示 surface は原文を保つ** (lookup のみ正規化): 解析後に各 token の surface を
         // 原文へ戻すので 髙田 は {髙田|たかだ} になる (高田 に化けない)。
         let norm = crate::kana::normalize_text_aligned(text, &self.rules.compat);
-        let tokens = self.pipeline().tokens(&norm.text);
+        let tokens = self.pipeline().with_name_hint(hint).tokens(&norm.text);
         // 正規化で何も変わらない通常の日本語入力は fast path (remap 不要 = 旧挙動と同一)。
         if !norm.changed {
             return tokens
@@ -321,11 +331,17 @@ impl Furigana {
     /// ([`crate::scoring::postpass`] の post-pass 群)、 placeholder の 「々」 は残らない。
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
+        self.analyze_with_hint(input, NameHint::Auto)
+    }
+
+    /// [`Self::analyze`] に、 入力が人名かどうかのヒントを添える版 ([`Self::tokenize_with_hint`] と同じ)。
+    #[must_use]
+    pub fn analyze_with_hint(&self, input: &str, hint: NameHint) -> AnalyzeResult {
         // Step 1: lookup 用に入力正規化 (異体字 [compat] / IVS / NFKC)。tokenize と同じ前処理。
         // 表示 surface は原文を保つため、 解析後に token surface / range を原文へ remap する
         // (`candidates` / `boundary_regions` の range は正規化テキスト座標のまま = debug 用途)。
         let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
-        let mut result = self.pipeline().analyze(&norm.text);
+        let mut result = self.pipeline().with_name_hint(hint).analyze(&norm.text);
         if norm.changed {
             let remapped = norm.remap(input, result.tokens.iter().map(|t| t.surface.as_str()));
             // tokenize と同じ規約: 多文字展開の分割で空 surface になった token は直前 token に
@@ -1591,6 +1607,62 @@ role = \"works\"
         assert_ne!(ex.to_ruby("天音"), "{天音|あまね}");
         assert_eq!(ex.to_ruby("灰桜"), "{灰桜|はいざくら}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn person_name_tables_and_name_hint_through_public_api() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_names_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("names")).unwrap();
+        std::fs::write(
+            dir.join("entries.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"水田\" = \"スイデン\"
+\"選手\" = \"センシュ\"
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("names/sei.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"name_sei\"
+
+[entries]
+\"水田\" = \"みずた\"
+",
+        )
+        .unwrap();
+        let f = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        // 手がかり (選手) があれば人名の読み、 無ければ辞書の既定 (田んぼの水田)
+        assert_eq!(f.to_hiragana("水田選手"), "みずたせんしゅ");
+        assert_eq!(f.to_hiragana("広い水田"), "ひろいすいでん");
+        // ヒント: Name は手がかり無しで人名、 NotName は専用経路を止める
+        let name = f.tokenize_with_hint("水田", NameHint::Name);
+        assert_eq!(name[0].reading.as_deref(), Some("ミズタ"));
+        let not = f.tokenize_with_hint("水田選手", NameHint::NotName);
+        assert_eq!(not[0].reading.as_deref(), Some("スイデン"));
+        // analyze には why と、 採用しなかった読みが付く
+        let a = f.analyze_with_hint("水田選手", NameHint::Auto);
+        assert!(a.tokens[0]
+            .why
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("name:"));
+        assert!(a.tokens[0]
+            .alternatives
+            .iter()
+            .any(|x| x.reading == "スイデン"));
     }
 
     #[test]

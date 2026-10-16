@@ -54,6 +54,8 @@ pub struct Pipeline<'a> {
     /// rule-based accent 推定の opt-in flag (ADR-0007)。 post-pass 適用後に
     /// [`crate::scoring::accent_estimate::estimate`] を走らせるかどうか。
     estimate_accent: bool,
+    /// 人名の専用経路への呼び出し側ヒント (既定 = Auto)
+    name_hint: crate::scoring::person_names::NameHint,
 }
 
 impl<'a> Pipeline<'a> {
@@ -75,7 +77,15 @@ impl<'a> Pipeline<'a> {
             analyzer,
             estimate_accent,
             cost_engine,
+            name_hint: crate::scoring::person_names::NameHint::Auto,
         }
+    }
+
+    /// 人名の専用経路へのヒントを指定する。
+    #[must_use]
+    pub fn with_name_hint(mut self, hint: crate::scoring::person_names::NameHint) -> Self {
+        self.name_hint = hint;
+        self
     }
 
     /// production 経路: 採択 path の [`Token`] 列を返す (post-pass 適用済)。
@@ -85,7 +95,7 @@ impl<'a> Pipeline<'a> {
     #[must_use]
     pub fn tokens(&self, input: &str) -> Vec<Token> {
         let mut tokens = self.with_providers(input, run_analyze_tokens);
-        postpass::apply_all(&mut tokens, self.dict, self.analyzer);
+        postpass::apply_all(&mut tokens, self.dict, self.analyzer, self.name_hint);
         self.accent_lexicon.fill(&mut tokens);
         if self.estimate_accent {
             accent_estimate::estimate(&mut tokens, self.analyzer);
@@ -100,7 +110,7 @@ impl<'a> Pipeline<'a> {
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
         let mut result = self.with_providers(input, run_analyze);
-        postpass::apply_all(&mut result.tokens, self.dict, self.analyzer);
+        postpass::apply_all(&mut result.tokens, self.dict, self.analyzer, self.name_hint);
         // 採用した読みの理由と、 採用しなかった読み (debug 経路だけ。 path は変えない)
         crate::scoring::explain::explain(&mut result.tokens, input, self.dict);
         self.accent_lexicon.fill(&mut result.tokens);

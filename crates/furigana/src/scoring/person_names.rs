@@ -153,15 +153,38 @@ struct Parsed {
     mei: Option<(String, String)>,
 }
 
+/// 呼び出し側が渡せる 「これは人名か」 のヒント。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NameHint {
+    /// 既定。 直後の敬称・肩書きを手がかりに、 人名らしいところだけ人名として読む。
+    #[default]
+    Auto,
+    /// 入力は人名として読む (ユーザー名・選手名簿の欄など)。 手がかりは要らず、 1 字の姓も許す。
+    Name,
+    /// 人名の専用経路を使わない。
+    NotName,
+}
+
 /// 人名の専用経路の post-pass。
 pub struct PersonNamePass<'a> {
     dict: &'a Dict,
+    hint: NameHint,
 }
 
 impl<'a> PersonNamePass<'a> {
     #[must_use]
     pub fn new(dict: &'a Dict) -> Self {
-        Self { dict }
+        Self {
+            dict,
+            hint: NameHint::Auto,
+        }
+    }
+
+    /// ヒントを指定する。
+    #[must_use]
+    pub fn with_hint(mut self, hint: NameHint) -> Self {
+        self.hint = hint;
+        self
     }
 
     /// `run` (漢字列) を 「姓 + 名」 または 「姓だけ」 として表で引く。
@@ -193,8 +216,9 @@ impl<'a> PersonNamePass<'a> {
                 });
             }
         }
-        // 姓だけ (2 字以上。 1 字は 「鳥さん」 のような一般語と区別できないので対象外)
-        if n >= 2 {
+        // 姓だけ (2 字以上。 1 字は 「鳥さん」 のような一般語と区別できないので対象外。
+        // 呼び出し側が人名と言っている時 (NameHint::Name) だけ 1 字も許す)
+        if n >= 2 || (n == 1 && self.hint == NameHint::Name) {
             if let Some(s) = self.dict.lookup_name_sei(run) {
                 return Some(Parsed {
                     sei: run.to_string(),
@@ -209,9 +233,21 @@ impl<'a> PersonNamePass<'a> {
 
 impl ReadingPostPass for PersonNamePass<'_> {
     fn apply(&self, tokens: &mut Vec<Token>) {
+        if self.hint == NameHint::NotName {
+            return;
+        }
         let mut c = 1;
-        while c < tokens.len() {
-            if cue_score(&tokens[c].surface) == 0 {
+        while c <= tokens.len() {
+            // 手がかりの位置 c (この token の直前までが名前候補)。 Name ヒントの時は、 漢字 token 列の
+            // 終わり (次が漢字でない / 文末) を手がかりの代わりにする。
+            let is_cue = match self.hint {
+                NameHint::Name => {
+                    all_kanji(&tokens[c - 1].surface)
+                        && (c == tokens.len() || !all_kanji(&tokens[c].surface))
+                }
+                _ => c < tokens.len() && cue_score(&tokens[c].surface) > 0,
+            };
+            if !is_cue {
                 c += 1;
                 continue;
             }
@@ -439,6 +475,44 @@ mod tests {
         PersonNamePass::new(&d).apply(&mut t);
         assert_eq!(t[0].reading, "クボ");
         assert_eq!(t.len(), 2);
+    }
+
+    #[test]
+    fn name_hint_reads_without_cue_and_allows_single_char_surname() {
+        let d = dict();
+        let p = PersonNamePass::new(&d).with_hint(NameHint::Name);
+        let mut t = vec![
+            token("水田", "スイデン", 0..6),
+            token("雄一郎", "ユウイチロウ", 6..15),
+        ];
+        p.apply(&mut t);
+        assert_eq!(t[0].reading, "ミズタ");
+        let mut one = vec![token("鳥", "チョウ", 0..3)];
+        p.apply(&mut one);
+        assert_eq!(one[0].reading, "トリ");
+        // 文の中の人名でない部分には触れない (漢字列の外)
+        let mut s = vec![
+            token("広い", "ヒロイ", 0..6),
+            token("水田", "スイデン", 6..12),
+            token("に", "ニ", 12..15),
+        ];
+        p.apply(&mut s);
+        assert_eq!(
+            s[1].reading, "ミズタ",
+            "Name ヒントでは文中の漢字列も人名として読む (欄が人名と言っている)"
+        );
+    }
+
+    #[test]
+    fn not_name_hint_disables_the_pass() {
+        let d = dict();
+        let p = PersonNamePass::new(&d).with_hint(NameHint::NotName);
+        let mut t = vec![
+            token("水田", "スイデン", 0..6),
+            token("選手", "センシュ", 6..12),
+        ];
+        p.apply(&mut t);
+        assert_eq!(t[0].reading, "スイデン");
     }
 
     #[test]

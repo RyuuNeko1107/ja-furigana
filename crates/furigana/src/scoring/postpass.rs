@@ -21,7 +21,7 @@ use crate::scoring::analyze::Token;
 use crate::scoring::contextual::HaraSukuPass;
 use crate::scoring::names::NameBoundaryPass;
 use crate::scoring::odoriji::RendakuPass;
-use crate::scoring::person_names::PersonNamePass;
+use crate::scoring::person_names::{NameHint, PersonNamePass};
 use crate::scoring::phonojoin::SokuonJoinPass;
 
 /// path 確定後の token 列を in-place で補正する post-pass。
@@ -43,9 +43,9 @@ pub trait ReadingPostPass {
 /// dict / 形態素辞書を読み source に使うため参照を取る (= const 配列でなく本関数で束ねる)。
 /// 促音便 join (ADR-0008) は 「単漢字 chain がそのまま残った = 真の OOV」 が確定した
 /// 最後に置く (先に走ると NameBoundaryPass が merge する単漢字対を触りうる)。
-pub fn apply_all(tokens: &mut Vec<Token>, dict: &Dict, analyzer: &Analyzer) {
+pub fn apply_all(tokens: &mut Vec<Token>, dict: &Dict, analyzer: &Analyzer, name_hint: NameHint) {
     let name_boundary = NameBoundaryPass::new(dict, analyzer);
-    let person = PersonNamePass::new(dict);
+    let person = PersonNamePass::new(dict).with_hint(name_hint);
     let passes: [&dyn ReadingPostPass; 5] = [
         &RendakuPass,
         &HaraSukuPass,

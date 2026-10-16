@@ -127,4 +127,5 @@ pub use crate::scoring::bracket::AccentPhrase;
 pub use crate::scoring::inspect::{
     extract_dict_gap_candidates, surface_with_context, token_band, ContextWindow, DictGapCandidate,
 };
+pub use crate::scoring::person_names::NameHint;
 pub use crate::tts::TtsOptions;
