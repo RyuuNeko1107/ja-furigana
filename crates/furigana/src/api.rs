@@ -295,6 +295,31 @@ impl Furigana {
         tts::segment_for_tts(&normalized, max_segment_len)
     }
 
+    /// 起動直後・辞書の入れ替え直後の最初のリクエストが遅くならないよう、 遅延初期化を先に済ませる。
+    ///
+    /// 形態素解析器の用意 (約 20ms)、 数字・URL・メール・絵文字・顔文字・型番の正規表現のコンパイル、
+    /// 各経路の初回の確保などは最初に使われた時にまとめて起きるため、 何もしないと最初のリクエストが
+    /// 数十 ms かかる (定常は 0.2ms)。 代表的な入力を一通り解析して結果は捨てる。 出力は変わらない
+    /// (結果の cache は無い)。 サーバーは build 直後 (入れ替える前) に 1 回呼ぶ。
+    pub fn warm_up(&self) {
+        const SAMPLES: &[&str] = &[
+            "今日は良い天気ですね。ありがとうございます！！ほんとに助かりました…",
+            "水田さんと山田選手が来た、 <@123456789012> さん",
+            "2026年10月17日 3時45分に10万円と3.5kg、 1/2、 一二三四五六七八九十と百万",
+            "電話は090-1234-5678、 〒100-0001、 v2.0.1、 192.168.0.1",
+            "詳細は https://example.com/a?b=1 と foo@example.com まで &amp; &#8230;",
+            "😀草😭 (´・ω・｀) ^^ w ♪ ①②③ ㈱",
+            "Hello World API iPhone15 RTX 4070 Ti GM ABC123 xyz",
+        ];
+        for s in SAMPLES {
+            let _ = self.analyze(s);
+            let _ = self.analyze_light(s);
+            let _ = self.analyze_reading(s);
+            let _ = self.tokenize(s);
+        }
+        let _ = self.to_mora_phrases("今日は良い天気ですね");
+    }
+
     /// 動的に辞書エントリを追加 (override 用途)
     pub fn add_reading(&mut self, surface: impl Into<String>, reading: impl Into<String>) {
         self.dict.insert(surface, reading);
@@ -1027,6 +1052,14 @@ role = \"compat\"
                 assert_eq!(a.band, b.band, "{text}");
             }
         }
+    }
+
+    #[test]
+    fn warm_up_does_not_change_output() {
+        let f = Furigana::minimal().unwrap();
+        let before = f.to_hiragana("今日は2時から水田さんが来た");
+        f.warm_up();
+        assert_eq!(f.to_hiragana("今日は2時から水田さんが来た"), before);
     }
 
     #[test]

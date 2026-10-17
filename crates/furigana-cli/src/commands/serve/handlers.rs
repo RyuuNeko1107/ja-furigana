@@ -121,6 +121,7 @@ pub(super) async fn do_reload(state: &AppState, source: ReloadSource) -> Result<
         // executor を塞がない。 失敗時は swap せず旧 dict を温存し reload を atomic に保つ。
         f.preload()
             .map_err(|e| format!("preload after reload failed: {e}"))?;
+        f.warm_up();
         Ok(f)
     })
     .await
