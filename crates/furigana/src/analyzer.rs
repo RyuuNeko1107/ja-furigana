@@ -183,54 +183,88 @@ impl Analyzer {
     /// 固有名詞・人名かどうかだけなので、 その 2 つを bool で持つ。
     /// 失敗時の振る舞い (入力全体を surface-only 1 token) は [`Self::tokenize`] と同じ。
     pub(crate) fn tokenize_light(&self, text: &str) -> Vec<LightMorph> {
-        self.tokenize_with(
-            text,
-            |t| LightMorph {
-                surface: t.to_string(),
-                reading: None,
-                is_proper_noun: false,
-                is_person_name: false,
-                is_ichidan_verb: false,
-                attaches_to_verb: false,
-                is_noun_suffix: false,
-                is_particle: false,
-                is_prefix: false,
-                is_pronoun: false,
-                is_noun: false,
-                is_place: false,
-            },
-            |surface, details| {
-                let is_proper_noun =
-                    details.first() == Some(&"名詞") && detail_at(details, 1) == Some("固有名詞");
-                LightMorph {
-                    surface: surface.to_string(),
-                    reading: reading_of(details),
-                    is_proper_noun,
-                    is_person_name: is_proper_noun && detail_at(details, 2) == Some("人名"),
-                    is_ichidan_verb: details.first() == Some(&"動詞")
-                        && detail_at(details, 1) == Some("自立")
-                        && detail_at(details, 4).is_some_and(|t| t.starts_with("一段")),
-                    attaches_to_verb: match (details.first().copied(), detail_at(details, 1)) {
-                        // 断定 (だ / です) は名詞にも付くので含めない
-                        (Some("助動詞"), _) => !detail_at(details, 4)
-                            .is_some_and(|t| t == "特殊・ダ" || t == "特殊・デス"),
-                        (Some("助詞"), Some("接続助詞")) => true,
-                        // 動詞が続く形 = 複合動詞の前半 (見終わる / 出とる / 寝落ちる)。
-                        // 自立・非自立は問わない (西日本の 「とる」 は IPADIC では自立動詞)
-                        (Some("動詞"), _) => true,
-                        _ => false,
-                    },
-                    is_noun_suffix: details.first() == Some(&"名詞")
-                        && detail_at(details, 1) == Some("接尾"),
-                    is_particle: details.first() == Some(&"助詞"),
-                    is_prefix: details.first() == Some(&"接頭詞"),
-                    is_pronoun: details.first() == Some(&"名詞")
-                        && detail_at(details, 1) == Some("代名詞"),
-                    is_noun: details.first() == Some(&"名詞"),
-                    is_place: is_proper_noun && detail_at(details, 2) == Some("地域"),
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let mut lattice = self.take_lattice();
+        let result = match self.tokenizer.tokenize_with_lattice(text, &mut lattice) {
+            Ok(mut tokens) => LIGHT_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if cache.len() > LIGHT_CACHE_MAX {
+                    cache.clear();
                 }
+                tokens
+                    .iter_mut()
+                    .map(|t| {
+                        // 品詞などの派生値は語 id だけで決まるので、 id ごとに 1 度だけ details を分解する
+                        // (details の分解は形態素ごとに Vec を何度も確保する)。
+                        let key = u64::from(t.word_id.id) | (t.word_id.lex_type as u64) << 32;
+                        let mut morph = match cache.get(&key) {
+                            Some(m) => m.clone(),
+                            None => {
+                                let m = Self::light_from_details("", &t.details());
+                                cache.insert(key, m.clone());
+                                m
+                            }
+                        };
+                        morph.surface = t.surface.to_string();
+                        morph
+                    })
+                    .collect()
+            }),
+            Err(e) => {
+                tracing::warn!("tokenize error: {e}");
+                vec![LightMorph {
+                    surface: text.to_string(),
+                    reading: None,
+                    is_proper_noun: false,
+                    is_person_name: false,
+                    is_ichidan_verb: false,
+                    attaches_to_verb: false,
+                    is_noun_suffix: false,
+                    is_particle: false,
+                    is_prefix: false,
+                    is_pronoun: false,
+                    is_noun: false,
+                    is_place: false,
+                }]
+            }
+        };
+        self.return_lattice(lattice, text.len());
+        result
+    }
+
+    /// details から [`LightMorph`] を作る (surface は呼び出し側が入れる)。
+    fn light_from_details(surface: &str, details: &[&str]) -> LightMorph {
+        let is_proper_noun =
+            details.first() == Some(&"名詞") && detail_at(details, 1) == Some("固有名詞");
+        LightMorph {
+            surface: surface.to_string(),
+            reading: reading_of(details),
+            is_proper_noun,
+            is_person_name: is_proper_noun && detail_at(details, 2) == Some("人名"),
+            is_ichidan_verb: details.first() == Some(&"動詞")
+                && detail_at(details, 1) == Some("自立")
+                && detail_at(details, 4).is_some_and(|t| t.starts_with("一段")),
+            attaches_to_verb: match (details.first().copied(), detail_at(details, 1)) {
+                // 断定 (だ / です) は名詞にも付くので含めない
+                (Some("助動詞"), _) => {
+                    !detail_at(details, 4).is_some_and(|t| t == "特殊・ダ" || t == "特殊・デス")
+                }
+                (Some("助詞"), Some("接続助詞")) => true,
+                // 動詞が続く形 = 複合動詞の前半 (見終わる / 出とる / 寝落ちる)。
+                // 自立・非自立は問わない (西日本の 「とる」 は IPADIC では自立動詞)
+                (Some("動詞"), _) => true,
+                _ => false,
             },
-        )
+            is_noun_suffix: details.first() == Some(&"名詞")
+                && detail_at(details, 1) == Some("接尾"),
+            is_particle: details.first() == Some(&"助詞"),
+            is_prefix: details.first() == Some(&"接頭詞"),
+            is_pronoun: details.first() == Some(&"名詞") && detail_at(details, 1) == Some("代名詞"),
+            is_noun: details.first() == Some(&"名詞"),
+            is_place: is_proper_noun && detail_at(details, 2) == Some("地域"),
+        }
     }
 
     /// tokenize の共通土台。 lock 取得・lattice 使い回し・失敗時 fallback を持ち、
@@ -265,6 +299,14 @@ impl Analyzer {
         self.return_lattice(lattice, text.len());
         result
     }
+}
+
+/// 語 id → 派生した [`LightMorph`] (surface 以外) の、 スレッドごとの cache。
+/// 辞書は埋め込みの 1 つだけなので id は一意。 ロックを取らないよう thread_local にしてある。
+const LIGHT_CACHE_MAX: usize = 200_000;
+thread_local! {
+    static LIGHT_CACHE: std::cell::RefCell<crate::fxmap::FxMap<u64, LightMorph>> =
+        std::cell::RefCell::new(crate::fxmap::FxMap::default());
 }
 
 /// [`Analyzer::tokenize_light`] の 1 形態素。
