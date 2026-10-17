@@ -32,6 +32,7 @@
 //! 保守的読みが横取りしないようになっている。
 
 use crate::error::{FuriganaError, Result};
+use crate::fxmap::FxMap;
 use crate::scoring::format::{Entry, EntryDetail, KanjiBlock};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -97,15 +98,27 @@ fn collect_hoisted_entries(v: &toml::Value, out: &mut Vec<(String, String)>) {
 /// **メモリ (2026-09-24)**: 旧実装は同じ entry を `jukugo` (表層 → 読み) / `rich` (表層 → Entry) /
 /// `rich_index` (表層のコピー) に 3 重に持ち、 1 件あたり数百 byte 使っていた。 `jukugo` は `rich` と
 /// 常に同内容だったので廃止して `rich` から引き、 `rich` のキーは `Arc<str>` にして index と共有する。
+/// 先頭 char が同じ rich surface 群の索引 ([`Dict::rich_matching_prefix`] 用)。
+///
+/// 位置ごとに引くので、 二分探索 (毎回 `Arc<str>` の指す先を辿る) ではなく、
+/// 「先頭 char → 2 文字目 → surface 群」 の 2 段のハッシュ引きにしてある。
+#[derive(Debug, Default, Clone)]
+struct PrefixBucket {
+    /// 1 字 surface (= 先頭 char そのもの)
+    single: Option<Arc<str>>,
+    /// 2 文字目が同じ surface 群 (2 字以上の surface。 surface 昇順)
+    by_second: FxMap<char, Vec<Arc<str>>>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Dict {
     /// 単漢字フォールバック (surface = 1 文字)、 default reading のみ保持
     /// (`[[kanji]]` block の default もここに入るので `rich` とは別に持つ)
-    unihan: HashMap<String, String>,
+    unihan: FxMap<String, String>,
     /// 完全 [`Entry`] data (= Simple variant か、 inline / expanded match block 持ち
     /// Detailed variant)。 surface 長で振り分けず全 entry をここに保持。
     /// 熟語 (surface ≥ 2 文字) の default reading もここから引く (旧 `jukugo` map)。
-    rich: HashMap<Arc<str>, Entry>,
+    rich: FxMap<Arc<str>, Entry>,
     /// `[[kanji]]` block 配列 (★A2 alpha.12、 `core/kanji/*.toml` の新 format)。
     /// 単漢字単独 default + 文脈分岐 reading を持つ first-class candidate generator、
     /// Smart engine から `kanji_iter()` で walk して `MatchCondition` 評価する想定。
@@ -116,10 +129,10 @@ pub struct Dict {
     /// 引くための逆引き。 これが無いと全 ~44k entry を毎位置 linear scan して
     /// O(N × M) になる (= 性能 hot path)。 lazy build (= 初回 [`Self::rich_index`]
     /// 呼び出し時に `rich` 全体から構築)、 `insert` / `merge` で invalidate。
-    rich_index: OnceLock<HashMap<char, Vec<Arc<str>>>>,
+    rich_index: OnceLock<FxMap<char, PrefixBucket>>,
     /// `[[kanji]]` block の prefix index (char → `kanji` vec 内 index 群)。
     /// rich_index と同趣旨で、 kanji block の毎位置 linear scan を回避する。
-    kanji_index: OnceLock<HashMap<char, Vec<usize>>>,
+    kanji_index: OnceLock<FxMap<char, Vec<usize>>>,
     /// 人名の専用経路の表 (`role = "name_sei"` / `"name_mei"`)。 表記 → 読み (カタカナ)。
     /// 熟語辞書とは別に持ち、 [`crate::scoring::person_names::PersonNamePass`] だけが引く
     /// (一般語と衝突しないよう、 通常の辞書引きには混ぜない)。
@@ -470,23 +483,28 @@ impl Dict {
     ///
     /// surface 先頭 char → その char で始まる surface 群。 [`Self::rich_matching_prefix`]
     /// が使う内部 helper。
-    fn rich_index(&self) -> &HashMap<char, Vec<Arc<str>>> {
+    fn rich_index(&self) -> &FxMap<char, PrefixBucket> {
         self.rich_index.get_or_init(|| {
-            let mut m: HashMap<char, Vec<Arc<str>>> = HashMap::new();
+            let mut m: FxMap<char, PrefixBucket> = FxMap::default();
             for k in self.rich.keys() {
-                if let Some(c) = k.chars().next() {
-                    m.entry(c).or_default().push(k.clone());
+                let mut cs = k.chars();
+                let Some(c1) = cs.next() else { continue };
+                let bucket = m.entry(c1).or_default();
+                match cs.next() {
+                    None => bucket.single = Some(k.clone()),
+                    Some(c2) => bucket.by_second.entry(c2).or_default().push(k.clone()),
                 }
             }
-            // 各 bucket を surface 昇順に sort して列挙順を決定的にする。
-            // HashMap の反復順は実行ごとに変わりうる (RandomState) ため、 sort しないと
-            // 同 score 候補の tie-break (= 第一発見勝ち、 engine.rs strict-greater) や
-            // analyze() の同 weight alternatives 順序が run 間で揺れる。
-            // production の tokens() 採択読みは「同 range の真の同点 = 同一 surface =
+            // 各群を surface 昇順に sort して列挙順を決定的にする。
+            // (HashMap の反復順に依存すると、 同 score 候補の tie-break (= 第一発見勝ち、 engine.rs
+            // strict-greater) や analyze() の同 weight alternatives 順序が揺れうる。
+            // production の tokens() 採択読みは 「同 range の真の同点 = 同一 surface =
             // 同一 HashMap key = 単一」 ゆえ元から不変だが、 列挙を決定的にして
-            // deterministic-runtime 契約 (analyze/accent JSON 含む) を明示的に守る。
+            // deterministic-runtime 契約 (analyze/accent JSON 含む) を明示的に守る。)
             for bucket in m.values_mut() {
-                bucket.sort_unstable();
+                for group in bucket.by_second.values_mut() {
+                    group.sort_unstable();
+                }
             }
             m
         })
@@ -504,44 +522,26 @@ impl Dict {
     pub(crate) fn rich_matching_prefix(&self, tail: &str) -> impl Iterator<Item = (&str, &Entry)> {
         let mut chars = tail.chars();
         let first = chars.next();
-        let bucket: &[Arc<str>] = first
-            .and_then(|c| self.rich_index().get(&c))
-            .map_or(&[], Vec::as_slice);
+        let bucket = first.and_then(|c| self.rich_index().get(&c));
 
-        // 1 字 surface (= 先頭 char 単体) は昇順 bucket の先頭側に来る。
-        let single: &[Arc<str>] = match first {
-            Some(c) => {
-                let fc = c.len_utf8();
-                if bucket.first().is_some_and(|s| s.len() == fc) {
-                    &bucket[..1]
-                } else {
-                    &[]
-                }
-            }
-            None => &[],
-        };
-
-        // 先頭 2 文字が一致する連続区間 (tail が 1 字なら 1 字 surface のみ対象)。
-        let range: &[Arc<str>] = match (first, chars.next()) {
-            (Some(c1), Some(c2)) => {
-                let two = &tail[..c1.len_utf8() + c2.len_utf8()];
-                let lo = bucket.partition_point(|s| &**s < two);
-                let hi = lo + bucket[lo..].partition_point(|s| s.starts_with(two));
-                &bucket[lo..hi]
-            }
+        // 1 字 surface (= 先頭 char 単体) が先、 続けて 先頭 2 文字が一致する surface 群 (昇順)。
+        // tail が 1 字なら 1 字 surface のみ対象。
+        let single = bucket.and_then(|b| b.single.as_ref());
+        let range: &[Arc<str>] = match (bucket, chars.next()) {
+            (Some(b), Some(c2)) => b.by_second.get(&c2).map_or(&[], Vec::as_slice),
             _ => &[],
         };
 
         single
-            .iter()
+            .into_iter()
             .chain(range.iter())
             .filter_map(move |s| self.rich.get(&**s).map(|e| (&**s, e)))
     }
 
     /// `[[kanji]]` block の prefix index を返す (lazy build)。
-    fn kanji_index(&self) -> &HashMap<char, Vec<usize>> {
+    fn kanji_index(&self) -> &FxMap<char, Vec<usize>> {
         self.kanji_index.get_or_init(|| {
-            let mut m: HashMap<char, Vec<usize>> = HashMap::new();
+            let mut m: FxMap<char, Vec<usize>> = FxMap::default();
             for (i, block) in self.kanji.iter().enumerate() {
                 if let Some(c) = block.char.chars().next() {
                     m.entry(c).or_default().push(i);

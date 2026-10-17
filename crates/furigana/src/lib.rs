@@ -102,6 +102,7 @@ pub mod chain_phrases;
 pub(crate) mod char_class;
 pub mod dict;
 pub mod error;
+pub(crate) mod fxmap;
 pub mod kana;
 pub(crate) mod keyhash;
 pub mod loader;
