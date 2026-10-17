@@ -1,4 +1,7 @@
-//! アクセント表・連結表のバイナリキャッシュ。
+//! アクセント表・連結表・本体の辞書のバイナリキャッシュ。
+//!
+//! 本体の辞書 ([`crate::dict::Dict`]、 `load_dict`) も同じ検証の仕組みで `dict-<key>.fgtb` に保存する。
+//! TOML が正で、 キャッシュは使う環境でその場で作る派生物 (配布しない)。
 //!
 //! 表は TOML で約 20MB あり、 起動のたびに行を読んでハッシュの配列に畳むと 約 250 ms かかる。
 //! 畳んだ結果 (約 5MB) をバイナリで保存しておき、 次回からはそれを読む (約 10 ms)。
@@ -15,6 +18,7 @@
 //! 環境変数 `FURIGANA_NO_TABLE_CACHE=1` でキャッシュを使わない。
 
 use crate::chain_phrases::ChainTable;
+use crate::dict::Dict;
 use crate::scoring::accent_lexicon::AccentLexicon;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -84,6 +88,10 @@ impl<'a> Reader<'a> {
         let n = self.u32()? as usize;
         std::str::from_utf8(self.take(n)?).ok()
     }
+    /// `n` 件が 1 件あたり最低 `min_item_bytes` で残りに収まるか (壊れたキャッシュで巨大な確保をしない)
+    pub(crate) fn check_items(&self, n: usize, min_item_bytes: usize) -> Option<()> {
+        (n.checked_mul(min_item_bytes)? <= self.buf.len().saturating_sub(self.pos)).then_some(())
+    }
     /// 件数つきの配列の長さ (壊れたキャッシュで巨大な確保をしないよう、 残りバイト数で頭打ちにする)
     pub(crate) fn len(&mut self, min_item_bytes: usize) -> Option<usize> {
         let n = self.u64()? as usize;
@@ -151,6 +159,25 @@ fn mtime_ns(meta: &std::fs::Metadata) -> u64 {
 }
 
 fn collect_sources(dirs: &[PathBuf], excludes: &[String]) -> Vec<Source> {
+    collect_sources_where(dirs, excludes, is_supported_table)
+}
+
+/// 本体の辞書 ([`crate::dict::Dict`]) が取り込む TOML か (role が jukugo / unihan / works / kanji / 人名の表 / 無印)
+fn is_dict_source(content: &str) -> bool {
+    match head_value(content, "role") {
+        None => true,
+        Some(role) => matches!(
+            role.as_str(),
+            "jukugo" | "unihan" | "works" | "kanji" | "name_sei" | "name_mei"
+        ),
+    }
+}
+
+fn collect_sources_where(
+    dirs: &[PathBuf],
+    excludes: &[String],
+    accept: fn(&str) -> bool,
+) -> Vec<Source> {
     let mut out = Vec::new();
     for (i, dir) in dirs.iter().enumerate() {
         let Ok(files) = crate::loader::walk_toml_files(dir) else {
@@ -160,7 +187,7 @@ fn collect_sources(dirs: &[PathBuf], excludes: &[String]) -> Vec<Source> {
             if crate::loader::is_excluded(dir, &path, excludes) {
                 continue;
             }
-            if !head_of(&path).is_some_and(|h| is_supported_table(&h)) {
+            if !head_of(&path).is_some_and(|h| accept(&h)) {
                 continue;
             }
             let Ok(meta) = std::fs::metadata(&path) else {
@@ -204,20 +231,37 @@ fn content_hash(path: &Path) -> Option<u64> {
 
 /// キャッシュファイル名の key (形式の版 + 含めるファイルの集合)
 fn cache_key(sources: &[Source]) -> u64 {
-    let mut parts: Vec<String> = vec![FORMAT_VERSION.to_string()];
+    cache_key_for("tables", sources)
+}
+
+/// 種類 (`tables` / `dict`) ごとに別のキャッシュにする
+fn cache_key_for(kind: &str, sources: &[Source]) -> u64 {
+    let mut parts: Vec<String> = vec![kind.to_string(), FORMAT_VERSION.to_string()];
     parts.extend(sources.iter().map(|s| s.rel.clone()));
     let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
     crate::keyhash::hash_parts(&refs)
 }
 
 fn cache_path(dir: &Path, key: u64) -> PathBuf {
-    dir.join(CACHE_DIR).join(format!("tables-{key:016x}.fgtb"))
+    cache_path_for(dir, "tables", key)
+}
+
+fn cache_path_for(dir: &Path, kind: &str, key: u64) -> PathBuf {
+    dir.join(CACHE_DIR).join(format!("{kind}-{key:016x}.fgtb"))
 }
 
 // ─── 読み込み / 書き出し ─────────────────────────────────────────────────────────
 
 /// キャッシュのバイト列を 元ファイルと照らして読む。 古い / 壊れていれば `None`
 fn try_load(bytes: &[u8], sources: &[Source]) -> Option<(AccentLexicon, ChainTable)> {
+    let mut r = verify_header(bytes, sources)?;
+    let lex = AccentLexicon::read_from(&mut r)?;
+    let chain = ChainTable::read_from(&mut r)?;
+    Some((lex, chain))
+}
+
+/// 検査値・形式の版・元ファイルとの突き合わせを済ませ、 本体の読み位置を返す
+fn verify_header<'a>(bytes: &'a [u8], sources: &[Source]) -> Option<Reader<'a>> {
     let (body, tail) = bytes.split_at(bytes.len().checked_sub(8)?);
     if body.get(..4)? != MAGIC {
         return None;
@@ -245,9 +289,7 @@ fn try_load(bytes: &[u8], sources: &[Source]) -> Option<(AccentLexicon, ChainTab
             return None;
         }
     }
-    let lex = AccentLexicon::read_from(&mut r)?;
-    let chain = ChainTable::read_from(&mut r)?;
-    Some((lex, chain))
+    Some(r)
 }
 
 /// 本体のバイト列に対する検査値 (全バイトを 8 byte ずつ混ぜる。 暗号用途ではない。 破損の検出のみ)
@@ -264,6 +306,20 @@ fn fast_checksum(body: &[u8]) -> u64 {
 }
 
 fn build_bytes(sources: &[Source], lex: &AccentLexicon, chain: &ChainTable) -> Option<Vec<u8>> {
+    let mut w = start_bytes(sources)?;
+    lex.write_to(&mut w);
+    chain.write_to(&mut w);
+    Some(seal_bytes(w))
+}
+
+fn seal_bytes(mut w: Writer) -> Vec<u8> {
+    let sum = fast_checksum(&w.0);
+    w.u64(sum);
+    w.0
+}
+
+/// 先頭 (MAGIC + 版 + 元ファイルの一覧) まで書いた Writer
+fn start_bytes(sources: &[Source]) -> Option<Writer> {
     let mut w = Writer(Vec::with_capacity(8 * 1024 * 1024));
     w.0.extend_from_slice(MAGIC);
     w.u32(FORMAT_VERSION);
@@ -274,24 +330,24 @@ fn build_bytes(sources: &[Source], lex: &AccentLexicon, chain: &ChainTable) -> O
         w.u64(s.mtime_ns);
         w.u64(content_hash(&s.path)?);
     }
-    lex.write_to(&mut w);
-    chain.write_to(&mut w);
-    let sum = fast_checksum(&w.0);
-    w.u64(sum);
-    Some(w.0)
+    Some(w)
 }
 
 /// 一時ファイルに書いてリネーム。 どの辞書ディレクトリにも書けなければ何もしない
 fn write_cache(dirs: &[PathBuf], key: u64, bytes: &[u8]) {
+    write_cache_for(dirs, "tables", key, bytes);
+}
+
+fn write_cache_for(dirs: &[PathBuf], kind: &str, key: u64, bytes: &[u8]) {
     for dir in dirs {
-        let target = cache_path(dir, key);
+        let target = cache_path_for(dir, kind, key);
         let Some(parent) = target.parent() else {
             continue;
         };
         if std::fs::create_dir_all(parent).is_err() {
             continue;
         }
-        let tmp = parent.join(format!(".tables-{key:016x}.{}.tmp", std::process::id()));
+        let tmp = parent.join(format!(".{kind}-{key:016x}.{}.tmp", std::process::id()));
         if std::fs::write(&tmp, bytes).is_err() {
             let _ = std::fs::remove_file(&tmp);
             continue;
@@ -310,6 +366,44 @@ pub(crate) fn load_tables(
 ) -> crate::error::Result<(AccentLexicon, ChainTable)> {
     let use_cache = cache_enabled(std::env::var("FURIGANA_NO_TABLE_CACHE").ok().as_deref());
     load_tables_with(dirs, excludes, use_cache)
+}
+
+/// 本体の辞書 (`core/` と user 辞書の TOML) を読む。 有効なキャッシュがあればそれを使い、 無ければ TOML から作って
+/// キャッシュを書く。 TOML が正で、 キャッシュはその場で作る派生物 (配布しない。 元の TOML を直せば、 次の起動で作り直される)。
+pub(crate) fn load_dict(dirs: &[PathBuf], excludes: &[String]) -> crate::error::Result<Dict> {
+    let use_cache = cache_enabled(std::env::var("FURIGANA_NO_TABLE_CACHE").ok().as_deref());
+    load_dict_with(dirs, excludes, use_cache)
+}
+
+fn load_dict_with(
+    dirs: &[PathBuf],
+    excludes: &[String],
+    use_cache: bool,
+) -> crate::error::Result<Dict> {
+    let sources = collect_sources_where(dirs, excludes, is_dict_source);
+    let key = cache_key_for("dict", &sources);
+    if use_cache && !sources.is_empty() {
+        for dir in dirs {
+            if let Ok(bytes) = std::fs::read(cache_path_for(dir, "dict", key)) {
+                if let Some(mut r) = verify_header(&bytes, &sources) {
+                    if let Some(d) = Dict::read_from(&mut r) {
+                        return Ok(d);
+                    }
+                }
+            }
+        }
+    }
+    let mut dict = Dict::new();
+    for d in dirs {
+        dict.merge(Dict::from_toml_dir_excluding(d, excludes)?);
+    }
+    if use_cache && !sources.is_empty() {
+        if let Some(mut w) = start_bytes(&sources) {
+            dict.write_to(&mut w);
+            write_cache_for(dirs, "dict", key, &seal_bytes(w));
+        }
+    }
+    Ok(dict)
 }
 
 /// 環境変数 `FURIGANA_NO_TABLE_CACHE` の値からキャッシュを使うか決める
@@ -651,5 +745,209 @@ format = \"accent/1\"
         assert!(cache_enabled(None));
         assert!(cache_enabled(Some("0")));
         assert!(!cache_enabled(Some("1")));
+    }
+
+    // ─── 本体の辞書のキャッシュ ───────────────────────────────────────────────────
+
+    const JUKUGO: &str = "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"天気\" = \"テンキ\"
+
+[entries.\"上手\"]
+reading = \"ジョウズ\"
+
+[[entries.\"上手\".match]]
+reading = \"カミテ\"
+prev_eq = \"下\"
+prev_eq_any = [\"右\", \"左\"]
+next_eq = \"から\"
+next_eq_any = [\"へ\"]
+prev_ends_any = [\"側\"]
+next_starts = \"ま\"
+next_starts_any = [\"る\", \"っ\"]
+next2_starts_any = [\"無\"]
+prev_char_type = \"漢字\"
+next_char_type = \"ひらがな\"
+prev_month = true
+next_digit = true
+input_contains_any = [\"舞台\"]
+
+[[entries.\"上手\".alt]]
+reading = \"ウワテ\"
+sense = \"upper\"
+weight = 30
+next_eq = \"に\"
+";
+    const KANJI: &str = "[meta]
+schema_version = \"2\"
+role = \"kanji\"
+
+[[kanji]]
+char = \"生\"
+default = \"セイ\"
+
+[[kanji.match]]
+next_eq = \"じる\"
+reading = \"ショウ\"
+
+[[kanji.alt]]
+reading = \"ナマ\"
+weight = 10
+";
+    const NAME_SEI: &str = "[meta]
+schema_version = \"2\"
+role = \"name_sei\"
+
+[entries]
+\"鈴木\" = \"すずき\"
+";
+    const NAME_MEI: &str = "[meta]
+schema_version = \"2\"
+role = \"name_mei\"
+
+[entries]
+\"太郎\" = \"たろう\"
+";
+
+    /// 辞書の中身を、 並び順に依らない文字列の組にする (キャッシュ前後の比較用)
+    fn snapshot(d: &Dict) -> Vec<String> {
+        let mut v: Vec<String> = d
+            .rich_iter()
+            .map(|(k, e)| format!("rich {k} {e:?}"))
+            .collect();
+        v.extend(d.kanji_iter().map(|b| format!("kanji {b:?}")));
+        v.push(format!("unihan {:?}", d.lookup("生")));
+        v.push(format!("sei {:?}", d.lookup_name_sei("鈴木")));
+        v.push(format!("mei {:?}", d.lookup_name_mei("太郎")));
+        v.sort();
+        v
+    }
+
+    fn dict_fixture(name: &str) -> PathBuf {
+        let d = tmpdir(name);
+        write(&d, "jukugo/a.toml", JUKUGO);
+        write(&d, "kanji/a.toml", KANJI);
+        write(&d, "names/sei.toml", NAME_SEI);
+        write(&d, "names/mei.toml", NAME_MEI);
+        write(&d, "accent/t.toml", ACCENT);
+        d
+    }
+
+    fn dict_cache_files(dir: &Path) -> Vec<PathBuf> {
+        cache_files(dir)
+            .into_iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("dict-"))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dict_cache_roundtrip_keeps_every_field() {
+        let d = dict_fixture("dict_roundtrip");
+        let dirs = vec![d.clone()];
+        let plain = load_dict_with(&dirs, &[], false).unwrap();
+        assert!(
+            dict_cache_files(&d).is_empty(),
+            "キャッシュ無効なら書かない"
+        );
+        let cold = load_dict_with(&dirs, &[], true).unwrap();
+        assert_eq!(dict_cache_files(&d).len(), 1);
+        let warm = load_dict_with(&dirs, &[], true).unwrap();
+        assert_eq!(snapshot(&plain), snapshot(&cold));
+        assert_eq!(snapshot(&plain), snapshot(&warm));
+        // 条件の全 field が往復している
+        let e = warm.lookup_rich("上手").unwrap();
+        assert_eq!(e.matches().len(), 1);
+        let c = &e.matches()[0].condition;
+        assert_eq!(c.prev_eq.as_deref(), Some("下"));
+        assert_eq!(c.prev_eq_any, ["右", "左"]);
+        assert_eq!(c.next_starts_any, ["る", "っ"]);
+        assert!(c.prev_month && c.next_digit);
+        assert_eq!(c.input_contains_any, ["舞台"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn dict_cache_follows_toml_edits() {
+        let d = dict_fixture("dict_edit");
+        let dirs = vec![d.clone()];
+        let _ = load_dict_with(&dirs, &[], true).unwrap();
+        // 辞書の TOML を直したら、 次の読み込みに反映される (キャッシュは派生物)
+        write(
+            &d,
+            "jukugo/a.toml",
+            &format!(
+                "{JUKUGO}
+[entries.\"雨天\"]
+reading = \"ウテン\"
+"
+            ),
+        );
+        let edited = load_dict_with(&dirs, &[], true).unwrap();
+        assert_eq!(edited.lookup("雨天"), Some("ウテン"));
+        // ファイルを足しても反映される
+        write(
+            &d,
+            "jukugo/b.toml",
+            "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"月夜\" = \"ツキヨ\"
+",
+        );
+        let added = load_dict_with(&dirs, &[], true).unwrap();
+        assert_eq!(added.lookup("月夜"), Some("ツキヨ"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn dict_cache_ignores_accent_edits_and_corruption() {
+        let d = dict_fixture("dict_corrupt");
+        let dirs = vec![d.clone()];
+        let first = load_dict_with(&dirs, &[], true).unwrap();
+        // アクセント表はキャッシュの元ファイルに入らない
+        write(
+            &d,
+            "accent/t.toml",
+            &format!(
+                "{ACCENT}\"空\" = \"[ソ]ラ\"
+"
+            ),
+        );
+        assert_eq!(dict_cache_files(&d).len(), 1);
+        // 壊れたキャッシュは捨てて作り直す
+        let f = dict_cache_files(&d).remove(0);
+        let mut bytes = std::fs::read(&f).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xff;
+        std::fs::write(&f, &bytes).unwrap();
+        let again = load_dict_with(&dirs, &[], true).unwrap();
+        assert_eq!(snapshot(&first), snapshot(&again));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn dict_cache_truncated_bytes_do_not_load() {
+        let d = dict_fixture("dict_trunc");
+        let dirs = vec![d.clone()];
+        let _ = load_dict_with(&dirs, &[], true).unwrap();
+        let sources = collect_sources_where(&dirs, &[], is_dict_source);
+        let bytes = std::fs::read(dict_cache_files(&d).remove(0)).unwrap();
+        for cut in [0, 3, 8, bytes.len() / 3, bytes.len() - 9] {
+            assert!(
+                verify_header(&bytes[..cut], &sources).is_none()
+                    || Dict::read_from(&mut verify_header(&bytes[..cut], &sources).unwrap())
+                        .is_none()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

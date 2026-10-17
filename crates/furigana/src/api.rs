@@ -784,13 +784,14 @@ impl FuriganaBuilder {
             load_compat_into(&mut rules.compat, d, &self.dict_excludes)?;
         }
 
-        let mut dict = Dict::new();
-        for d in &self.core_dict_dirs {
-            dict.merge(Dict::from_toml_dir_excluding(d, &self.dict_excludes)?);
-        }
-        for d in &self.user_dict_dirs {
-            dict.merge(Dict::from_toml_dir_excluding(d, &self.dict_excludes)?);
-        }
+        // 辞書の TOML は、 有効なバイナリキャッシュがあればそれを読む ([`crate::tablecache`])。 TOML が正
+        let dict_dirs: Vec<std::path::PathBuf> = self
+            .core_dict_dirs
+            .iter()
+            .chain(self.user_dict_dirs.iter())
+            .cloned()
+            .collect();
+        let mut dict = crate::tablecache::load_dict(&dict_dirs, &self.dict_excludes)?;
         for f in &self.overrides_files {
             dict.merge(Dict::from_toml_file(f)?);
         }

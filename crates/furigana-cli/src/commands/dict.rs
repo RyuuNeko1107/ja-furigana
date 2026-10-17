@@ -5,7 +5,7 @@
 //! - `remove <surface>`         : `cli-added.toml` から削除
 //! - `import <path>`            : TOML ファイルを user dict にコピー
 //! - `pull [--version v...]`    : core 辞書を GitHub Release から取得 (未実装)
-//! - `build-cache`              : アクセント表 / 連結表のバイナリキャッシュ (`.furigana-cache/*.fgtb`) を作る
+//! - `build-cache`              : 辞書 / アクセント表 / 連結表のバイナリキャッシュ (`.furigana-cache/*.fgtb`) を作る
 
 use crate::config::Config;
 use crate::paths::Paths;
