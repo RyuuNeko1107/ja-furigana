@@ -55,9 +55,11 @@ pub fn kata_to_hira(s: &str) -> String {
                 // ★2026-09-13: カタカナ範囲定数は ン (0x30F3) までなので
                 // ヴ / ヵ / ヶ は個別に対応する。 未対応だと romaji 出力に
                 // カタカナのまま残っていた (実ログ 88 万行で 9 件)。
-                'ゕ'
+                // ★2026-10-18: 小書きの ゕ / ゖ のままだと TTS が読めない (実コメント 300 万行に 265 行。
+                // スヶベ / マイヶル のように ケ の代用が大半) ので、 大きい か / け にする。
+                'か'
             } else if c == 'ヶ' {
-                'ゖ'
+                'け'
             } else {
                 c
             }
@@ -642,8 +644,12 @@ mod tests {
     #[test]
     fn kata_to_hira_small_ka_ke() {
         // ★2026-09-13: カタカナ範囲定数は ン までなので ヵ / ヶ が素通りしていた。
-        assert_eq!(kata_to_hira("ヵ"), "ゕ");
-        assert_eq!(kata_to_hira("ヶ"), "ゖ");
+        // 小書きにせず大きい か / け (TTS が読める字)。 ケ の代用 (スヶベ) が大半
+        assert_eq!(kata_to_hira("ヵ"), "か");
+        assert_eq!(kata_to_hira("ヶ"), "け");
+        assert_eq!(kata_to_hira("スヶベ"), "すけべ");
+        assert_eq!(kata_to_hira("マイヶル"), "まいける");
+        assert!(!kata_to_hira("ヵヶ").contains(['ゕ', 'ゖ']));
         assert_eq!(kata_to_hira("ヴ"), "ゔ");
     }
 
