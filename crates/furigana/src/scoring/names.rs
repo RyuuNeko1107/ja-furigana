@@ -70,6 +70,10 @@ fn all_kanji(s: &str) -> bool {
 
 /// `surface` を 「漢字列 X + 敬称 S」 に分解できれば `(X, S, S の確定 reading)` を返す。
 fn split_name_suffix(surface: &str) -> Option<(&str, &'static str, &'static str)> {
+    // どの敬称も末尾の字は ん / 君 / 様 / 氏 のどれか (大半の token はここで弾ける)
+    if !matches!(surface.chars().next_back(), Some('ん' | '君' | '様' | '氏')) {
+        return None;
+    }
     for (suffix, reading) in SUFFIXES {
         if let Some(head) = surface.strip_suffix(suffix) {
             if all_kanji(head) && head.chars().count() <= MAX_NAME_CHARS {
@@ -166,10 +170,13 @@ impl NameBoundaryPass<'_> {
         }
         let surface = tokens[i].surface.as_str();
         let next = tokens[i + 1].surface.as_str();
+        // 漢字部分の長さは敬称によらないので 1 度だけ求める (漢字だけの token / かなだけの token はここで終わる)
+        let Some((kanji_end, _)) = surface.char_indices().find(|(_, c)| !is_kanji_char(*c)) else {
+            return false;
+        };
+        let (head, rest) = surface.split_at(kanji_end);
         let Some((head, suffix, suffix_reading, tail_len)) =
             SUFFIXES.iter().find_map(|&(suffix, reading)| {
-                let (kanji_end, _) = surface.char_indices().find(|(_, c)| !is_kanji_char(*c))?;
-                let (head, rest) = surface.split_at(kanji_end);
                 let tail = suffix.strip_prefix(rest)?;
                 (!tail.is_empty() && next.starts_with(tail))
                     .then(|| (head.to_string(), suffix, reading, tail.len()))
