@@ -1941,24 +1941,36 @@ impl CandidateProvider for NumberCandidateProvider {
         }
 
         // 適用順 = 優先順 (module doc の 1〜8 と対応)。
+        // 先頭が算用数字 (と符号) か漢数字かで、 空振りが確定する matcher を飛ばす (どの matcher も先頭の
+        // 字種を要求する regex で始まるので、 飛ばしても候補は変わらない。 並びの順序も保つ)。
+        let arabic_lead = matches!(
+            first_char,
+            '0'..='9' | '０'..='９' | '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}'
+        );
         self.try_date(input, pos, rest, out);
-        self.try_time_jp(input, pos, rest, out);
-        self.try_time_colon(input, pos, rest, out);
-        self.try_scale(input, pos, rest, out);
-        self.try_si_unit(input, pos, rest, out);
-        self.try_fraction(input, pos, rest, out);
-        self.try_kanji_decimal(input, pos, rest, out);
-        self.try_phone(input, pos, rest, out);
-        self.try_ymd(input, pos, rest, out);
-        self.try_postal_after_label(input, pos, rest, out);
-        self.try_slash_pair(input, pos, rest, out);
-        self.try_version(input, pos, rest, out);
-        self.try_counter(input, pos, rest, out);
-        self.try_counter_kanji_grouped(input, pos, rest, out);
-        self.try_counter_kanji(input, pos, rest, out);
-        self.try_kanji_bare_number(input, pos, rest, out);
+        if arabic_lead {
+            self.try_time_jp(input, pos, rest, out);
+            self.try_time_colon(input, pos, rest, out);
+            self.try_scale(input, pos, rest, out);
+            self.try_si_unit(input, pos, rest, out);
+            self.try_fraction(input, pos, rest, out);
+            self.try_phone(input, pos, rest, out);
+            self.try_ymd(input, pos, rest, out);
+            self.try_postal_after_label(input, pos, rest, out);
+            self.try_slash_pair(input, pos, rest, out);
+            self.try_version(input, pos, rest, out);
+            self.try_counter(input, pos, rest, out);
+        } else {
+            self.try_time_jp_kanji(input, pos, rest, out);
+            self.try_kanji_decimal(input, pos, rest, out);
+            self.try_counter_kanji_grouped(input, pos, rest, out);
+            self.try_counter_kanji(input, pos, rest, out);
+            self.try_kanji_bare_number(input, pos, rest, out);
+        }
         self.emit_symbol(input, pos, rest, out);
-        self.try_digit(input, pos, rest, out);
+        if arabic_lead {
+            self.try_digit(input, pos, rest, out);
+        }
     }
 }
 
