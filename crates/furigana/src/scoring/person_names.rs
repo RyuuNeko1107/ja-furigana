@@ -360,6 +360,16 @@ impl ReadingPostPass for PersonNamePass<'_> {
                 c += 1;
                 continue;
             };
+            // 形態素解析が 3 字以上の 1 語 (北海道) と読んだものを、 姓 + 名 に割り直さない。
+            // (表の姓 + 名 は NDL の分割の癖で、 北海 | 道 のように一般語と重なる。 3 字全体が姓の表にある時は別)
+            if p.mei.is_some()
+                && c - s == 1
+                && tokens[s].surface.chars().count() >= 3
+                && self.hint != NameHint::Name
+            {
+                c += 1;
+                continue;
+            }
             let old: String = tokens[s..c]
                 .iter()
                 .map(|t| hira_to_kata(&t.reading))
