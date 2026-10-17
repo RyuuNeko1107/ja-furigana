@@ -196,24 +196,36 @@ pub use crate::char_class::is_emoji_char;
 pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
     let mut tokens: Vec<ProtectedToken> = Vec::new();
 
+    // 各 regex が必ず要求する字が無い入力 (大半の行) は、 regex を走らせずに飛ばす
+    // URL は `.` か `://` を、 メールは `@` を、 文字参照は `&` を、 括弧つき顔文字は `(` `（` を要求する。
+
     // URL
-    for m in URL_RE.find_iter(input) {
-        tokens.push(ProtectedToken {
-            range: m.range(),
-            kind: ProtectedKind::Url,
-        });
+    if input.contains('.') || input.contains("://") {
+        for m in URL_RE.find_iter(input) {
+            tokens.push(ProtectedToken {
+                range: m.range(),
+                kind: ProtectedKind::Url,
+            });
+        }
     }
 
     // Email
-    for m in EMAIL_RE.find_iter(input) {
-        tokens.push(ProtectedToken {
-            range: m.range(),
-            kind: ProtectedKind::Email,
-        });
+    if input.contains('@') {
+        for m in EMAIL_RE.find_iter(input) {
+            tokens.push(ProtectedToken {
+                range: m.range(),
+                kind: ProtectedKind::Email,
+            });
+        }
     }
 
     // HTML 文字参照。 URL の中 (`?a=1&amp;b=2`) のものは URL が取る
-    for m in ENTITY_RE.find_iter(input) {
+    let entity_matches = if input.contains('&') {
+        ENTITY_RE.find_iter(input).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    for m in entity_matches {
         let range = m.range();
         if tokens
             .iter()
@@ -228,13 +240,15 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
     }
 
     // 顔文字
-    for caps in KAOMOJI_RE.captures_iter(input) {
-        if is_kaomoji_inner(&caps[1]) {
-            let m = caps.get(0).unwrap();
-            tokens.push(ProtectedToken {
-                range: m.range(),
-                kind: ProtectedKind::Kaomoji,
-            });
+    if input.contains(['(', '（']) {
+        for caps in KAOMOJI_RE.captures_iter(input) {
+            if is_kaomoji_inner(&caps[1]) {
+                let m = caps.get(0).unwrap();
+                tokens.push(ProtectedToken {
+                    range: m.range(),
+                    kind: ProtectedKind::Kaomoji,
+                });
+            }
         }
     }
 
@@ -258,19 +272,18 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
     // 絵文字 (連続範囲を 1 つの token に集約)。 VS16 / 肌色 / ZWJ / keycap (1️⃣) / 国旗も同じ token に含める
     let mut current_emoji_start: Option<usize> = None;
     let mut current_emoji_end: usize = 0;
-    let chars: Vec<(usize, char)> = input.char_indices().collect();
-    for (i, &(idx, c)) in chars.iter().enumerate() {
+    // ASCII だけの入力に絵文字は無い (keycap の 1️⃣ も ASCII 以外の続きを要る)
+    let scan_emoji = !input.is_ascii();
+    for (idx, c) in input.char_indices().filter(|_| scan_emoji) {
         let char_end = idx + c.len_utf8();
-        let keycap_base = matches!(c, '0'..='9' | '#' | '*')
-            && chars
-                .get(i + 1)
-                .is_some_and(|&(_, n)| n == '\u{20E3}' || n == '\u{FE0F}')
-            && chars
-                .get(i + 1)
-                .map(|&(_, n)| {
-                    n == '\u{20E3}' || chars.get(i + 2).is_some_and(|&(_, m)| m == '\u{20E3}')
-                })
-                .unwrap_or(false);
+        let keycap_base = matches!(c, '0'..='9' | '#' | '*') && {
+            let mut next = input[char_end..].chars();
+            match next.next() {
+                Some('\u{20E3}') => true,
+                Some('\u{FE0F}') => next.next() == Some('\u{20E3}'),
+                _ => false,
+            }
+        };
         let joiner_in_run = current_emoji_start.is_some() && crate::char_class::is_emoji_joiner(c);
         if is_emoji_char(c) || keycap_base || joiner_in_run {
             if current_emoji_start.is_none() {
