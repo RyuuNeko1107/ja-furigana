@@ -25,13 +25,10 @@ impl FxHasher {
 impl Hasher for FxHasher {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for c in &mut chunks {
-            self.add(u64::from_le_bytes([
-                c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
-            ]));
+        let (chunks, rest) = bytes.as_chunks::<8>();
+        for c in chunks {
+            self.add(u64::from_le_bytes(*c));
         }
-        let rest = chunks.remainder();
         if !rest.is_empty() {
             let mut buf = [0u8; 8];
             buf[..rest.len()].copy_from_slice(rest);
