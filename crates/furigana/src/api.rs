@@ -162,10 +162,7 @@ impl Furigana {
         // **表示 surface は原文を保つ** (lookup のみ正規化): 解析後に各 token の surface を
         // 原文へ戻すので 髙田 は {髙田|たかだ} になる (高田 に化けない)。
         let norm = crate::kana::normalize_text_aligned(text, &self.rules.compat);
-        let tokens = self
-            .pipeline()
-            .with_name_hint(hint)
-            .tokens_reading_only(&norm.text);
+        let tokens = self.pipeline().with_name_hint(hint).tokens(&norm.text);
         // 正規化で何も変わらない通常の日本語入力は fast path (remap 不要 = 旧挙動と同一)。
         if !norm.changed {
             return tokens

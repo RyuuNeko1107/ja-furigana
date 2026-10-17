@@ -90,24 +90,12 @@ impl<'a> Pipeline<'a> {
 
     /// production 経路: 採択 path の [`Token`] 列を返す (post-pass 適用済)。
     ///
-    /// debug 用の `candidates` 集約 / `alternatives` 抽出を行わない軽量版。
-    /// `to_ruby` / `to_hiragana` / `to_tts` / `to_romaji` / `tokenize` はこちら。
+    /// debug 用の `candidates` 集約 / `alternatives` 抽出を行わない軽量版。 accent の付与
+    /// (accent 専用の表 / 推定) も行わない: 読みだけ要る呼び出し (`tokenize` と、 そこから作る
+    /// `to_hiragana` / `to_ruby` / `to_tts` / `to_romaji`) は accent を使わない。 accent が要るのは
+    /// [`Self::analyze`]。
     #[must_use]
     pub fn tokens(&self, input: &str) -> Vec<Token> {
-        let mut tokens = self.with_providers(input, run_analyze_tokens);
-        postpass::apply_all(&mut tokens, self.dict, self.analyzer, self.name_hint);
-        self.accent_lexicon.fill(&mut tokens);
-        if self.estimate_accent {
-            accent_estimate::estimate(&mut tokens, self.analyzer);
-        }
-        tokens
-    }
-
-    /// [`Self::tokens`] から accent の付与 (accent 専用の表 / 推定) を省いた版。 surface と reading は
-    /// [`Self::tokens`] と完全に同一。 読みだけ要る呼び出し (`tokenize` と、 そこから作る
-    /// `to_hiragana` / `to_ruby` / `to_tts` / `to_romaji`) は accent を使わないので、 こちらで足りる。
-    #[must_use]
-    pub fn tokens_reading_only(&self, input: &str) -> Vec<Token> {
         let mut tokens = self.with_providers(input, run_analyze_tokens);
         postpass::apply_all(&mut tokens, self.dict, self.analyzer, self.name_hint);
         tokens
