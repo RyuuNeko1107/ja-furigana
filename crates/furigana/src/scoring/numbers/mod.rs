@@ -63,7 +63,7 @@ use crate::scoring::digit_reading::DigitStyle;
 use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
-    build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
+    build_si_unit_regex, HeadRegex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
     KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, PHONE_RE, POSTAL_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
     SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE, SLASH_PAIR_RE,
     SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
@@ -133,16 +133,16 @@ pub struct NumberCandidateProvider {
     /// (= emit 順を deterministic にするため。 候補は全 emit、 採択は DP の length 軸)。
     phrase_index: std::collections::HashMap<char, Vec<(String, String)>>,
     /// `(NUM)(base)(recursive?)` pattern (算用 / 全角数字)。 counter / simple table が空なら `None`。
-    counter_re: Option<Regex>,
+    counter_re: Option<HeadRegex>,
     /// `(KANJI_NUM)(base)(recursive)` pattern (漢数字 + 末尾再帰 「目」 必須)。
     /// recursive counter が無い (= 「目」 未定義) なら `None`。
-    counter_kanji_re: Option<Regex>,
+    counter_kanji_re: Option<HeadRegex>,
     /// 読点区切りの漢数字 + 助数詞 (`一、〇〇〇円`)。 counter が空なら `None`
-    counter_kanji_grouped_re: Option<Regex>,
+    counter_kanji_grouped_re: Option<HeadRegex>,
     /// `(NUM)(scale)(unit?)` pattern。 scales 空なら `None`。
-    scale_re: Option<Regex>,
+    scale_re: Option<HeadRegex>,
     /// `(NUM)(si_unit)` pattern。 units 空なら `None`。
-    si_unit_re: Option<Regex>,
+    si_unit_re: Option<HeadRegex>,
     /// SI 単位記号 (小文字化済) の集合。 構築時に 1 度だけ作り、 解析毎の
     /// 再構築 (= units 全 entry の `to_ascii_lowercase` + `HashSet` alloc) を避ける。
     unit_symbols: std::sync::Arc<std::collections::HashSet<String>>,
