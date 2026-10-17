@@ -103,6 +103,16 @@ impl<'a> Pipeline<'a> {
         tokens
     }
 
+    /// [`Self::tokens`] から accent の付与 (accent 専用の表 / 推定) を省いた版。 surface と reading は
+    /// [`Self::tokens`] と完全に同一。 読みだけ要る呼び出し (`tokenize` と、 そこから作る
+    /// `to_hiragana` / `to_ruby` / `to_tts` / `to_romaji`) は accent を使わないので、 こちらで足りる。
+    #[must_use]
+    pub fn tokens_reading_only(&self, input: &str) -> Vec<Token> {
+        let mut tokens = self.with_providers(input, run_analyze_tokens);
+        postpass::apply_all(&mut tokens, self.dict, self.analyzer, self.name_hint);
+        tokens
+    }
+
     /// debug / inspection 経路: [`AnalyzeResult`] (採択 path + 候補 + boundary region) を返す。
     ///
     /// 採択 path は [`Self::tokens`] と完全に同一 (= 同じ provider 構成・同じ post-pass)。
