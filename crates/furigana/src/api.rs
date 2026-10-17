@@ -62,6 +62,8 @@ pub struct Furigana {
     estimate_accent: bool,
     /// コスト lattice engine (ADR-0011、 実験中の opt-in)
     cost_engine: bool,
+    /// compat (異体字表) の 1 文字 key の集合。 入力の正規化で 「この文字は何も起きない」 を素早く判定する
+    compat_chars: crate::fxmap::FxSet<char>,
 }
 
 impl Furigana {
@@ -161,7 +163,11 @@ impl Furigana {
         // NFKC)。 髙→高 / 葛󠄀→葛 / ①→1 等を解決してから形態素解析・辞書 lookup に渡す。
         // **表示 surface は原文を保つ** (lookup のみ正規化): 解析後に各 token の surface を
         // 原文へ戻すので 髙田 は {髙田|たかだ} になる (高田 に化けない)。
-        let norm = crate::kana::normalize_text_aligned(text, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            text,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let tokens = self.pipeline().with_name_hint(hint).tokens(&norm.text);
         // 正規化で何も変わらない通常の日本語入力は fast path (remap 不要 = 旧挙動と同一)。
         if !norm.changed {
@@ -340,7 +346,11 @@ impl Furigana {
         // Step 1: lookup 用に入力正規化 (異体字 [compat] / IVS / NFKC)。tokenize と同じ前処理。
         // 表示 surface は原文を保つため、 解析後に token surface / range を原文へ remap する
         // (`candidates` / `boundary_regions` の range は正規化テキスト座標のまま = debug 用途)。
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let mut result = self.pipeline().with_name_hint(hint).analyze(&norm.text);
         if norm.changed {
             let remapped = norm.remap(input, result.tokens.iter().map(|t| t.surface.as_str()));
@@ -381,7 +391,11 @@ impl Furigana {
     #[doc(hidden)]
     #[must_use]
     pub fn chain_missing_accents(&self, input: &str) -> Vec<(String, String, String)> {
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
         crate::chain_phrases::missing_accents(
@@ -397,7 +411,11 @@ impl Furigana {
     #[doc(hidden)]
     #[must_use]
     pub fn chain_debug_nodes(&self, input: &str) -> Vec<(String, String, String, bool)> {
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
         crate::chain_phrases::debug_nodes(
@@ -421,7 +439,11 @@ impl Furigana {
         if self.chain_table.is_empty() {
             return Vec::new();
         }
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
         crate::chain_phrases::build_chained_phrases(
@@ -455,7 +477,11 @@ impl Furigana {
         if self.chain_table.is_empty() {
             return crate::accent_symbols::to_mora_phrases_with(&self.to_accent(input), opts);
         }
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
         let (phrases, gap) = crate::chain_phrases::build_chained_with_gap(
@@ -726,8 +752,21 @@ impl FuriganaBuilder {
             crate::tablecache::load_tables(&dirs, &self.dict_excludes)?
         };
 
+        let compat_chars: crate::fxmap::FxSet<char> = rules
+            .compat
+            .map
+            .keys()
+            .filter_map(|k| {
+                let mut cs = k.chars();
+                match (cs.next(), cs.next()) {
+                    (Some(c), None) => Some(c),
+                    _ => None,
+                }
+            })
+            .collect();
         Ok(Furigana {
             analyzer: OnceLock::new(),
+            compat_chars,
             rules,
             dict,
             number_provider,

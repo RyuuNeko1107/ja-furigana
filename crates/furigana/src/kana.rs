@@ -551,6 +551,69 @@ impl NormalizedText {
 /// 正規化断片 1 つの unit を作る。
 #[must_use]
 pub(crate) fn normalize_text_aligned(s: &str, compat: &CompatData) -> NormalizedText {
+    normalize_text_aligned_with(s, compat, None)
+}
+
+/// 1 文字が 「正規化で何も起きない」 普通の文字か (NFKC で不変・compat 未登録・VS / 不可視文字でない)。
+/// 結果は文字ごとに覚える (BMP のみ。 NFKC の判定が 1 文字あたり数十 ns かかるため)。
+fn is_plain_char(
+    c: char,
+    compat: &CompatData,
+    compat_chars: Option<&crate::fxmap::FxSet<char>>,
+) -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
+    static NFKC_SELF: [AtomicU8; 0x1_0000] = [const { AtomicU8::new(0) }; 0x1_0000];
+    let nfkc_self = |c: char| {
+        let mut it = std::iter::once(c).nfkc();
+        it.next() == Some(c) && it.next().is_none()
+    };
+    let cp = c as u32;
+    let identity = if cp < 0x1_0000 {
+        let slot = &NFKC_SELF[cp as usize];
+        match slot.load(Relaxed) {
+            1 => true,
+            2 => false,
+            _ => {
+                let r = nfkc_self(c);
+                slot.store(if r { 1 } else { 2 }, Relaxed);
+                r
+            }
+        }
+    } else {
+        nfkc_self(c)
+    };
+    identity
+        && !is_variation_selector(c)
+        && !is_invisible_char(c)
+        && if let Some(set) = compat_chars {
+            !set.contains(&c)
+        } else {
+            let mut buf = [0u8; 4];
+            compat.lookup(c.encode_utf8(&mut buf)).is_none()
+        }
+}
+
+/// [`normalize_text_aligned`] の本体。 `compat_chars` は compat の 1 文字 key の集合 (呼び出し側が持っていれば
+/// 渡す。 無ければ compat を直接引く)。
+pub(crate) fn normalize_text_aligned_with(
+    s: &str,
+    compat: &CompatData,
+    compat_chars: Option<&crate::fxmap::FxSet<char>>,
+) -> NormalizedText {
+    // 全部が普通の文字なら、 正規化は何もしない (大半の入力)。 原文との対応表も要らない
+    // (対応が要るのは changed の時だけ)。
+    if s.chars().all(|c| is_plain_char(c, compat, compat_chars)) {
+        return NormalizedText {
+            text: s.to_string(),
+            changed: false,
+            units: Vec::new(),
+        };
+    }
+    normalize_text_aligned_slow(s, compat)
+}
+
+/// 1 文字ずつ正規化して原文との対応表を作る本来の経路 ([`normalize_text_aligned_with`] の素通りの外)。
+fn normalize_text_aligned_slow(s: &str, compat: &CompatData) -> NormalizedText {
     let mut text = String::new();
     let mut units: Vec<NormUnit> = Vec::new();
     for (orig_off, ch) in s.char_indices() {
@@ -636,6 +699,34 @@ pub(crate) fn normalize_text_aligned(s: &str, compat: &CompatData) -> Normalized
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// 素通りの経路が、 1 文字ずつの本来の経路と全く同じ結果を出すこと (BMP 全部 + 補助面の一部、 前後に文字を挟んで)。
+    #[test]
+    fn plain_fast_path_matches_slow_path_for_every_char() {
+        let compat = make_compat(&[("髙", "高"), ("﨑", "崎")]);
+        let set: crate::fxmap::FxSet<char> = ['髙', '﨑'].into_iter().collect();
+        let ranges = [
+            0u32..0x1_0000,
+            0x1_F000..0x1_FB00,
+            0x2_0000..0x2_0100,
+            0xE_0000..0xE_0200,
+        ];
+        for r in ranges {
+            for cp in r {
+                let Some(c) = char::from_u32(cp) else {
+                    continue;
+                };
+                for s in [format!("{c}"), format!("あ{c}い"), format!("ﾋ{c}")] {
+                    let fast = normalize_text_aligned_with(&s, &compat, Some(&set));
+                    let fast_none = normalize_text_aligned_with(&s, &compat, None);
+                    let slow = normalize_text_aligned_slow(&s, &compat);
+                    assert_eq!(fast.text, slow.text, "text U+{cp:04X}");
+                    assert_eq!(fast.changed, slow.changed, "changed U+{cp:04X}");
+                    assert_eq!(fast_none.text, slow.text, "text(None) U+{cp:04X}");
+                }
+            }
+        }
+    }
 
     // ─── kata_to_hira / hira_to_kata ──────────────────────────────
 

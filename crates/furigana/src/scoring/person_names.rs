@@ -150,6 +150,28 @@ fn cue_score(surface: &str) -> u8 {
     0
 }
 
+/// 手がかり語の先頭の字 (さ / ち / く / 氏 / 選 / 監 …)。 手がかりが 1 つも無い行 (ほとんどの行) を、
+/// token を 1 つずつ手がかり語と比べずに素通りさせる前判定に使う。
+static CUE_FIRST_CHARS: once_cell::sync::Lazy<crate::fxmap::FxSet<char>> =
+    once_cell::sync::Lazy::new(|| {
+        HONORIFICS
+            .iter()
+            .chain(TITLES.iter())
+            .filter_map(|c| c.chars().next())
+            .collect()
+    });
+
+/// 手がかり語になりうる token が 1 つでもあるか。 敬称で終わる token (原さん / 利さ|ん の ん) も含む。
+fn may_have_cue(tokens: &[Token]) -> bool {
+    tokens.iter().any(|t| {
+        t.surface
+            .chars()
+            .next()
+            .is_some_and(|c| CUE_FIRST_CHARS.contains(&c))
+            || t.surface.ends_with(['ん', '氏'])
+    })
+}
+
 /// 手がかりの前の漢字列を表で引いた結果。
 struct Parsed {
     sei: String,
@@ -382,6 +404,10 @@ impl PersonNamePass<'_> {
 impl ReadingPostPass for PersonNamePass<'_> {
     fn apply(&self, tokens: &mut Vec<Token>) {
         if self.hint == NameHint::NotName {
+            return;
+        }
+        // 手がかりが無い行は何も起きない (Name ヒントは手がかり無しで引くので除く)
+        if self.hint == NameHint::Auto && !may_have_cue(tokens) {
             return;
         }
         self.split_merged_honorific(tokens);

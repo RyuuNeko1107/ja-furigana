@@ -65,6 +65,7 @@ impl Hasher for FxHasher {
 }
 
 pub(crate) type FxMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
+pub(crate) type FxSet<K> = std::collections::HashSet<K, BuildHasherDefault<FxHasher>>;
 
 #[cfg(test)]
 mod tests {
