@@ -747,6 +747,78 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    // ─── read_head / head_meta (先頭 HEAD_BYTES だけ読む判定) ──────────────
+
+    #[test]
+    fn read_head_reports_completeness_at_the_boundary() {
+        assert_eq!(HEAD_BYTES, 16 * 1024);
+        let d = roles_dir("readhead");
+        // 空 file: 全体が収まった
+        put(&d, "empty.toml", "");
+        assert_eq!(
+            read_head(&d.join("empty.toml")).unwrap(),
+            (String::new(), true)
+        );
+        // 小さい file: 全体を返し complete
+        put(&d, "small.toml", "abc\n");
+        assert_eq!(
+            read_head(&d.join("small.toml")).unwrap(),
+            ("abc\n".to_string(), true)
+        );
+        // HEAD_BYTES - 1: まだ収まっている
+        let just_under = "a".repeat(HEAD_BYTES - 1);
+        put(&d, "under.toml", &just_under);
+        assert_eq!(
+            read_head(&d.join("under.toml")).unwrap(),
+            (just_under, true)
+        );
+        // ちょうど HEAD_BYTES: 続きがあるかもしれないので complete ではない
+        let exact = "a".repeat(HEAD_BYTES);
+        put(&d, "exact.toml", &exact);
+        assert_eq!(read_head(&d.join("exact.toml")).unwrap(), (exact, false));
+        // 超える: 先頭 HEAD_BYTES だけ
+        put(&d, "over.toml", &"a".repeat(HEAD_BYTES + 100));
+        let (h, c) = read_head(&d.join("over.toml")).unwrap();
+        assert_eq!(h.len(), HEAD_BYTES);
+        assert!(!c);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn read_head_trims_a_split_char_but_rejects_bad_utf8_when_complete() {
+        let d = roles_dir("readhead_utf8");
+        // 「あ」は 3 byte。 16384 = 3 * 5461 + 1 なので境界で char が割れる → 手前まで
+        put(&d, "split.toml", &"あ".repeat(6000));
+        let (h, c) = read_head(&d.join("split.toml")).unwrap();
+        assert!(!c);
+        assert_eq!(h.len(), 3 * 5461);
+        assert!(h.chars().all(|ch| ch == 'あ'));
+        // 全体が収まっているのに UTF-8 として不正なら error
+        std::fs::write(d.join("bad.toml"), [b'a', 0xff, b'b']).unwrap();
+        assert!(read_head(&d.join("bad.toml")).is_err());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn head_meta_decides_only_when_the_section_is_closed() {
+        // 先頭に別の行があっても [meta] を見つける
+        let closed =
+            "# c\n[meta]\nschema_version = \"2\"\nrole = \"compat\"\n[map]\n\"a\" = \"b\"\n";
+        let t = head_meta(closed, false).expect("次の section があれば先頭で確定する");
+        assert_eq!(t.role.as_deref(), Some("compat"));
+        let t = head_meta(closed, true).unwrap();
+        assert_eq!(t.role.as_deref(), Some("compat"));
+        // [meta] が末尾まで続いている: file が途中で切れているなら続きがあるかも → None
+        let open = "# c\n[meta]\nschema_version = \"2\"\nrole = \"compat\"\n";
+        assert!(head_meta(open, false).is_none());
+        // 全体が収まっているなら末尾までが [meta] で確定
+        let t = head_meta(open, true).unwrap();
+        assert_eq!(t.role.as_deref(), Some("compat"));
+        // [meta] が無い / 解析できない
+        assert!(head_meta("[entries]\n", true).is_none());
+        assert!(head_meta("[meta]\nrole = [\n[x]\n", true).is_none());
+    }
+
     #[test]
     fn parses_counters_toml() {
         let toml_str = r#"

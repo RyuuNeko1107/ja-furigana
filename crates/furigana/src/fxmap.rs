@@ -103,4 +103,34 @@ mod tests {
         assert_eq!(m.len(), 'ん' as usize - 'あ' as usize + 1);
         assert_eq!(m.get(&'か'), Some(&('か' as usize - 'あ' as usize)));
     }
+
+    // 既知の入力に対する具体的なハッシュ値 (FxHash の算術を固定する。 期待値は元の実装で計算)
+    #[test]
+    fn hash_values_are_pinned() {
+        fn h(f: impl FnOnce(&mut FxHasher)) -> u64 {
+            let mut x = FxHasher::default();
+            f(&mut x);
+            x.finish()
+        }
+        assert_eq!(h(|x| x.write_u8(7)), 0x3a69_4c02_2b87_0611);
+        assert_eq!(h(|x| x.write_u32(0x1234_5678)), 0x5582_aca8_3245_af70);
+        assert_eq!(
+            h(|x| x.write_u64(0x0123_4567_89ab_cdef)),
+            0x56cc_4aad_cf04_78b6
+        );
+        assert_eq!(h(|x| x.write_usize(300)), 0x7e33_02a1_a5d7_643d);
+        // 状態が非 0 の 2 回目の add (rotate と xor を通る)
+        assert_eq!(
+            h(|x| {
+                x.write_u64(1);
+                x.write_u64(2);
+            }),
+            0x6a4b_e67f_93c4_4db7
+        );
+        // write: 8 byte 未満 (端数だけ) / ちょうど 8 byte / 8 byte + 端数 / 空
+        assert_eq!(h(|x| x.write(b"abc")), 0x8c41_a58a_7fd3_a9ff);
+        assert_eq!(h(|x| x.write(b"abcdefgh")), 0xe223_7c76_c5b1_7003);
+        assert_eq!(h(|x| x.write(b"abcdefghijk")), 0xd6e8_a5e8_a1d9_2411);
+        assert_eq!(h(|x| x.write(b"")), 0);
+    }
 }

@@ -205,4 +205,89 @@ reading = "カミテ"
         explain(&mut t, "上手だ", &d);
         assert!(t[0].why.is_none());
     }
+
+    // ─── 変異テスト由来の追加 ────────────────────────────────────────────────
+
+    #[test]
+    fn single_kanji_block_is_used_only_for_one_char_surface() {
+        let d = Dict::from_toml_str(
+            r#"
+[[kanji]]
+char = "上"
+default = "ジョウ"
+[[kanji.match]]
+next_eq = "から"
+reading = "ウエ"
+"#,
+            "test",
+        )
+        .expect("toml");
+        // 2 字の表記は [[kanji]] block を引かない (先頭字の block で理由を付けてはいけない)
+        let mut t = vec![token("上下", "ジョウ", 0..6)];
+        explain(&mut t, "上下", &d);
+        assert!(t[0].why.is_none());
+        assert!(t[0].alternatives.is_empty());
+        // 1 字の表記は block を引く
+        let mut t = vec![token("上", "ウエ", 0..3)];
+        explain(&mut t, "上から", &d);
+        assert_eq!(t[0].why.as_deref(), Some("match: next_eq=から"));
+        assert_eq!(t[0].alternatives.len(), 1);
+        assert_eq!(t[0].alternatives[0].reading, "ジョウ");
+    }
+
+    #[test]
+    fn duplicate_unmatched_readings_are_listed_once() {
+        let d = Dict::from_toml_str(
+            r#"
+[entries."上手"]
+reading = "ジョウズ"
+[[entries."上手".match]]
+next_eq = "から"
+reading = "カミテ"
+[[entries."上手".match]]
+next_eq = "より"
+reading = "カミテ"
+"#,
+            "test",
+        )
+        .expect("toml");
+        let mut t = vec![token("上手", "ジョウズ", 0..6)];
+        explain(&mut t, "上手だ", &d);
+        let kamite: Vec<_> = t[0]
+            .alternatives
+            .iter()
+            .filter(|a| a.reading == "カミテ")
+            .collect();
+        assert_eq!(kamite.len(), 1);
+        assert_eq!(t[0].alternatives.len(), 1);
+    }
+
+    #[test]
+    fn alt_without_sense_gets_its_condition_as_sense_only_when_it_has_one() {
+        let d = Dict::from_toml_str(
+            r#"
+[entries."上手"]
+reading = "ジョウズ"
+[[entries."上手".alt]]
+reading = "ウワテ"
+next_eq = "が"
+[[entries."上手".alt]]
+reading = "ヘタ"
+"#,
+            "test",
+        )
+        .expect("toml");
+        let mut t = vec![token("上手", "ジョウズ", 0..6)];
+        explain(&mut t, "上手だ", &d);
+        let sense = |r: &str| {
+            t[0].alternatives
+                .iter()
+                .find(|a| a.reading == r)
+                .unwrap_or_else(|| panic!("alt {r}"))
+                .sense
+                .clone()
+        };
+        assert_eq!(sense("ウワテ").as_deref(), Some("条件: next_eq=が"));
+        assert_eq!(sense("ヘタ"), None);
+    }
 }

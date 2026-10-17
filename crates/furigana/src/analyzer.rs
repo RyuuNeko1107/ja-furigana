@@ -424,6 +424,137 @@ mod tests {
         assert!(token.conjugation_type.is_none());
     }
 
+    /// `light_from_details` の各 flag を品詞ごとに値で固定する (演算子の取り違えを検出する)。
+    #[test]
+    fn light_from_details_flags_by_pos() {
+        let f = |d: &[&str]| Analyzer::light_from_details("", d);
+        // 助動詞: 断定 (だ / です) 以外は動詞に付く
+        let da = f(&["助動詞", "*", "*", "*", "特殊・ダ", "基本形", "だ"]);
+        assert!(!da.attaches_to_verb, "だ は名詞にも付くので含めない");
+        let desu = f(&["助動詞", "*", "*", "*", "特殊・デス", "基本形", "です"]);
+        assert!(!desu.attaches_to_verb, "です も含めない");
+        let ta = f(&["助動詞", "*", "*", "*", "特殊・タ", "基本形", "た"]);
+        assert!(ta.attaches_to_verb);
+        let masu = f(&["助動詞", "*", "*", "*", "特殊・マス", "基本形", "ます"]);
+        assert!(masu.attaches_to_verb);
+        // 活用型なし (None) の助動詞は 「断定ではない」 = 付く
+        let none = f(&["助動詞", "*", "*", "*", "*", "*", "*"]);
+        assert!(none.attaches_to_verb);
+        // 接続助詞は付く / 他の助詞は付かない
+        let te = f(&["助詞", "接続助詞", "*", "*", "*", "*", "て"]);
+        assert!(te.attaches_to_verb);
+        assert!(te.is_particle);
+        let ha = f(&["助詞", "係助詞", "*", "*", "*", "*", "は"]);
+        assert!(!ha.attaches_to_verb);
+        assert!(ha.is_particle);
+        // 動詞は自立・非自立を問わず付く
+        let v1 = f(&["動詞", "自立", "*", "*", "五段・ラ行", "基本形", "とる"]);
+        assert!(v1.attaches_to_verb);
+        let v2 = f(&["動詞", "非自立", "*", "*", "一段", "基本形", "いる"]);
+        assert!(v2.attaches_to_verb);
+        // 名詞などは付かない
+        let n = f(&["名詞", "一般", "*", "*", "*", "*", "犬"]);
+        assert!(!n.attaches_to_verb);
+        assert!(n.is_noun);
+        assert!(!n.is_particle);
+        // 助動詞以外で活用型が特殊・ダ でも付く判定にならない / 助詞以外の接続助詞名
+        let other = f(&["名詞", "接続助詞", "*", "*", "*", "*", "x"]);
+        assert!(!other.attaches_to_verb);
+
+        // 一段動詞: 動詞 + 自立 + 活用型が 一段 で始まる、 の全部が要る
+        let ichi = f(&["動詞", "自立", "*", "*", "一段", "基本形", "見る"]);
+        assert!(ichi.is_ichidan_verb);
+        assert!(!f(&["動詞", "非自立", "*", "*", "一段", "基本形", "いる"]).is_ichidan_verb);
+        assert!(!f(&["動詞", "自立", "*", "*", "五段・ラ行", "基本形", "取る"]).is_ichidan_verb);
+        assert!(!f(&["名詞", "自立", "*", "*", "一段", "*", "x"]).is_ichidan_verb);
+        assert!(!f(&["動詞", "自立", "*", "*", "*", "*", "x"]).is_ichidan_verb);
+
+        // 固有名詞 / 人名 / 地域
+        let person = f(&["名詞", "固有名詞", "人名", "姓", "*", "*", "田中"]);
+        assert!(person.is_proper_noun && person.is_person_name && !person.is_place);
+        let place = f(&["名詞", "固有名詞", "地域", "一般", "*", "*", "東京"]);
+        assert!(place.is_proper_noun && place.is_place && !place.is_person_name);
+        // 固有名詞でなければ細分類が 人名 / 地域 でも立たない
+        let fake = f(&["名詞", "一般", "人名", "*", "*", "*", "x"]);
+        assert!(!fake.is_person_name && !fake.is_place && !fake.is_proper_noun);
+        let fake2 = f(&["動詞", "固有名詞", "地域", "*", "*", "*", "x"]);
+        assert!(!fake2.is_proper_noun && !fake2.is_place);
+
+        // 接尾 / 代名詞 / 接頭詞
+        let suf = f(&["名詞", "接尾", "一般", "*", "*", "*", "づかれ"]);
+        assert!(suf.is_noun_suffix && suf.is_noun && !suf.is_pronoun);
+        let pro = f(&["名詞", "代名詞", "一般", "*", "*", "*", "これ"]);
+        assert!(pro.is_pronoun && pro.is_noun && !pro.is_noun_suffix);
+        let pre = f(&["接頭詞", "名詞接続", "*", "*", "*", "*", "お"]);
+        assert!(pre.is_prefix && !pre.is_noun);
+        assert!(!f(&["名詞", "接尾", "*", "*", "*", "*", "x"]).is_prefix);
+    }
+
+    /// 語 id キャッシュ: 同じ語を繰り返しても結果が変わらず、 キャッシュ key は語種 (lex_type) を含む。
+    #[test]
+    fn tokenize_light_cache_is_consistent_and_keyed_by_lex_type() {
+        let a = analyzer();
+        let text = "私は学生です。xyzqwvbn と ガギグゲゴ";
+        LIGHT_CACHE.with(|c| c.borrow_mut().clear());
+        let first = a.tokenize_light(text);
+        let second = a.tokenize_light(text); // 2 回目は cache 経由
+        assert_eq!(first, second);
+        // cache を使わない経路 (tokenize の details 分解) と品詞 flag が一致する
+        let heavy = a.tokenize(text);
+        assert_eq!(first.len(), heavy.len());
+        for (l, h) in first.iter().zip(&heavy) {
+            assert_eq!(l.surface, h.surface);
+            assert_eq!(
+                l.is_particle,
+                h.pos.as_deref() == Some("助詞"),
+                "{}",
+                l.surface
+            );
+            assert_eq!(l.is_noun, h.pos.as_deref() == Some("名詞"), "{}", l.surface);
+        }
+        // 未知語 (Unknown 語種) の key は上位 32bit に語種が入る。 system 語と id が重なっても別 entry になる
+        let keys: Vec<u64> = LIGHT_CACHE.with(|c| c.borrow().keys().copied().collect());
+        assert!(
+            keys.iter().any(|k| k >> 32 != 0),
+            "未知語の key に lex_type が入るはず: {keys:?}"
+        );
+        assert!(keys.iter().any(|k| k >> 32 == 0), "system 語の key");
+        // 全 key について id 部分は 32bit に収まり、 語種部分は 0..=2
+        assert!(keys.iter().all(|k| (k >> 32) <= 2));
+    }
+
+    /// キャッシュは LIGHT_CACHE_MAX を超えた時だけ空にする (ちょうど MAX では空にしない)。
+    #[test]
+    fn tokenize_light_cache_clears_only_above_max() {
+        let a = analyzer();
+        let dummy = Analyzer::light_from_details("", &["名詞"]);
+        let fill = |n: usize| {
+            LIGHT_CACHE.with(|c| {
+                let mut c = c.borrow_mut();
+                c.clear();
+                for i in 0..n {
+                    // 実在の語 id (上位 32bit が 0..=2) と衝突しない key
+                    c.insert(u64::MAX - i as u64, dummy.clone());
+                }
+            });
+        };
+        // ちょうど MAX: 空にしない
+        fill(LIGHT_CACHE_MAX);
+        a.tokenize_light("学生");
+        let len = LIGHT_CACHE.with(|c| c.borrow().len());
+        assert!(
+            len >= LIGHT_CACHE_MAX,
+            "MAX ちょうどでは clear しない: {len}"
+        );
+        // MAX 超: 空にしてから入れ直す
+        fill(LIGHT_CACHE_MAX + 1);
+        a.tokenize_light("学生");
+        let len = LIGHT_CACHE.with(|c| c.borrow().len());
+        assert!(len < 100, "MAX 超では clear する: {len}");
+        // 後始末
+        LIGHT_CACHE.with(|c| c.borrow_mut().clear());
+    }
+
     #[test]
     fn tokenize_recovers_from_poisoned_mutex() {
         use std::sync::Arc;

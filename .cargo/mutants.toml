@@ -13,6 +13,16 @@ exclude_re = [
     # MatchContext::empty — 本体が `Self::default()` そのもの。mutation は
     # `Default::default()` への置換で、意味的に同一 = 真の等価変異。
     "MatchContext.*::empty",
+
+    # kana.rs is_plain_char の NFKC 判定キャッシュ (NFKC_SELF) の hit 経路 (match の 1 / 2 の腕)。
+    # 腕を消すと必ず `_` の腕 (= nfkc_self を計算して書き戻す) に落ちるだけで、 返す値は同じ。
+    # キャッシュは速度だけに効く (出力は変わらない) ので、 結果で検出できない真の等価変異。
+    "delete match arm [12] in is_plain_char",
+
+    # Furigana::warm_up — 起動直後の遅延初期化を先に済ませるだけで、 戻り値も出力も変えない設計
+    # (結果の cache が無い)。 空にしても観測できる差は最初のリクエストの遅さだけなので、 テストでは検出できない。
+    # 「呼んでも出力が変わらない」 ことは api::tests::warm_up_does_not_change_output が固定している。
+    "Furigana::warm_up",
 ]
 
 # 注記 (除外せず backlog 扱いの既知等価変異):

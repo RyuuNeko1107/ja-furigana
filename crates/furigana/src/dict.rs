@@ -691,6 +691,37 @@ fn parse_simple_entries(content: &str) -> Option<Vec<(&str, &str)>> {
 mod tests {
     use super::*;
 
+    // ─── 変異テスト由来の追加 ────────────────────────────────────────────────
+
+    #[test]
+    fn name_mei_role_file_loads_into_mei_table_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_dict_test_{}_mei_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("mei.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"name_mei\"\n\n[entries]\n\"太郎\" = \"タロウ\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("sei.toml"),
+            "[meta]\nschema_version = \"2\"\nrole = \"name_sei\"\n\n[entries]\n\"山田\" = \"ヤマダ\"\n",
+        )
+        .unwrap();
+        let d = Dict::from_toml_dir(&dir).unwrap();
+        assert_eq!(d.lookup_name_mei("太郎"), Some("タロウ"));
+        assert_eq!(d.lookup_name_sei("太郎"), None);
+        assert_eq!(d.lookup_name_sei("山田"), Some("ヤマダ"));
+        assert_eq!(d.lookup_name_mei("山田"), None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn from_toml_str_basic() {
         let toml_str = r#"

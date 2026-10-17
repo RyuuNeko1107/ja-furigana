@@ -700,6 +700,28 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    /// `is_plain_char` を直接固定する (素通り判定そのもの + BMP 境界 U+10000)。
+    #[test]
+    fn is_plain_char_direct() {
+        let compat = make_compat(&[("髙", "高")]);
+        let set: crate::fxmap::FxSet<char> = ['髙'].into_iter().collect();
+        for cs in [Some(&set), None] {
+            // 普通の文字 (2 回目はキャッシュ経由でも同じ)
+            for _ in 0..2 {
+                assert!(is_plain_char('あ', &compat, cs));
+                assert!(is_plain_char('A', &compat, cs));
+                assert!(is_plain_char('\u{1_0000}', &compat, cs), "BMP 直後の補助面");
+                assert!(is_plain_char('\u{2_0000}', &compat, cs));
+                // NFKC で変わる / compat 登録 / VS / 不可視
+                assert!(!is_plain_char('Ａ', &compat, cs));
+                assert!(!is_plain_char('ﾋ', &compat, cs));
+                assert!(!is_plain_char('髙', &compat, cs));
+                assert!(!is_plain_char('\u{FE0F}', &compat, cs));
+                assert!(!is_plain_char('\u{200B}', &compat, cs));
+            }
+        }
+    }
+
     /// 素通りの経路が、 1 文字ずつの本来の経路と全く同じ結果を出すこと (BMP 全部 + 補助面の一部、 前後に文字を挟んで)。
     #[test]
     fn plain_fast_path_matches_slow_path_for_every_char() {

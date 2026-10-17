@@ -1254,6 +1254,48 @@ mod tests {
 
     // (is_emoji_char の unit test は crate::char_class 側に移動)
 
+    // ─── 変異テスト由来の追加 ────────────────────────────────────────────────
+
+    #[test]
+    fn joiner_outside_an_emoji_run_is_not_an_emoji() {
+        // ZWJ / VS16 / keycap 記号 / 肌色は、 絵文字の途中でなければ単独で絵文字にならない
+        for joiner in ["\u{200D}", "\u{FE0F}"] {
+            let input = format!("あ{joiner}い");
+            assert!(
+                extract_protected_tokens(&input).is_empty(),
+                "{joiner:?} alone"
+            );
+        }
+    }
+
+    #[test]
+    fn keycap_without_variation_selector_is_one_emoji_token() {
+        // 1⃣ (VS16 なしの keycap) も 1 つの絵文字
+        let input = "あ1\u{20E3}い";
+        let tokens = extract_protected_tokens(input);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, ProtectedKind::Emoji);
+        assert_eq!(&input[tokens[0].range.clone()], "1\u{20E3}");
+    }
+
+    #[test]
+    fn protect_provider_emits_candidate_for_first_of_several_tokens() {
+        // 二分探索の起点: 先頭の保護 token の位置でも、 後ろの token の位置でも候補が出る
+        let input = "あ😀いう😀";
+        let p = ProtectTokenProvider::new(input);
+        let starts: Vec<usize> = p.tokens().iter().map(|t| t.range.start).collect();
+        assert_eq!(starts.len(), 2);
+        let c = ctx(input);
+        for &pos in &starts {
+            let mut out = Vec::new();
+            p.candidates_at(&c, pos, &mut out);
+            assert_eq!(out.len(), 1, "pos {pos}");
+        }
+        let mut out = Vec::new();
+        p.candidates_at(&c, 0, &mut out);
+        assert!(out.is_empty());
+    }
+
     // ─── URL extraction ──────────────────────────────────────────────────────
 
     #[test]
