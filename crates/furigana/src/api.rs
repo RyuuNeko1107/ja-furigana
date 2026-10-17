@@ -66,6 +66,17 @@ pub struct Furigana {
     compat_chars: crate::fxmap::FxSet<char>,
 }
 
+/// `analyze` 系の詳しさ。
+#[derive(Debug, Clone, Copy)]
+enum Depth {
+    /// 候補・代替・理由まで
+    Full,
+    /// 採択 path + band + accent
+    Light,
+    /// 採択 path + band
+    Reading,
+}
+
 impl Furigana {
     /// 最小構成で初期化 (空 default rules + Lindera + 空辞書)
     ///
@@ -343,7 +354,7 @@ impl Furigana {
     /// [`Self::analyze`] に、 入力が人名かどうかのヒントを添える版 ([`Self::tokenize_with_hint`] と同じ)。
     #[must_use]
     pub fn analyze_with_hint(&self, input: &str, hint: NameHint) -> AnalyzeResult {
-        self.analyze_impl(input, hint, false)
+        self.analyze_impl(input, hint, Depth::Full)
     }
 
     /// [`Self::analyze`] から debug 用の集約を省いた軽い版。
@@ -360,10 +371,19 @@ impl Furigana {
     /// [`Self::analyze_light`] に、 入力が人名かどうかのヒントを添える版。
     #[must_use]
     pub fn analyze_light_with_hint(&self, input: &str, hint: NameHint) -> AnalyzeResult {
-        self.analyze_impl(input, hint, true)
+        self.analyze_impl(input, hint, Depth::Light)
     }
 
-    fn analyze_impl(&self, input: &str, hint: NameHint, light: bool) -> AnalyzeResult {
+    /// [`Self::analyze_light`] から、 accent 専用の表 / 推定の付与も省いた版 (読みと `band` だけ)。
+    ///
+    /// `ruby` / `hiragana` / `tts` のように accent を使わない出力を作る呼び出し向け。 辞書の bracket が持つ accent は
+    /// 残るが、 表引きの accent (accent 専用の表 / 推定) は付かない。 accent が要るなら [`Self::analyze_light`]
+    #[must_use]
+    pub fn analyze_reading(&self, input: &str) -> AnalyzeResult {
+        self.analyze_impl(input, NameHint::Auto, Depth::Reading)
+    }
+
+    fn analyze_impl(&self, input: &str, hint: NameHint, depth: Depth) -> AnalyzeResult {
         // Step 1: lookup 用に入力正規化 (異体字 [compat] / IVS / NFKC)。tokenize と同じ前処理。
         // 表示 surface は原文を保つため、 解析後に token surface / range を原文へ remap する
         // (`candidates` / `boundary_regions` の range は正規化テキスト座標のまま = debug 用途)。
@@ -373,10 +393,10 @@ impl Furigana {
             Some(&self.compat_chars),
         );
         let pipeline = self.pipeline().with_name_hint(hint);
-        let mut result = if light {
-            pipeline.analyze_light(&norm.text)
-        } else {
-            pipeline.analyze(&norm.text)
+        let mut result = match depth {
+            Depth::Full => pipeline.analyze(&norm.text),
+            Depth::Light => pipeline.analyze_light(&norm.text),
+            Depth::Reading => pipeline.analyze_reading(&norm.text),
         };
         if norm.changed {
             let remapped = norm.remap(input, result.tokens.iter().map(|t| t.surface.as_str()));
@@ -986,6 +1006,27 @@ role = \"compat\"
         assert_eq!(variant.tokens[0].band, 50);
         assert_eq!(f.analyze("髙田").tokens[0].band, 50, "analyze も同じ");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn analyze_reading_matches_analyze_light_except_table_accents() {
+        let f = Furigana::minimal().unwrap();
+        for text in [
+            "私は学生です",
+            "今日は2時から",
+            "ありがとう",
+            "水田さんが来た",
+        ] {
+            let light = f.analyze_light(text);
+            let reading = f.analyze_reading(text);
+            assert_eq!(light.tokens.len(), reading.tokens.len(), "{text}");
+            for (a, b) in light.tokens.iter().zip(&reading.tokens) {
+                assert_eq!(a.surface, b.surface, "{text}");
+                assert_eq!(a.reading, b.reading, "{text}");
+                assert_eq!(a.range, b.range, "{text}");
+                assert_eq!(a.band, b.band, "{text}");
+            }
+        }
     }
 
     #[test]

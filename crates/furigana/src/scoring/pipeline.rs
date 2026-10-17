@@ -122,11 +122,24 @@ impl<'a> Pipeline<'a> {
     /// (`band` と accent を含む) は [`Self::analyze`] と同じ。 読みと band だけ要る呼び出し用
     #[must_use]
     pub fn analyze_light(&self, input: &str) -> AnalyzeResult {
+        self.analyze_light_inner(input, true)
+    }
+
+    /// [`Self::analyze_light`] から、 accent 専用の表 / 推定の付与も省いた版 (読みと `band` だけ)。
+    /// 辞書の bracket が持つ accent は残るが、 表引きの accent は付かない
+    #[must_use]
+    pub fn analyze_reading(&self, input: &str) -> AnalyzeResult {
+        self.analyze_light_inner(input, false)
+    }
+
+    fn analyze_light_inner(&self, input: &str, accent: bool) -> AnalyzeResult {
         let mut result = self.with_providers(input, run_analyze_light);
         self.apply_postpass_with_band(&mut result.tokens);
-        self.accent_lexicon.fill(&mut result.tokens);
-        if self.estimate_accent {
-            accent_estimate::estimate(&mut result.tokens, self.analyzer);
+        if accent {
+            self.accent_lexicon.fill(&mut result.tokens);
+            if self.estimate_accent {
+                accent_estimate::estimate(&mut result.tokens, self.analyzer);
+            }
         }
         result
     }
