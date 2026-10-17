@@ -85,6 +85,7 @@ curl -X POST http://127.0.0.1:8000/furigana \
 | `silence_symbols` | bool | `false` | `tts`: 絵文字 / 顔文字パーツを読み上げから外す |
 | `segmented` | bool | `false` | `tts` / `hiragana` のとき分割配列を `segments` に同梱。 `aquestalk` ではアクセント句境界で分割した記号列を同梱 |
 | `max_segment_len` | int | `60` | `tts` / `hiragana` で `segmented=true` のときの 1 セグメント最大文字数 |
+| `name` | string | 省略 (自動) | 入力が人名かどうかのヒント。 `1` / `name` = 人名として読む (手がかり無しで姓 + 名の表を引く。 ユーザー名・名簿の欄向け)、 `0` / `off` = 人名の専用経路を使わない。 token 経路の mode (tts / ruby / hiragana / analyze / accent …) に効く。 記号列 mode (voicevox / aquestalk) は対象外 |
 | `unknown_alpha` | string | `drop` | `voicevox-aques` / `aquestalk`: 辞書に無い英字語の扱い。 `drop` (記号列から落とす) / `spell` (1 文字ずつ英字の名前で読む: `AviUtl` → エーブイアイユーティーエル) / `romaji` (ローマ字読み・**実験的**)。 それ以外の値は 400 |
 | `devoice` | bool | `true` | `aquestalk`: 無声化記号 `_` を自動付与するか |
 | `max_len` | int | `255` | `aquestalk` + `segmented=true` のときの 1 塊の最大文字数 (省略時は AquesTalk の目安上限) |

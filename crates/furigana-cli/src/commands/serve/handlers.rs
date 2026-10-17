@@ -121,6 +121,7 @@ pub(super) async fn do_reload(state: &AppState, source: ReloadSource) -> Result<
         // executor を塞がない。 失敗時は swap せず旧 dict を温存し reload を atomic に保つ。
         f.preload()
             .map_err(|e| format!("preload after reload failed: {e}"))?;
+        f.warm_up();
         Ok(f)
     })
     .await
@@ -174,7 +175,7 @@ fn process(
     // 既存 mode (tts/ruby/...) は従来通り tokenize → 変換。
     if mode == "analyze" {
         let analyze_start = Instant::now();
-        let analyze_result = f.analyze(&text);
+        let analyze_result = f.analyze_with_hint(&text, params.name_hint());
         let t_convert_ms = analyze_start.elapsed().as_secs_f64() * 1000.0;
         let t_total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -242,7 +243,8 @@ fn process(
 
     if mode == "accent" {
         let accent_start = Instant::now();
-        let accent_result = f.to_accent(&text);
+        let accent_result =
+            furigana::AccentResult::from_analysis(f.analyze_with_hint(&text, params.name_hint()));
         let t_convert_ms = accent_start.elapsed().as_secs_f64() * 1000.0;
         let t_total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -335,7 +337,7 @@ fn process(
     }
 
     let tokens_start = Instant::now();
-    let tokens = f.tokenize(&text);
+    let tokens = f.tokenize_with_hint(&text, params.name_hint());
     let t_tokenize_ms = tokens_start.elapsed().as_secs_f64() * 1000.0;
 
     let convert_start = Instant::now();
@@ -607,7 +609,20 @@ mod tests {
             unknown_alpha: None,
             max_len: None,
             debug: false,
+            name: None,
         }
+    }
+
+    #[test]
+    fn name_param_maps_to_hint() {
+        let mut p = base_params();
+        assert_eq!(p.name_hint(), furigana::NameHint::Auto);
+        p.name = Some("1".into());
+        assert_eq!(p.name_hint(), furigana::NameHint::Name);
+        p.name = Some("0".into());
+        assert_eq!(p.name_hint(), furigana::NameHint::NotName);
+        p.name = Some("zzz".into());
+        assert_eq!(p.name_hint(), furigana::NameHint::Auto);
     }
 
     #[test]

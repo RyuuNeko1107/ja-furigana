@@ -96,7 +96,7 @@ impl CandidateProvider for OdorijiProvider {
 /// - 「々」 単独 → 直前 token なし → no-op
 pub fn apply_rendaku_inplace(tokens: &mut [Token]) {
     for i in 1..tokens.len() {
-        if tokens[i].surface == ODORIJI_CHAR.to_string().as_str() {
+        if tokens[i].surface.chars().eq(std::iter::once(ODORIJI_CHAR)) {
             let prev_reading = tokens[i - 1].reading.clone();
             if prev_reading.is_empty() {
                 continue;
@@ -154,6 +154,8 @@ mod tests {
             ambiguous: false,
             alternatives: Vec::new(),
             is_name: false,
+            band: 0,
+            why: None,
         }
     }
 

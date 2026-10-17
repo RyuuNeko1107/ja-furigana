@@ -196,24 +196,36 @@ pub use crate::char_class::is_emoji_char;
 pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
     let mut tokens: Vec<ProtectedToken> = Vec::new();
 
+    // 各 regex が必ず要求する字が無い入力 (大半の行) は、 regex を走らせずに飛ばす
+    // URL は `.` か `://` を、 メールは `@` を、 文字参照は `&` を、 括弧つき顔文字は `(` `（` を要求する。
+
     // URL
-    for m in URL_RE.find_iter(input) {
-        tokens.push(ProtectedToken {
-            range: m.range(),
-            kind: ProtectedKind::Url,
-        });
+    if input.contains('.') || input.contains("://") {
+        for m in URL_RE.find_iter(input) {
+            tokens.push(ProtectedToken {
+                range: m.range(),
+                kind: ProtectedKind::Url,
+            });
+        }
     }
 
     // Email
-    for m in EMAIL_RE.find_iter(input) {
-        tokens.push(ProtectedToken {
-            range: m.range(),
-            kind: ProtectedKind::Email,
-        });
+    if input.contains('@') {
+        for m in EMAIL_RE.find_iter(input) {
+            tokens.push(ProtectedToken {
+                range: m.range(),
+                kind: ProtectedKind::Email,
+            });
+        }
     }
 
     // HTML 文字参照。 URL の中 (`?a=1&amp;b=2`) のものは URL が取る
-    for m in ENTITY_RE.find_iter(input) {
+    let entity_matches = if input.contains('&') {
+        ENTITY_RE.find_iter(input).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    for m in entity_matches {
         let range = m.range();
         if tokens
             .iter()
@@ -228,13 +240,15 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
     }
 
     // 顔文字
-    for caps in KAOMOJI_RE.captures_iter(input) {
-        if is_kaomoji_inner(&caps[1]) {
-            let m = caps.get(0).unwrap();
-            tokens.push(ProtectedToken {
-                range: m.range(),
-                kind: ProtectedKind::Kaomoji,
-            });
+    if input.contains(['(', '（']) {
+        for caps in KAOMOJI_RE.captures_iter(input) {
+            if is_kaomoji_inner(&caps[1]) {
+                let m = caps.get(0).unwrap();
+                tokens.push(ProtectedToken {
+                    range: m.range(),
+                    kind: ProtectedKind::Kaomoji,
+                });
+            }
         }
     }
 
@@ -258,19 +272,18 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
     // 絵文字 (連続範囲を 1 つの token に集約)。 VS16 / 肌色 / ZWJ / keycap (1️⃣) / 国旗も同じ token に含める
     let mut current_emoji_start: Option<usize> = None;
     let mut current_emoji_end: usize = 0;
-    let chars: Vec<(usize, char)> = input.char_indices().collect();
-    for (i, &(idx, c)) in chars.iter().enumerate() {
+    // ASCII だけの入力に絵文字は無い (keycap の 1️⃣ も ASCII 以外の続きを要る)
+    let scan_emoji = !input.is_ascii();
+    for (idx, c) in input.char_indices().filter(|_| scan_emoji) {
         let char_end = idx + c.len_utf8();
-        let keycap_base = matches!(c, '0'..='9' | '#' | '*')
-            && chars
-                .get(i + 1)
-                .is_some_and(|&(_, n)| n == '\u{20E3}' || n == '\u{FE0F}')
-            && chars
-                .get(i + 1)
-                .map(|&(_, n)| {
-                    n == '\u{20E3}' || chars.get(i + 2).is_some_and(|&(_, m)| m == '\u{20E3}')
-                })
-                .unwrap_or(false);
+        let keycap_base = matches!(c, '0'..='9' | '#' | '*') && {
+            let mut next = input[char_end..].chars();
+            match next.next() {
+                Some('\u{20E3}') => true,
+                Some('\u{FE0F}') => next.next() == Some('\u{20E3}'),
+                _ => false,
+            }
+        };
         let joiner_in_run = current_emoji_start.is_some() && crate::char_class::is_emoji_joiner(c);
         if is_emoji_char(c) || keycap_base || joiner_in_run {
             if current_emoji_start.is_none() {
@@ -541,7 +554,13 @@ impl CandidateProvider for ProtectTokenProvider {
         pos: usize,
         out: &mut Vec<RawCandidate<'b>>,
     ) {
-        for token in &self.tokens {
+        // tokens は start の昇順 (extract_protected_tokens が並べる)。 位置ごとに全件を舐めると、
+        // 絵文字・URL の多い長い入力で 「位置数 × 件数」 になるので、 二分探索で pos の先頭へ飛ぶ
+        let first = self.tokens.partition_point(|t| t.range.start < pos);
+        for token in self.tokens[first..]
+            .iter()
+            .take_while(|t| t.range.start <= pos)
+        {
             if token.range.start == pos {
                 let surface = &ctx.input[token.range.clone()];
                 let char_count = surface.chars().count();
@@ -1021,7 +1040,9 @@ impl CandidateProvider for AlphabetPassthroughProvider {
         pos: usize,
         out: &mut Vec<RawCandidate<'b>>,
     ) {
-        for range in &self.ranges {
+        // ranges は start の昇順で重ならない (find_alphabet_ranges が走査順に積む)。 二分探索で pos の先頭へ飛ぶ
+        let first = self.ranges.partition_point(|r| r.start < pos);
+        for range in self.ranges[first..].iter().take_while(|r| r.start <= pos) {
             if range.start != pos {
                 continue;
             }
@@ -1232,6 +1253,48 @@ mod tests {
     }
 
     // (is_emoji_char の unit test は crate::char_class 側に移動)
+
+    // ─── 変異テスト由来の追加 ────────────────────────────────────────────────
+
+    #[test]
+    fn joiner_outside_an_emoji_run_is_not_an_emoji() {
+        // ZWJ / VS16 / keycap 記号 / 肌色は、 絵文字の途中でなければ単独で絵文字にならない
+        for joiner in ["\u{200D}", "\u{FE0F}"] {
+            let input = format!("あ{joiner}い");
+            assert!(
+                extract_protected_tokens(&input).is_empty(),
+                "{joiner:?} alone"
+            );
+        }
+    }
+
+    #[test]
+    fn keycap_without_variation_selector_is_one_emoji_token() {
+        // 1⃣ (VS16 なしの keycap) も 1 つの絵文字
+        let input = "あ1\u{20E3}い";
+        let tokens = extract_protected_tokens(input);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, ProtectedKind::Emoji);
+        assert_eq!(&input[tokens[0].range.clone()], "1\u{20E3}");
+    }
+
+    #[test]
+    fn protect_provider_emits_candidate_for_first_of_several_tokens() {
+        // 二分探索の起点: 先頭の保護 token の位置でも、 後ろの token の位置でも候補が出る
+        let input = "あ😀いう😀";
+        let p = ProtectTokenProvider::new(input);
+        let starts: Vec<usize> = p.tokens().iter().map(|t| t.range.start).collect();
+        assert_eq!(starts.len(), 2);
+        let c = ctx(input);
+        for &pos in &starts {
+            let mut out = Vec::new();
+            p.candidates_at(&c, pos, &mut out);
+            assert_eq!(out.len(), 1, "pos {pos}");
+        }
+        let mut out = Vec::new();
+        p.candidates_at(&c, 0, &mut out);
+        assert!(out.is_empty());
+    }
 
     // ─── URL extraction ──────────────────────────────────────────────────────
 

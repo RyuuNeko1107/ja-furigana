@@ -26,79 +26,79 @@ const DATE_NUM_PAT: &str = r"(?:[0-9０-９]{1,4}|[一二三四五六七八九�
 /// 「三百回目」 「一万回目」 等を catch する。
 const KANJI_NUM_PAT: &str = r"[一二三四五六七八九十百千万億〇零]{1,16}";
 
-pub(super) static TIME_COLON_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9０-９]{1,2})[:：]([0-9０-９]{2})(?:[:：]([0-9０-９]{2}))?")
+pub(super) static TIME_COLON_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"([0-9０-９]{1,2})[:：]([0-9０-９]{2})(?:[:：]([0-9０-９]{2}))?")
         .expect("scoring TIME_COLON regex build failed")
 });
 
 /// 比 / スコア (1:1 / 50:50 / 3:7)。 時刻として読めない `数字:数字`
-pub(super) static RATIO_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9０-９]{1,3})[:：]([0-9０-９]{1,3})")
+pub(super) static RATIO_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"([0-9０-９]{1,3})[:：]([0-9０-９]{1,3})")
         .expect("scoring RATIO regex build failed")
 });
 
-pub(super) static TIME_JP_FULL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9０-９]{1,2})時(?:([0-9０-９]{1,2})分)?(?:([0-9０-９]{1,2})秒)?")
+pub(super) static TIME_JP_FULL_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"([0-9０-９]{1,2})時(?:([0-9０-９]{1,2})分)?(?:([0-9０-９]{1,2})秒)?")
         .expect("scoring TIME_JP regex build failed")
 });
 
 /// 漢数字の和式時刻 `三時五分` / `零時三十分二十秒`。 分 を必須にする (`三時` 単独は 時 の助数詞側、
 /// `十分` / `五分` / `三分の一` は前に 時 が無いので当たらない)。 議事録の 「午後零時三分散会」 が
 /// 三 + 分 (ぶん) + 散会 に割れていた (2026-09-28)
-pub(super) static TIME_JP_KANJI_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([〇零一二三四五六七八九十]{1,3})時([〇一二三四五六七八九十]{1,4})分(?:([〇一二三四五六七八九十]{1,4})秒)?")
+pub(super) static TIME_JP_KANJI_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"([〇零一二三四五六七八九十]{1,3})時([〇一二三四五六七八九十]{1,4})分(?:([〇一二三四五六七八九十]{1,4})秒)?")
         .expect("scoring TIME_JP_KANJI regex build failed")
 });
 
-pub(super) static DATE_KANJI_FULL_RE: Lazy<Regex> = Lazy::new(|| {
+pub(super) static DATE_KANJI_FULL_RE: Lazy<HeadRegex> = Lazy::new(|| {
     let pat = format!(r"({DATE_NUM_PAT})年({DATE_NUM_PAT})月({DATE_NUM_PAT})日");
-    Regex::new(&pat).expect("scoring DATE_KANJI_FULL regex build failed")
+    HeadRegex::new(&pat).expect("scoring DATE_KANJI_FULL regex build failed")
 });
 
-pub(super) static DATE_KANJI_MD_RE: Lazy<Regex> = Lazy::new(|| {
+pub(super) static DATE_KANJI_MD_RE: Lazy<HeadRegex> = Lazy::new(|| {
     let pat = format!(r"({DATE_NUM_PAT})月({DATE_NUM_PAT})日");
-    Regex::new(&pat).expect("scoring DATE_KANJI_MD regex build failed")
+    HeadRegex::new(&pat).expect("scoring DATE_KANJI_MD regex build failed")
 });
 
 /// 分数 「N分のM」 (間の半角空白は任意: Qiita 等の 「33 分の 10」 / 「14 分の 1」)。 2026-09-27
 /// 空白が入ると 「33 分」 が助数詞 (ふん) と区切られず 分の = ふんの になっていた。
-pub(super) static FRACTION_RE: Lazy<Regex> = Lazy::new(|| {
+pub(super) static FRACTION_RE: Lazy<HeadRegex> = Lazy::new(|| {
     let pat = format!(r"({NUM_PAT}) ?分の ?({NUM_PAT})");
-    Regex::new(&pat).expect("scoring FRACTION regex build failed")
+    HeadRegex::new(&pat).expect("scoring FRACTION regex build failed")
 });
 
 /// 位取りの漢数字の小数 (一・〇〇七 / 三・〇〇)。 小数部 2 桁以上に限る (一・二・三 のような列挙を拾わない)
-pub(super) static KANJI_DECIMAL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new("^([〇一二三四五六七八九]{1,6})・([〇一二三四五六七八九]{2,12})")
+pub(super) static KANJI_DECIMAL_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new("^([〇一二三四五六七八九]{1,6})・([〇一二三四五六七八九]{2,12})")
         .expect("scoring KANJI_DECIMAL regex build failed")
 });
 
 /// 小数部 1 桁の漢数字の小数 (三八・四)。 整数部が位取り 2 桁の時だけ使う (try_kanji_decimal)
-pub(super) static KANJI_DECIMAL_SHORT_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new("^([〇一二三四五六七八九]{2})・([〇一二三四五六七八九])")
+pub(super) static KANJI_DECIMAL_SHORT_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new("^([〇一二三四五六七八九]{2})・([〇一二三四五六七八九])")
         .expect("scoring KANJI_DECIMAL_SHORT regex build failed")
 });
 
 /// ドット区切り 3 要素以上の数字列 (バージョン `1.2.3` / IP `192.168.0.1`)。
 /// 小数としては読めない (1.2 と .3 に割れる) ので、 各要素を数として読み 「テン」 で繋ぐ。
-pub(super) static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[0-9０-９]+(?:\.[0-9０-９]+){2,}").expect("scoring VERSION regex build failed")
+pub(super) static VERSION_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"[0-9０-９]+(?:\.[0-9０-９]+){2,}").expect("scoring VERSION regex build failed")
 });
 
 /// 電話番号の形。 区切りは `-` か空白。
 /// - 国際: `+81-90-1234-5678` / `+1 555-123-4567` / `+44 7911 123456` (桁数の検査は呼び出し側)
 /// - 国内: `03-1234-5678` / `090 1234 5678` / `0120-123-456`
 /// - ハイフンなしの携帯: `09012345678`
-pub(super) static PHONE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
+pub(super) static PHONE_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(
         r"\+[0-9]{1,3}[- ]?[0-9]{1,5}(?:[- ][0-9]{1,6}){1,3}|0[0-9]{1,3}[- ][0-9]{1,4}[- ][0-9]{3,4}|0[5789]0[0-9]{8}",
     )
     .expect("scoring PHONE regex build failed")
 });
 
 /// `N/M` (日付 12/25 か分数 1/2 か。 文脈で決める。 3 桁まで: 1/144 (縮尺) / 50/100 は分数)
-pub(super) static SLASH_PAIR_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9]{1,3})[/\u{2044}]([0-9]{1,3})")
+pub(super) static SLASH_PAIR_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"([0-9]{1,3})[/\u{2044}]([0-9]{1,3})")
         .expect("scoring SLASH_PAIR regex build failed")
 });
 
@@ -157,19 +157,19 @@ pub(super) static SLASH_SENTENCE_FRACTION_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// 年付きの日付 `2025/10/13` / `2000-10-12` (年 4 桁。 区切りは `/` か `-` で、 2 つとも同じ)
-pub(super) static YMD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9]{4})([/\-.])([0-9]{1,2})([/\-.])([0-9]{1,2})")
+pub(super) static YMD_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"([0-9]{4})([/\-.])([0-9]{1,2})([/\-.])([0-9]{1,2})")
         .expect("scoring YMD regex build failed")
 });
 
 /// 郵便番号 `〒100-0001` / `〒1000001` / `郵便番号 100-0001` の数字部分 (3 桁 + 4 桁、 間のハイフンは任意)
-pub(super) static POSTAL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([0-9]{3})[-\u2010-\u2015\u2212ー]?([0-9]{4})")
+pub(super) static POSTAL_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"([0-9]{3})[-\u2010-\u2015\u2212ー]?([0-9]{4})")
         .expect("scoring POSTAL regex build failed")
 });
 
-pub(super) static DIGIT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
+pub(super) static DIGIT_RE: Lazy<HeadRegex> =
+    Lazy::new(|| HeadRegex::new(NUM_PAT).expect("scoring DIGIT regex build failed"));
 
 // ─── 動的 regex builders (data 依存) ─────────────────────────────────────────
 
@@ -188,7 +188,9 @@ pub(super) static DIGIT_RE: Lazy<Regex> =
 /// bare 漢数字 + 助数詞 は従来通り Lindera / chunker に委ねる)。 こうしないと
 /// 「一日中」 の 「一日」 が counter candidate 化して chunker 互換が崩れる
 /// (= `tests::single_counter_kansuji_only_in_date_pattern`)。
-pub(super) fn build_counter_regexes(counters: &CountersData) -> (Option<Regex>, Option<Regex>) {
+pub(super) fn build_counter_regexes(
+    counters: &CountersData,
+) -> (Option<HeadRegex>, Option<HeadRegex>) {
     let mut base: Vec<String> = counters.simple.keys().cloned().collect();
     let mut recursive: Vec<String> = Vec::new();
     // 漢数字 bare 対応に opt-in した助数詞 (= `kanji_numeral = true`)。
@@ -215,11 +217,11 @@ pub(super) fn build_counter_regexes(counters: &CountersData) -> (Option<Regex>, 
     // recursive group は optional 化し、 bare match (recursive 無し) の採否は matcher 側で
     // `kanji_numeral` フラグにより gate する (= 「一日中」 の 「一日」 等の誤 counter 化を防ぐ)。
     if recursive.is_empty() {
-        let arabic = Regex::new(&format!(r"({NUM_PAT})(?: )?({base_joined})"))
+        let arabic = HeadRegex::new(&format!(r"({NUM_PAT})(?: )?({base_joined})"))
             .expect("scoring counter regex build failed");
         let kanji = if kanji_optin {
             Some(
-                Regex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})"))
+                HeadRegex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})"))
                     .expect("scoring kanji counter regex build failed"),
             )
         } else {
@@ -232,10 +234,10 @@ pub(super) fn build_counter_regexes(counters: &CountersData) -> (Option<Regex>, 
     let rec_alts: Vec<String> = recursive.iter().map(|s| regex::escape(s)).collect();
     let rec_joined = rec_alts.join("|");
 
-    let arabic = Regex::new(&format!(r"({NUM_PAT})(?: )?({base_joined})({rec_joined})?"))
+    let arabic = HeadRegex::new(&format!(r"({NUM_PAT})(?: )?({base_joined})({rec_joined})?"))
         .expect("scoring counter regex build failed");
     // recursive group を optional 化 (= 「一個目」 の recursive 形 + opt-in 助数詞の bare 形 両対応)。
-    let kanji = Regex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})({rec_joined})?"))
+    let kanji = HeadRegex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})({rec_joined})?"))
         .expect("scoring kanji counter regex build failed");
     (Some(arabic), Some(kanji))
 }
@@ -252,7 +254,7 @@ pub(super) fn build_scale_regex(
     scales: &ScalesData,
     units: &UnitsData,
     counters: &CountersData,
-) -> Option<Regex> {
+) -> Option<HeadRegex> {
     let kanjis: Vec<String> = scales.entries.iter().map(|e| e.kanji.clone()).collect();
     if kanjis.is_empty() {
         return None;
@@ -292,11 +294,11 @@ pub(super) fn build_scale_regex(
             trailing.join("|")
         )
     };
-    Some(Regex::new(&pat).expect("scoring scale regex build failed"))
+    Some(HeadRegex::new(&pat).expect("scoring scale regex build failed"))
 }
 
 /// SI 単位の regex を構築 (case-insensitive)。 空 list なら `None`。
-pub(super) fn build_si_unit_regex(units: &UnitsData) -> Option<Regex> {
+pub(super) fn build_si_unit_regex(units: &UnitsData) -> Option<HeadRegex> {
     let symbols: Vec<String> = units.entries.keys().cloned().collect();
     if symbols.is_empty() {
         return None;
@@ -305,7 +307,35 @@ pub(super) fn build_si_unit_regex(units: &UnitsData) -> Option<Regex> {
     sorted.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
     let alts: Vec<String> = sorted.iter().map(|s| regex::escape(s)).collect();
     let pat = format!(r"(?i)({NUM_PAT})({})", alts.join("|"));
-    Some(Regex::new(&pat).expect("scoring si_unit regex build failed"))
+    Some(HeadRegex::new(&pat).expect("scoring si_unit regex build failed"))
+}
+
+/// 「文字列の先頭で一致するか」 だけを見る正規表現。
+///
+/// 通常の `Regex::captures` は窓の中の **どこでも** 一致を探すので、 先頭で外れる場合 (大半の位置) も
+/// 窓全体を走査してから 「開始位置が 0 でない」 と捨てることになる。 先頭に固定した版 (`\A(?:…)`) を
+/// 別に持ち、 [`at_start`] はそちらで引く。 一致する場合の結果 (どの範囲・どの group か) は変わらない。
+/// 通常の `Regex` としての使い方 (`is_match` / `find` など) は deref でそのまま使える。
+#[derive(Debug, Clone)]
+pub(super) struct HeadRegex {
+    plain: Regex,
+    head: Regex,
+}
+
+impl HeadRegex {
+    pub(super) fn new(pattern: &str) -> Result<Self, regex::Error> {
+        Ok(Self {
+            plain: Regex::new(pattern)?,
+            head: Regex::new(&format!(r"\A(?:{pattern})"))?,
+        })
+    }
+}
+
+impl std::ops::Deref for HeadRegex {
+    type Target = Regex;
+    fn deref(&self) -> &Regex {
+        &self.plain
+    }
 }
 
 /// `re` が `hay` の先頭から (start == 0) match した場合のみ Captures を返す。
@@ -313,19 +343,18 @@ pub(super) fn build_si_unit_regex(units: &UnitsData) -> Option<Regex> {
 /// `re.captures` は先頭から離れた位置でも探すので、 長い入力の全位置でこれを呼ぶと入力長の 2 乗に比例する
 /// (`1.2.3.4.5.…` を 3 万文字並べた入力で 45 秒かかった)。 数や日付・型番の形は 256 byte より長くならないので、
 /// 先頭 256 byte (文字の途中では切らない) だけを見る
-pub(super) fn at_start<'h>(re: &Regex, hay: &'h str) -> Option<Captures<'h>> {
+pub(super) fn at_start<'h>(re: &HeadRegex, hay: &'h str) -> Option<Captures<'h>> {
     const WINDOW: usize = 256;
     let mut end = hay.len().min(WINDOW);
     while !hay.is_char_boundary(end) {
         end -= 1;
     }
-    re.captures(&hay[..end])
-        .filter(|c| c.get(0).is_some_and(|m| m.start() == 0))
+    re.head.captures(&hay[..end])
 }
 
 /// 読点区切りの漢数字 + 助数詞 (`一、〇〇〇円` / `三、五〇〇円` / `一二、三四五人`)。 法令・判例の金額表記。
 /// 先頭は 1〜3 桁 (1 桁目は 一〜九、 2 桁目以降は 〇 も可 = 一〇、〇〇〇)、 読点の後ろは **ちょうど 3 桁** の位取り漢数字 (〇〜九) の繰り返し。 counter が空なら `None`
-pub(super) fn build_grouped_kanji_counter_regex(counters: &CountersData) -> Option<Regex> {
+pub(super) fn build_grouped_kanji_counter_regex(counters: &CountersData) -> Option<HeadRegex> {
     let mut base: Vec<String> = counters.simple.keys().cloned().collect();
     for (key, rule) in &counters.counter {
         if rule.mode != Some(CounterMode::Recursive) {
@@ -342,7 +371,7 @@ pub(super) fn build_grouped_kanji_counter_regex(counters: &CountersData) -> Opti
         .collect::<Vec<_>>()
         .join("|");
     Some(
-        Regex::new(&format!(r"([一二三四五六七八九][〇一二三四五六七八九]{{0,2}}(?:、[〇一二三四五六七八九]{{3}})+)([万億兆千])?({base_joined})"))
+        HeadRegex::new(&format!(r"([一二三四五六七八九][〇一二三四五六七八九]{{0,2}}(?:、[〇一二三四五六七八九]{{3}})+)([万億兆千])?({base_joined})"))
             .expect("scoring grouped kanji counter regex build failed"),
     )
 }
@@ -409,12 +438,12 @@ mod tests {
         assert!(m.get(0).unwrap().end() <= 256);
         // 文字の途中では切らない (全角数字は 3 byte)
         let wide = "１．２．３".repeat(200);
-        assert!(at_start(&Regex::new(r"[０-９]").unwrap(), &wide).is_some());
+        assert!(at_start(&HeadRegex::new(r"[０-９]").unwrap(), &wide).is_some());
     }
 
     #[test]
     fn at_start_rejects_mid_string_match() {
-        let re = Regex::new(r"[0-9]+").unwrap();
+        let re = HeadRegex::new(r"[0-9]+").unwrap();
         assert!(at_start(&re, "12x").is_some());
         assert!(
             at_start(&re, "x12").is_none(),
