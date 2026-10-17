@@ -276,24 +276,32 @@ impl PersonNamePass<'_> {
     fn repair_kana_straddle(&self, tokens: &mut Vec<Token>) {
         let mut i = 1;
         while i < tokens.len() {
-            let surface = tokens[i].surface.clone();
-            let head: String = surface.chars().take_while(|c| !is_kana(*c)).collect();
-            let tail = &surface[head.len()..];
-            let straddles = !head.is_empty()
-                && !tail.is_empty()
-                && all_kanji(&head)
-                && head.chars().count() <= 3
-                && HONORIFICS.iter().any(|h| {
-                    h.len() > tail.len()
-                        && h.starts_with(tail)
-                        && tokens
-                            .get(i + 1)
-                            .is_some_and(|n| n.surface == h[tail.len()..])
-                });
-            if !straddles {
+            // 借用だけで判定し、 該当する時だけ文字列を取る (大半の token は該当しない)
+            let found = {
+                let surface = tokens[i].surface.as_str();
+                let head_len = surface
+                    .char_indices()
+                    .find(|(_, c)| is_kana(*c))
+                    .map_or(surface.len(), |(i, _)| i);
+                let (head, tail) = surface.split_at(head_len);
+                let straddles = !head.is_empty()
+                    && !tail.is_empty()
+                    && all_kanji(head)
+                    && head.chars().count() <= 3
+                    && HONORIFICS.iter().any(|h| {
+                        h.len() > tail.len()
+                            && h.starts_with(tail)
+                            && tokens
+                                .get(i + 1)
+                                .is_some_and(|n| n.surface == h[tail.len()..])
+                    });
+                straddles.then(|| (head.to_string(), tail.to_string()))
+            };
+            let Some((head, tail)) = found else {
                 i += 1;
                 continue;
-            }
+            };
+            let tail = tail.as_str();
             let honorific = format!("{}{}", tail, tokens[i + 1].surface);
             let tail_kata = hira_to_kata(tail);
             let reading = hira_to_kata(&tokens[i].reading);

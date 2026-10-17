@@ -14,8 +14,10 @@
 //! - **lib は collect しない** (OSS ローカル完結方針)、 caller 任意で persist
 
 use crate::scoring::bracket::{parse_bracket_notation, strip_intonation_markers, AccentPhrase};
-use crate::scoring::candidate::{Candidate, CandidateProvider, RawCandidate, ScoringContext};
-use crate::scoring::engine::solve_path;
+use crate::scoring::candidate::{
+    Candidate, CandidateProvider, RawCandidate, ScoringContext, Solver,
+};
+use crate::scoring::engine::{solve_path, solve_path_raw};
 use serde::Serialize;
 use std::ops::Range;
 
@@ -64,6 +66,28 @@ pub struct Token {
 }
 
 impl Token {
+    /// 採択 path の [`RawCandidate`] から [`Token`] を作る (公開型 [`Candidate`] を経由しないので、
+    /// surface / reading の文字列確保が 1 回ずつで済む)。 [`Self::from_candidate`] と同じ結果になる
+    pub(crate) fn from_raw(c: RawCandidate<'_>, input: &str) -> Self {
+        let (reading, accent_phrases) = if c.reading.contains(['[', ']']) {
+            let parsed = parse_bracket_notation(&c.reading);
+            (parsed.reading, parsed.accent_phrases)
+        } else {
+            (c.reading.into_owned(), Vec::new())
+        };
+        Self {
+            surface: input.get(c.range.clone()).unwrap_or_default().to_string(),
+            reading,
+            range: c.range,
+            accent_phrases,
+            ambiguous: false,
+            alternatives: Vec::new(),
+            is_name: c.is_name,
+            why: None,
+            band: c.score.band,
+        }
+    }
+
     /// [`Candidate`] から [`Token`] へ変換 (score を捨てる)。
     #[must_use]
     pub fn from_candidate(c: &Candidate) -> Self {
@@ -118,9 +142,23 @@ pub fn analyze_tokens<'a>(
     ctx: &ScoringContext<'a>,
     providers: &[&'a dyn CandidateProvider],
 ) -> Vec<Token> {
-    solve_path(ctx, providers)
-        .iter()
-        .map(Token::from_candidate)
+    path_tokens(ctx, providers)
+}
+
+/// 採択 path の token 列。 band engine は [`RawCandidate`] から直接作る (cost solver だけ従来の経路)
+fn path_tokens<'a>(
+    ctx: &ScoringContext<'a>,
+    providers: &[&'a dyn CandidateProvider],
+) -> Vec<Token> {
+    if matches!(ctx.solver, Solver::Cost { .. }) {
+        return solve_path(ctx, providers)
+            .iter()
+            .map(Token::from_candidate)
+            .collect();
+    }
+    solve_path_raw(ctx, providers)
+        .into_iter()
+        .map(|c| Token::from_raw(c, ctx.input))
         .collect()
 }
 
@@ -134,10 +172,7 @@ pub fn analyze_light<'a>(
     ctx: &ScoringContext<'a>,
     providers: &[&'a dyn CandidateProvider],
 ) -> AnalyzeResult {
-    let tokens: Vec<Token> = solve_path(ctx, providers)
-        .iter()
-        .map(Token::from_candidate)
-        .collect();
+    let tokens: Vec<Token> = path_tokens(ctx, providers);
     let path_indices: Vec<usize> = tokens.iter().map(|t| t.range.start).collect();
     let boundary_regions: Vec<Range<usize>> = ctx
         .boundary
