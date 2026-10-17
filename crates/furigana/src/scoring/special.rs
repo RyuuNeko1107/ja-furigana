@@ -554,7 +554,13 @@ impl CandidateProvider for ProtectTokenProvider {
         pos: usize,
         out: &mut Vec<RawCandidate<'b>>,
     ) {
-        for token in &self.tokens {
+        // tokens は start の昇順 (extract_protected_tokens が並べる)。 位置ごとに全件を舐めると、
+        // 絵文字・URL の多い長い入力で 「位置数 × 件数」 になるので、 二分探索で pos の先頭へ飛ぶ
+        let first = self.tokens.partition_point(|t| t.range.start < pos);
+        for token in self.tokens[first..]
+            .iter()
+            .take_while(|t| t.range.start <= pos)
+        {
             if token.range.start == pos {
                 let surface = &ctx.input[token.range.clone()];
                 let char_count = surface.chars().count();
@@ -1034,7 +1040,9 @@ impl CandidateProvider for AlphabetPassthroughProvider {
         pos: usize,
         out: &mut Vec<RawCandidate<'b>>,
     ) {
-        for range in &self.ranges {
+        // ranges は start の昇順で重ならない (find_alphabet_ranges が走査順に積む)。 二分探索で pos の先頭へ飛ぶ
+        let first = self.ranges.partition_point(|r| r.start < pos);
+        for range in self.ranges[first..].iter().take_while(|r| r.start <= pos) {
             if range.start != pos {
                 continue;
             }
