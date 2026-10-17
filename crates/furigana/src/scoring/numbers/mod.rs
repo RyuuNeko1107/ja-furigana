@@ -68,7 +68,7 @@ use patterns::{
     SLASH_DATE_AFTER_RE, SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE,
     SLASH_PAIR_RE, SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
     SLASH_SENTENCE_FRACTION_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
-    YMD_RE,
+    YMD_RE, YM_RE,
 };
 use regex::Regex;
 
@@ -320,6 +320,11 @@ impl NumberCandidateProvider {
     /// 数値 + 助数詞 を読みに変換 (= 日付内、 「N日」 が days.toml 特殊読みを採用)。
     fn read_counter_in_date(&self, raw_num: &str, counter: &str) -> String {
         let normalized = kansuji_to_arabic_date(raw_num).unwrap_or_else(|| raw_num.to_string());
+        // 先頭のゼロは読まない (2026/09/05 の 09 → 9月 = くがつ、 05 → 5日 = いつか)
+        let normalized = match normalized.trim_start_matches('0') {
+            "" => normalized.clone(),
+            trimmed => trimmed.to_string(),
+        };
         let nk = number_to_katakana(&normalized);
         euphonic_counter_read(&nk, counter, &normalized, &self.counters, &self.days)
     }
@@ -1697,6 +1702,33 @@ impl NumberCandidateProvider {
         out.push(self.make(input, pos, whole.end(), reading));
     }
 
+    /// 年月 (`2026/09`)。 年 19xx / 20xx + 月 1〜12。 年月日 (`2026/09/15`) は `try_ymd` が読む。
+    /// 数字・区切りの途中 (`1/2026/09` / `2026/091` / `2026/09/15`) や、 英字の直後 (版・型番) は読まない
+    fn try_year_month(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
+        let Some(caps) = at_start(&YM_RE, rest) else {
+            return;
+        };
+        let whole = caps.get(0).unwrap();
+        let (y, m) = (caps.get(1).unwrap().as_str(), caps.get(2).unwrap().as_str());
+        let Ok(mn) = m.parse::<u32>() else {
+            return;
+        };
+        let prev = input[..pos].chars().next_back();
+        let after = &rest[whole.end()..];
+        if !(1..=12).contains(&mn)
+            || prev.is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '.'))
+            || after.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '/' | '-'))
+        {
+            return;
+        }
+        let reading = format!(
+            "{}{}",
+            self.read_counter_in_date(y, "年"),
+            self.read_counter_in_date(m, "月")
+        );
+        out.push(self.make(input, pos, whole.end(), reading));
+    }
+
     /// `N/M` を日付か分数か決める。 雑談では日付のほうが多いので、 手がかりが無ければ日付に倒す。
     /// - 分数の手がかり (直後: サイズ / 倍 / 割 / くらい / ぐらい / ずつ …、 直前: HP / MP / 確率 / ゲージ …) が最優先
     ///   (1/2サイズ = にぶんのいちさいず / HP 12/25 = にじゅうごぶんのじゅうに)
@@ -1972,6 +2004,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_kanji_decimal(input, pos, rest, out);
         self.try_phone(input, pos, rest, out);
         self.try_ymd(input, pos, rest, out);
+        self.try_year_month(input, pos, rest, out);
         self.try_postal_after_label(input, pos, rest, out);
         self.try_slash_pair(input, pos, rest, out);
         self.try_version(input, pos, rest, out);
