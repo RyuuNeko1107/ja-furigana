@@ -79,7 +79,7 @@ const TITLES: &[&str] = &[
 /// 結合した名前として許す最大文字数 (姓 1〜3 + 名 1〜4)。 漢字の偶然の連続での誤爆を避ける。
 const MAX_RUN_CHARS: usize = 7;
 /// 手がかりの前に遡る token 数の上限。
-const MAX_RUN_TOKENS: usize = 3;
+const MAX_RUN_TOKENS: usize = 5;
 /// 組み直す前の読みを `alternatives` に残すときの重み。
 const ALT_WEIGHT: u8 = 50;
 
@@ -123,6 +123,10 @@ fn same_reading(a: &str, b: &str) -> bool {
             .collect()
     };
     n(a) == n(b)
+}
+
+fn is_kana(c: char) -> bool {
+    matches!(c, 'ぁ'..='ゖ' | 'ァ'..='ヺ')
 }
 
 fn all_kanji(s: &str) -> bool {
@@ -243,9 +247,79 @@ impl<'a> PersonNamePass<'a> {
 }
 
 impl PersonNamePass<'_> {
+    /// 「利さ | ん」 「利く | ん」 のように、 名の最後の漢字に敬称の頭のかな (さ / く) が付いて 1 token になり、
+    /// 敬称が token をまたいでいる所を 「利 | さん」 に直す。 直前の漢字列が姓 (+ 名) の表に当たる時だけ。
+    fn repair_kana_straddle(&self, tokens: &mut Vec<Token>) {
+        let mut i = 1;
+        while i < tokens.len() {
+            let surface = tokens[i].surface.clone();
+            let head: String = surface.chars().take_while(|c| !is_kana(*c)).collect();
+            let tail = &surface[head.len()..];
+            let straddles = !head.is_empty()
+                && !tail.is_empty()
+                && all_kanji(&head)
+                && head.chars().count() <= 3
+                && HONORIFICS.iter().any(|h| {
+                    h.len() > tail.len()
+                        && h.starts_with(tail)
+                        && tokens
+                            .get(i + 1)
+                            .is_some_and(|n| n.surface == h[tail.len()..])
+                });
+            if !straddles {
+                i += 1;
+                continue;
+            }
+            let honorific = format!("{}{}", tail, tokens[i + 1].surface);
+            let tail_kata = hira_to_kata(tail);
+            let reading = hira_to_kata(&tokens[i].reading);
+            let Some(head_reading) = reading.strip_suffix(tail_kata.as_str()) else {
+                i += 1;
+                continue;
+            };
+            let mut run = head.clone();
+            let mut hit = false;
+            for s in (i.saturating_sub(MAX_RUN_TOKENS)..i).rev() {
+                if !all_kanji(&tokens[s].surface) {
+                    break;
+                }
+                run.insert_str(0, &tokens[s].surface);
+                if run.chars().count() > MAX_RUN_CHARS {
+                    break;
+                }
+                if self.parse(&run).is_some() {
+                    hit = true;
+                    break;
+                }
+            }
+            if !hit {
+                i += 1;
+                continue;
+            }
+            let start = tokens[i].range.start;
+            let end = tokens[i + 1].range.end;
+            let mut left = tokens[i].clone();
+            left.surface = head.clone();
+            left.reading = head_reading.to_string();
+            left.range = start..start + head.len();
+            left.accent_phrases = Vec::new();
+            let mut right = tokens[i + 1].clone();
+            right.surface = honorific.clone();
+            right.reading = hira_to_kata(&honorific);
+            right.range = start + head.len()..end;
+            right.accent_phrases = Vec::new();
+            right.alternatives = Vec::new();
+            right.ambiguous = false;
+            right.is_name = false;
+            tokens.splice(i..=i + 1, [left, right]);
+            i += 2;
+        }
+    }
+
     /// 「太田 | 原さん」 のように、 形態素解析が 「名前の末尾の漢字 + 敬称」 を 1 token にした所を、
     /// 直前の漢字 token と合わせて姓 (または 姓 + 名) の表に当たる時だけ 「原 | さん」 に分ける。
     fn split_merged_honorific(&self, tokens: &mut Vec<Token>) {
+        self.repair_kana_straddle(tokens);
         let mut i = 1;
         while i < tokens.len() {
             let Some((head, suffix)) = HONORIFICS.iter().find_map(|h| {
@@ -630,6 +704,24 @@ mod tests {
         assert_eq!(s, ["太田原", "さん"]);
         assert_eq!(t[0].reading, "オオタワラ");
         assert_eq!(t[1].range, 9..15);
+    }
+
+    #[test]
+    fn honorific_straddling_a_kana_tail_is_repaired() {
+        let mut d = dict();
+        d.insert_name(true, "田中", "たなか");
+        d.insert_name(false, "弘利", "ひろとし");
+        // 形態素解析が 田中 | 弘 | 利さ | ん と切った所
+        let mut t = vec![
+            token("田中", "タナカ", 0..6),
+            token("弘", "ヒロ", 6..9),
+            token("利さ", "リサ", 9..16),
+            token("ん", "ン", 16..19),
+        ];
+        PersonNamePass::new(&d).apply(&mut t);
+        let s: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
+        assert_eq!(s, ["田中", "弘利", "さん"]);
+        assert_eq!(t[1].reading, "ヒロトシ");
     }
 
     #[test]
