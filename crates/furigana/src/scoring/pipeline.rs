@@ -23,7 +23,8 @@ use crate::analyzer::Analyzer;
 use crate::dict::Dict;
 use crate::scoring::accent_estimate;
 use crate::scoring::analyze::{
-    analyze as run_analyze, analyze_tokens as run_analyze_tokens, AnalyzeResult, Token,
+    analyze as run_analyze, analyze_light as run_analyze_light,
+    analyze_tokens as run_analyze_tokens, AnalyzeResult, Token,
 };
 use crate::scoring::boundary::BoundaryAnalysis;
 use crate::scoring::candidate::{CandidateProvider, ScoringContext, Solver};
@@ -88,6 +89,22 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// post-pass を掛け、 組み直された token (前後で範囲が変わったもの) の `band` を 50 (= 形態素解析だけで決まった扱い)
+    /// に戻す。 post-pass の結果は 「どの候補が採用されたか」 の対応を失っているため、 元の token の band を
+    /// 引き継がない。 範囲が変わらなかった token (読みだけ直したもの) は採用した候補の band のまま
+    fn apply_postpass_with_band(&self, tokens: &mut Vec<Token>) {
+        let before: Vec<(usize, usize)> = tokens
+            .iter()
+            .map(|t| (t.range.start, t.range.end))
+            .collect();
+        postpass::apply_all(tokens, self.dict, self.analyzer, self.name_hint);
+        for t in tokens.iter_mut() {
+            if before.binary_search(&(t.range.start, t.range.end)).is_err() {
+                t.band = 50;
+            }
+        }
+    }
+
     /// production 経路: 採択 path の [`Token`] 列を返す (post-pass 適用済)。
     ///
     /// debug 用の `candidates` 集約 / `alternatives` 抽出を行わない軽量版。 accent の付与
@@ -101,6 +118,19 @@ impl<'a> Pipeline<'a> {
         tokens
     }
 
+    /// [`Self::analyze`] から debug 用の集約 (`candidates` / `alternatives` / `why`) を省いた版。 採択 path の token 列
+    /// (`band` と accent を含む) は [`Self::analyze`] と同じ。 読みと band だけ要る呼び出し用
+    #[must_use]
+    pub fn analyze_light(&self, input: &str) -> AnalyzeResult {
+        let mut result = self.with_providers(input, run_analyze_light);
+        self.apply_postpass_with_band(&mut result.tokens);
+        self.accent_lexicon.fill(&mut result.tokens);
+        if self.estimate_accent {
+            accent_estimate::estimate(&mut result.tokens, self.analyzer);
+        }
+        result
+    }
+
     /// debug / inspection 経路: [`AnalyzeResult`] (採択 path + 候補 + boundary region) を返す。
     ///
     /// 採択 path は [`Self::tokens`] と完全に同一 (= 同じ provider 構成・同じ post-pass)。
@@ -108,7 +138,7 @@ impl<'a> Pipeline<'a> {
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
         let mut result = self.with_providers(input, run_analyze);
-        postpass::apply_all(&mut result.tokens, self.dict, self.analyzer, self.name_hint);
+        self.apply_postpass_with_band(&mut result.tokens);
         // 採用した読みの理由と、 採用しなかった読み (debug 経路だけ。 path は変えない)
         crate::scoring::explain::explain(&mut result.tokens, input, self.dict);
         self.accent_lexicon.fill(&mut result.tokens);

@@ -542,6 +542,7 @@ mod tests {
             ambiguous: false,
             alternatives: Vec::new(),
             is_name: false,
+            band: 0,
             why: None,
         }
     }

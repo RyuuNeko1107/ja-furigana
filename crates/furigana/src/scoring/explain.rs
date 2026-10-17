@@ -132,6 +132,7 @@ mod tests {
             alternatives: Vec::new(),
             why: None,
             is_name: false,
+            band: 0,
         }
     }
 

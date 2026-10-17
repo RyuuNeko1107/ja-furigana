@@ -52,6 +52,11 @@ pub struct Token {
     /// 採用した読みの理由 (`analyze` の debug 経路だけが埋める)。 例: `match: next_eq=から` / `default`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// 採用した候補の band (辞書の見出し = 1000 / 数字 = 950 / 単漢字の既定 = 100 / 形態素解析のみ = 50 など)。
+    /// 値が低い token は 「辞書が読みを持っていない」 手がかりになる (改善 signal の集計用)。
+    /// post-pass で組み直した token は元の token の値を引き継ぐ。 JSON には出さない
+    #[serde(skip)]
+    pub band: u16,
     /// 人名 token flag (crate 内部、 accent 推定用。 ADR-0007)。
     /// 由来: Lindera 固有名詞/人名 candidate、 または NameBoundaryPass の人名補正。
     #[serde(skip)]
@@ -72,6 +77,7 @@ impl Token {
             alternatives: Vec::new(),
             is_name: c.is_name,
             why: None,
+            band: c.score.band,
         }
     }
 }
@@ -116,6 +122,35 @@ pub fn analyze_tokens<'a>(
         .iter()
         .map(Token::from_candidate)
         .collect()
+}
+
+/// [`analyze`] から debug 用の集約 (`candidates` / `alternatives`) を省いた版。
+///
+/// 採択 path の token 列 (各 token の `band` を含む)・`path_indices`・`boundary_regions` は [`analyze`] と同じで、
+/// `candidates` は空、 token の `alternatives` / `ambiguous` は埋めない。 `candidates` の集約は全 provider を
+/// path 位置で再走させるので、 読みと band だけ要る呼び出し (HTTP の通常 mode、 改善 signal の集計) には重い。
+#[must_use]
+pub fn analyze_light<'a>(
+    ctx: &ScoringContext<'a>,
+    providers: &[&'a dyn CandidateProvider],
+) -> AnalyzeResult {
+    let tokens: Vec<Token> = solve_path(ctx, providers)
+        .iter()
+        .map(Token::from_candidate)
+        .collect();
+    let path_indices: Vec<usize> = tokens.iter().map(|t| t.range.start).collect();
+    let boundary_regions: Vec<Range<usize>> = ctx
+        .boundary
+        .regions
+        .iter()
+        .map(|r| r.range.clone())
+        .collect();
+    AnalyzeResult {
+        tokens,
+        candidates: Vec::new(),
+        path_indices,
+        boundary_regions,
+    }
 }
 
 /// `input` を `providers` で analyze、 [`AnalyzeResult`] を返す。

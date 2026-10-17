@@ -343,6 +343,27 @@ impl Furigana {
     /// [`Self::analyze`] に、 入力が人名かどうかのヒントを添える版 ([`Self::tokenize_with_hint`] と同じ)。
     #[must_use]
     pub fn analyze_with_hint(&self, input: &str, hint: NameHint) -> AnalyzeResult {
+        self.analyze_impl(input, hint, false)
+    }
+
+    /// [`Self::analyze`] から debug 用の集約を省いた軽い版。
+    ///
+    /// 採択 path の token 列 (surface / reading / range / accent_phrases / `band`) は [`Self::analyze`] と同じ。
+    /// `candidates` は空で、 token の `alternatives` / `ambiguous` / `why` は埋まらない。 全 provider を path 位置で
+    /// 再走させる集約が要らない分、 約 3 割速い。 読みと accent と `band` (辞書が読みを持つ token かの手がかり) だけ
+    /// 要る呼び出し (HTTP の通常 mode、 改善 signal の集計) 向け。 迷った読みの候補が要るなら [`Self::analyze`]。
+    #[must_use]
+    pub fn analyze_light(&self, input: &str) -> AnalyzeResult {
+        self.analyze_light_with_hint(input, NameHint::Auto)
+    }
+
+    /// [`Self::analyze_light`] に、 入力が人名かどうかのヒントを添える版。
+    #[must_use]
+    pub fn analyze_light_with_hint(&self, input: &str, hint: NameHint) -> AnalyzeResult {
+        self.analyze_impl(input, hint, true)
+    }
+
+    fn analyze_impl(&self, input: &str, hint: NameHint, light: bool) -> AnalyzeResult {
         // Step 1: lookup 用に入力正規化 (異体字 [compat] / IVS / NFKC)。tokenize と同じ前処理。
         // 表示 surface は原文を保つため、 解析後に token surface / range を原文へ remap する
         // (`candidates` / `boundary_regions` の range は正規化テキスト座標のまま = debug 用途)。
@@ -351,7 +372,12 @@ impl Furigana {
             &self.rules.compat,
             Some(&self.compat_chars),
         );
-        let mut result = self.pipeline().with_name_hint(hint).analyze(&norm.text);
+        let pipeline = self.pipeline().with_name_hint(hint);
+        let mut result = if light {
+            pipeline.analyze_light(&norm.text)
+        } else {
+            pipeline.analyze(&norm.text)
+        };
         if norm.changed {
             let remapped = norm.remap(input, result.tokens.iter().map(|t| t.surface.as_str()));
             // tokenize と同じ規約: 多文字展開の分割で空 surface になった token は直前 token に
@@ -368,6 +394,12 @@ impl Furigana {
                         last.accent_phrases.append(&mut t.accent_phrases);
                         continue;
                     }
+                }
+                // 異体字などを正規化して解析した token は、 原文に戻すと表記が正規化後と変わる。 改善 signal の集計は
+                // 「解析した表記」 と 「原文の表記」 が一致する token だけを辞書の候補に結び付けてきたので、 その
+                // 挙動を保つ (一致しない token は band 50 = 形態素解析だけで決まった扱い)
+                if t.surface != surface {
+                    t.band = 50;
                 }
                 t.surface = surface;
                 t.range = range;
@@ -889,6 +921,72 @@ fn load_loanwords_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analyze_light_matches_analyze_on_tokens() {
+        let f = Furigana::minimal().unwrap();
+        for text in [
+            "私は学生です",
+            "今日は2時から",
+            "ありがとう",
+            "水田さんが来た",
+            "髙田です",
+            "草",
+        ] {
+            let full = f.analyze(text);
+            let light = f.analyze_light(text);
+            assert_eq!(full.tokens.len(), light.tokens.len(), "{text}");
+            for (a, b) in full.tokens.iter().zip(&light.tokens) {
+                assert_eq!(a.surface, b.surface, "{text}");
+                assert_eq!(a.reading, b.reading, "{text}");
+                assert_eq!(a.range, b.range, "{text}");
+                assert_eq!(a.accent_phrases, b.accent_phrases, "{text}");
+                assert_eq!(a.band, b.band, "{text}");
+            }
+            assert!(light.candidates.is_empty(), "{text}");
+            assert!(light
+                .tokens
+                .iter()
+                .all(|t| t.alternatives.is_empty() && !t.ambiguous && t.why.is_none()));
+            assert_eq!(full.path_indices, light.path_indices, "{text}");
+        }
+    }
+
+    #[test]
+    fn token_band_tells_dictionary_entries_from_fallbacks() {
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("灰桜", "ハイザクラ");
+        let r = f.analyze_light("灰桜");
+        assert_eq!(r.tokens.len(), 1);
+        assert_eq!(r.tokens[0].band, 1000, "辞書の見出しは band 1000");
+    }
+
+    #[test]
+    fn token_band_keeps_the_signal_meaning_for_normalized_surfaces() {
+        let dir = std::env::temp_dir().join(format!("band_compat_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("compat.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"compat\"
+
+[map]
+\"髙\" = \"高\"
+",
+        )
+        .unwrap();
+        let mut f = Furigana::builder().rules_dir(&dir).build().unwrap();
+        f.add_reading("高田", "タカダ");
+        // 辞書の見出しがそのまま当たる表記は 1000、 異体字を正規化して当たった表記は原文に戻すので 50
+        // (改善 signal の集計は、 解析した表記と原文の表記が一致する token だけを辞書の候補に結び付けてきた)
+        assert_eq!(f.analyze_light("高田").tokens[0].band, 1000);
+        let variant = f.analyze_light("髙田");
+        assert_eq!(variant.tokens[0].surface, "髙田");
+        assert_eq!(variant.tokens[0].band, 50);
+        assert_eq!(f.analyze("髙田").tokens[0].band, 50, "analyze も同じ");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn accent_from_analysis_equals_to_accent() {
