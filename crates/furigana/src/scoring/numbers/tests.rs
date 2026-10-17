@@ -786,6 +786,33 @@ fn kanji_decimal_reads_as_decimal() {
 }
 
 #[test]
+fn single_digit_kanji_decimal_with_unit_reads_as_decimal() {
+    // 1 桁・1 桁の小数は、 直後に単位 (％ / 倍 / 万円 …) が付く時だけ小数 (国会の予算・割合の表記)
+    let p = provider();
+    for (input, num, want) in [
+        ("二・五％", "二・五", "ニテンゴ"),
+        ("一・八倍", "一・八", "イチテンハチ"),
+        ("〇・七ポイント", "〇・七", "ゼロテンナナ"),
+        ("一・五万円", "一・五", "イチテンゴ"),
+        ("〇・四割", "〇・四", "ゼロテンヨン"),
+    ] {
+        let c = p.candidates_vec(&ctx(input), 0);
+        assert_eq!(
+            find(&c, num).unwrap_or_else(|| panic!("{input}")).reading,
+            want,
+            "{input}"
+        );
+    }
+    // 単位が無い / 1 つ違いで上がる並び (三・四) / 列挙 (一・二・三) は小数にしない。 〇 始まりは 1 つ違いでも小数
+    assert!(find(&p.candidates_vec(&ctx("二・五を"), 0), "二・五").is_none());
+    assert!(find(&p.candidates_vec(&ctx("三・四％"), 0), "三・四").is_none());
+    assert!(find(&p.candidates_vec(&ctx("一・二・三％"), 0), "一・二").is_none());
+    assert!(find(&p.candidates_vec(&ctx("〇・一％"), 0), "〇・一").is_some());
+    // 漢数字の列の途中からは出さない
+    assert!(find(&p.candidates_vec(&ctx("三二・五％"), "三".len()), "二・五").is_none());
+}
+
+#[test]
 fn kanji_enumeration_is_not_decimal() {
     // 小数部 1 桁 (第一・二条 / 一・二・三) は列挙として扱い、 小数にしない
     let p = provider();
