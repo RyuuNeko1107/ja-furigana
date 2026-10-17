@@ -150,26 +150,28 @@ fn cue_score(surface: &str) -> u8 {
     0
 }
 
-/// 手がかり語の先頭の字 (さ / ち / く / 氏 / 選 / 監 …)。 手がかりが 1 つも無い行 (ほとんどの行) を、
-/// token を 1 つずつ手がかり語と比べずに素通りさせる前判定に使う。
-static CUE_FIRST_CHARS: once_cell::sync::Lazy<crate::fxmap::FxSet<char>> =
-    once_cell::sync::Lazy::new(|| {
-        HONORIFICS
-            .iter()
-            .chain(TITLES.iter())
-            .filter_map(|c| c.chars().next())
-            .collect()
-    });
+/// 肩書き語の先頭の字 (選 / 監 / 先 / 社 …)。 肩書きの候補になる token を絞る前判定に使う。
+static TITLE_FIRST_CHARS: once_cell::sync::Lazy<crate::fxmap::FxSet<char>> =
+    once_cell::sync::Lazy::new(|| TITLES.iter().filter_map(|c| c.chars().next()).collect());
 
-/// 手がかり語になりうる token が 1 つでもあるか。 敬称で終わる token (原さん / 利さ|ん の ん) も含む。
-fn may_have_cue(tokens: &[Token]) -> bool {
-    tokens.iter().any(|t| {
-        t.surface
+/// token が手がかり語 (敬称 / 肩書き) か、 それを含む形 (原さん / 利さ|ん の ん) でありうるか。
+/// 手がかりが 1 つも無い行 (ほとんどの行) を、 本処理に入れずに素通りさせる前判定。
+/// 本処理の判定 ([`cue_score`] / 敬称で終わる token / 敬称をまたぐ token) より必ず広い。
+fn token_may_be_cue(surface: &str) -> bool {
+    HONORIFICS
+        .iter()
+        .any(|h| surface.starts_with(h) || surface.ends_with(h))
+        || surface == "ん"
+        || surface == "ゃん"
+        || surface
             .chars()
             .next()
-            .is_some_and(|c| CUE_FIRST_CHARS.contains(&c))
-            || t.surface.ends_with(['ん', '氏'])
-    })
+            .is_some_and(|c| TITLE_FIRST_CHARS.contains(&c))
+}
+
+/// 手がかり語になりうる token が 1 つでもあるか。
+fn may_have_cue(tokens: &[Token]) -> bool {
+    tokens.iter().any(|t| token_may_be_cue(&t.surface))
 }
 
 /// 手がかりの前の漢字列を表で引いた結果。
