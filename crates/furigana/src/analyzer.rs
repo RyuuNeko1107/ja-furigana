@@ -199,13 +199,12 @@ impl Analyzer {
                         // 品詞などの派生値は語 id だけで決まるので、 id ごとに 1 度だけ details を分解する
                         // (details の分解は形態素ごとに Vec を何度も確保する)。
                         let key = u64::from(t.word_id.id) | (t.word_id.lex_type as u64) << 32;
-                        let mut morph = match cache.get(&key) {
-                            Some(m) => m.clone(),
-                            None => {
-                                let m = Self::light_from_details("", &t.details());
-                                cache.insert(key, m.clone());
-                                m
-                            }
+                        let mut morph = if let Some(m) = cache.get(&key) {
+                            m.clone()
+                        } else {
+                            let m = Self::light_from_details("", &t.details());
+                            cache.insert(key, m.clone());
+                            m
                         };
                         morph.surface = t.surface.to_string();
                         morph
