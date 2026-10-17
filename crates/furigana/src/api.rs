@@ -867,16 +867,21 @@ fn load_compat_into(out: &mut CompatData, dir: &Path, excludes: &[String]) -> Re
     if !dir.exists() {
         return Ok(());
     }
-    crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, from, role| {
-        if role != Some("compat") {
-            return Ok(());
-        }
-        let parsed: CompatData = crate::loader::parse_toml(content, from)?;
-        for (variant, canonical) in parsed.map {
-            out.map.entry(variant).or_insert(canonical);
-        }
-        Ok(())
-    })
+    crate::loader::for_each_toml_in_dir_roles(
+        dir,
+        excludes,
+        |role| role == Some("compat"),
+        |content, from, role| {
+            if role != Some("compat") {
+                return Ok(());
+            }
+            let parsed: CompatData = crate::loader::parse_toml(content, from)?;
+            for (variant, canonical) in parsed.map {
+                out.map.entry(variant).or_insert(canonical);
+            }
+            Ok(())
+        },
+    )
 }
 
 /// `dir` 配下を再帰 scan し、 `role = "loanwords"` の TOML file から
@@ -893,74 +898,79 @@ fn load_loanwords_into(
         return Ok(());
     }
     // walk + schema 検証 + role 解決は `for_each_toml_in_dir` が共通担当。
-    crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, from, role| {
-        if role != Some("loanwords") {
-            return Ok(());
-        }
-        // [entries] table を parse (= role 別 toml 構造、 jukugo と同形式)
-        #[derive(serde::Deserialize, Default)]
-        struct LoanwordsToml {
-            #[serde(default)]
-            entries: HashMap<String, String>,
-            /// 語 → くっついた数字の読み方。 `"Windows" = "english"` か、 読みを上書きする
-            /// `"No" = { style = "place", reading = "ナンバー" }`。
-            #[serde(default)]
-            digits: HashMap<String, DigitsValue>,
-            /// 英文の中でだけ使う語 (a / is / to / you …)。 単独では引かないので、 日本語の中の
-            /// `to` や `so` を壊さない。 空白区切りの英字 / 空白なしの連結 (thankyou) の部分として使う。
-            #[serde(default)]
-            sentence_words: HashMap<String, String>,
-        }
-        #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum DigitsValue {
-            Style(String),
-            Detail {
-                style: String,
-                reading: Option<String>,
-            },
-        }
-        let parsed: LoanwordsToml = crate::loader::parse_toml(content, from)?;
-        for (surface, reading) in parsed.entries {
-            out.insert(normalize_alphabet(&surface), reading);
-        }
-        for (word, reading) in parsed.sentence_words {
-            out.insert(
-                format!(
-                    "{}{}",
-                    crate::scoring::special::SENTENCE_KEY_PREFIX,
-                    normalize_alphabet(&word)
-                ),
-                reading,
-            );
-        }
-        for (surface, value) in parsed.digits {
-            let (style, reading) = match value {
-                DigitsValue::Style(s) => (s, None),
-                DigitsValue::Detail { style, reading } => (style, reading),
-            };
-            if crate::scoring::digit_reading::DigitStyle::parse(&style).is_none() {
-                return Err(crate::FuriganaError::Validation(format!(
-                    "{from}: [digits] '{surface}' の読み方 '{style}' は未知 \
-                     (place / each / each_en / english / english10 / pair / pair_en)"
-                )));
+    crate::loader::for_each_toml_in_dir_roles(
+        dir,
+        excludes,
+        |role| role == Some("loanwords"),
+        |content, from, role| {
+            if role != Some("loanwords") {
+                return Ok(());
             }
-            // 「読み方」 と (あれば) 「語 + 数字の時だけ使う読み」 を 1 文字列に畳む。
-            let encoded = match reading {
-                Some(r) => format!("{style}{}{r}", crate::scoring::special::DIGITS_SEP),
-                None => style,
-            };
-            out.insert(
-                format!(
-                    "{}{}",
-                    crate::scoring::special::DIGITS_KEY_PREFIX,
-                    normalize_alphabet(&surface)
-                ),
-                encoded,
-            );
-        }
-        Ok(())
-    })
+            // [entries] table を parse (= role 別 toml 構造、 jukugo と同形式)
+            #[derive(serde::Deserialize, Default)]
+            struct LoanwordsToml {
+                #[serde(default)]
+                entries: HashMap<String, String>,
+                /// 語 → くっついた数字の読み方。 `"Windows" = "english"` か、 読みを上書きする
+                /// `"No" = { style = "place", reading = "ナンバー" }`。
+                #[serde(default)]
+                digits: HashMap<String, DigitsValue>,
+                /// 英文の中でだけ使う語 (a / is / to / you …)。 単独では引かないので、 日本語の中の
+                /// `to` や `so` を壊さない。 空白区切りの英字 / 空白なしの連結 (thankyou) の部分として使う。
+                #[serde(default)]
+                sentence_words: HashMap<String, String>,
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(untagged)]
+            enum DigitsValue {
+                Style(String),
+                Detail {
+                    style: String,
+                    reading: Option<String>,
+                },
+            }
+            let parsed: LoanwordsToml = crate::loader::parse_toml(content, from)?;
+            for (surface, reading) in parsed.entries {
+                out.insert(normalize_alphabet(&surface), reading);
+            }
+            for (word, reading) in parsed.sentence_words {
+                out.insert(
+                    format!(
+                        "{}{}",
+                        crate::scoring::special::SENTENCE_KEY_PREFIX,
+                        normalize_alphabet(&word)
+                    ),
+                    reading,
+                );
+            }
+            for (surface, value) in parsed.digits {
+                let (style, reading) = match value {
+                    DigitsValue::Style(s) => (s, None),
+                    DigitsValue::Detail { style, reading } => (style, reading),
+                };
+                if crate::scoring::digit_reading::DigitStyle::parse(&style).is_none() {
+                    return Err(crate::FuriganaError::Validation(format!(
+                        "{from}: [digits] '{surface}' の読み方 '{style}' は未知 \
+                     (place / each / each_en / english / english10 / pair / pair_en)"
+                    )));
+                }
+                // 「読み方」 と (あれば) 「語 + 数字の時だけ使う読み」 を 1 文字列に畳む。
+                let encoded = match reading {
+                    Some(r) => format!("{style}{}{r}", crate::scoring::special::DIGITS_SEP),
+                    None => style,
+                };
+                out.insert(
+                    format!(
+                        "{}{}",
+                        crate::scoring::special::DIGITS_KEY_PREFIX,
+                        normalize_alphabet(&surface)
+                    ),
+                    encoded,
+                );
+            }
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]

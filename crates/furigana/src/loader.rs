@@ -154,21 +154,21 @@ pub fn validate_schema_version(content: &str, file: &str) -> Result<()> {
     let Some(wrapper) = parse_meta(content) else {
         return Ok(());
     };
-    let version = wrapper.meta.and_then(|m| m.schema_version);
-    match version.as_deref() {
+    check_schema_version(wrapper.meta.and_then(|m| m.schema_version).as_deref(), file)
+}
+
+/// `[meta] schema_version` の値 (無ければ `None`) が対応する version か調べる。
+fn check_schema_version(version: Option<&str>, file: &str) -> Result<()> {
+    match version {
         Some(v) if SUPPORTED_SCHEMA_VERSIONS.contains(&v) => Ok(()),
         Some(v) => Err(FuriganaError::Validation(format!(
-            "{}: dict schema version {:?} not supported by ja-furigana 0.1.x \
-             (expected: {:?}). Migrate dict using `furigana-dict/tools/migrate_v2.py` \
-             or upgrade dict to v0.1.0+",
+            "{}: dict schema version {:?} not supported by ja-furigana 0.1.x              (expected: {:?}). Migrate dict using `furigana-dict/tools/migrate_v2.py`              or upgrade dict to v0.1.0+",
             file,
             v,
             SUPPORTED_SCHEMA_VERSIONS.join(", ")
         ))),
         None => Err(FuriganaError::Validation(format!(
-            "{}: missing [meta] schema_version field (= legacy format pre-0.1.0). \
-             Migrate dict using `furigana-dict/tools/migrate_v2.py` \
-             or upgrade dict to v0.1.0+",
+            "{}: missing [meta] schema_version field (= legacy format pre-0.1.0).              Migrate dict using `furigana-dict/tools/migrate_v2.py`              or upgrade dict to v0.1.0+",
             file
         ))),
     }
@@ -520,6 +520,104 @@ where
     Ok(())
 }
 
+/// 先頭から読む最大 byte 数。 `[meta]` は file 先頭に置く規約なので、 役割の判定と schema 検証はここで足りる
+const HEAD_BYTES: usize = 16 * 1024;
+
+/// file の先頭だけ読む。 file 全体が収まったなら `(全体, true)`。 末尾が UTF-8 の途中で切れたら手前までにする
+fn read_head(path: &Path) -> Result<(String, bool)> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = vec![0u8; HEAD_BYTES];
+    let mut n = 0;
+    while n < buf.len() {
+        let r = f.read(&mut buf[n..])?;
+        if r == 0 {
+            break;
+        }
+        n += r;
+    }
+    buf.truncate(n);
+    let complete = n < HEAD_BYTES;
+    match String::from_utf8(buf) {
+        Ok(s) => Ok((s, complete)),
+        Err(e) if !complete => {
+            let valid = e.utf8_error().valid_up_to();
+            let mut bytes = e.into_bytes();
+            bytes.truncate(valid);
+            Ok((String::from_utf8(bytes).unwrap_or_default(), false))
+        }
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "stream did not contain valid UTF-8",
+        )
+        .into()),
+    }
+}
+
+/// 先頭 (`head`) だけで `[meta]` が決まるなら解析結果を返す。 `[meta]` が先頭に収まらない /
+/// 解析できない時は `None` (呼び出し側が file 全体を読んで従来どおり判定する)
+fn head_meta(head: &str, complete: bool) -> Option<MetaTag> {
+    let sec = meta_section(head)?;
+    let unterminated = sec.as_ptr() as usize + sec.len() == head.as_ptr() as usize + head.len();
+    if unterminated && !complete {
+        return None;
+    }
+    toml::from_str::<MetaWrapper>(sec).ok()?.meta
+}
+
+/// [`for_each_toml_in_dir_excluding`] の、 役割で絞る版。
+///
+/// 各 file は先頭だけ読んで schema 検証と role 解決をし (検証は絞らず全 file に掛かる)、
+/// `wants(role)` が真の file だけ全体を読んで `visit` に渡す。 アクセントの表のような巨大な file
+/// (辞書全体の 3 分の 2) を、 要らない walk で何度も読まずに済む。 `[meta]` が先頭に収まらない file は
+/// 従来どおり全体を読んで判定する。
+pub(crate) fn for_each_toml_in_dir_roles<W, F>(
+    dir: &Path,
+    excludes: &[String],
+    wants: W,
+    mut visit: F,
+) -> Result<()>
+where
+    W: Fn(Option<&str>) -> bool,
+    F: FnMut(&str, &str, Option<&str>) -> Result<()>,
+{
+    for path in walk_toml_files(dir)? {
+        if is_excluded(dir, &path, excludes) {
+            continue;
+        }
+        let from = path.display().to_string();
+        let (head, complete) = read_head(&path)?;
+        if let Some(tag) = head_meta(&head, complete) {
+            check_schema_version(tag.schema_version.as_deref(), &from)?;
+            let role = tag
+                .role
+                .or_else(|| infer_role_from_path(&path).map(str::to_string))
+                .or_else(|| infer_dict_role_from_path(&path).map(str::to_string));
+            if !wants(role.as_deref()) {
+                continue;
+            }
+            let content = if complete {
+                head
+            } else {
+                std::fs::read_to_string(&path)?
+            };
+            visit(&content, &from, role.as_deref())?;
+        } else {
+            let content = if complete {
+                head
+            } else {
+                std::fs::read_to_string(&path)?
+            };
+            validate_schema_version(&content, &from)?;
+            let role = resolve_role(&content, &path);
+            if wants(role.as_deref()) {
+                visit(&content, &from, role.as_deref())?;
+            }
+        }
+    }
+    Ok(())
+}
+
 // (旧 load_counters / load_context / load_postprocess / list_toml_files_sorted は
 // load_rules_dir の再帰 walk + role 駆動 dispatch に統合された。
 // hardcoded path / file 名定数 は infer_role_from_path の fallback で使われる。)
@@ -528,6 +626,126 @@ where
 mod tests {
     use super::*;
     use crate::rules::CountersData;
+
+    // ─── for_each_toml_in_dir_roles (役割で絞る walker) ───────────────────
+
+    fn roles_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("loader_roles_{name}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn put(dir: &Path, rel: &str, body: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
+    fn collect_roles(dir: &Path, wanted: &str) -> Result<Vec<(String, usize)>> {
+        let mut seen = Vec::new();
+        for_each_toml_in_dir_roles(
+            dir,
+            &[],
+            |role| role == Some(wanted),
+            |content, from, _role| {
+                seen.push((
+                    Path::new(from)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                    content.len(),
+                ));
+                Ok(())
+            },
+        )?;
+        Ok(seen)
+    }
+
+    #[test]
+    fn roles_walker_visits_only_wanted_roles() {
+        let d = roles_dir("wanted");
+        put(
+            &d,
+            "a.toml",
+            "[meta]\nschema_version = \"2\"\nrole = \"compat\"\n[map]\n\"髙\" = \"高\"\n",
+        );
+        put(
+            &d,
+            "b.toml",
+            "[meta]\nschema_version = \"2\"\nrole = \"accent\"\n[entries]\n\"雨\" = \"[ア]メ\"\n",
+        );
+        let got = collect_roles(&d, "compat").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, "a.toml");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn roles_walker_still_rejects_bad_schema_in_skipped_files() {
+        let d = roles_dir("badschema");
+        put(
+            &d,
+            "a.toml",
+            "[meta]\nschema_version = \"2\"\nrole = \"compat\"\n",
+        );
+        put(
+            &d,
+            "b.toml",
+            "[meta]\nschema_version = \"1\"\nrole = \"accent\"\n",
+        );
+        let err = collect_roles(&d, "compat").unwrap_err();
+        assert!(matches!(err, FuriganaError::Validation(_)), "{err:?}");
+        // schema_version が無い file も同じ
+        put(&d, "b.toml", "[meta]\nrole = \"accent\"\n");
+        assert!(collect_roles(&d, "compat").is_err());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn roles_walker_reads_large_wanted_files_in_full() {
+        let d = roles_dir("large");
+        let mut body =
+            String::from("[meta]\nschema_version = \"2\"\nrole = \"accent\"\n[entries]\n");
+        for i in 0..5000 {
+            body.push_str(&format!("\"語{i}\" = \"[カ]ゴ\"\n"));
+        }
+        assert!(body.len() > HEAD_BYTES * 2);
+        put(&d, "big.toml", &body);
+        let got = collect_roles(&d, "accent").unwrap();
+        assert_eq!(got, vec![("big.toml".to_string(), body.len())]);
+        assert!(collect_roles(&d, "compat").unwrap().is_empty());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn roles_walker_falls_back_when_meta_is_not_at_the_top() {
+        let d = roles_dir("late_meta");
+        // [meta] が先頭 HEAD_BYTES に収まらない file は、 全体を読んで従来どおり判定する
+        let mut body = "# ".to_string();
+        body.push_str(&"あ".repeat(HEAD_BYTES));
+        body.push_str(
+            "\n[meta]\nschema_version = \"2\"\nrole = \"compat\"\n[map]\n\"髙\" = \"高\"\n",
+        );
+        put(&d, "late.toml", &body);
+        let got = collect_roles(&d, "compat").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1, body.len());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn roles_walker_infers_role_from_path_when_meta_has_none() {
+        let d = roles_dir("infer");
+        put(
+            &d,
+            "jukugo/x.toml",
+            "[meta]\nschema_version = \"2\"\n[entries]\n\"猫\" = \"ねこ\"\n",
+        );
+        assert_eq!(collect_roles(&d, "jukugo").unwrap().len(), 1);
+        std::fs::remove_dir_all(&d).ok();
+    }
 
     #[test]
     fn parses_counters_toml() {

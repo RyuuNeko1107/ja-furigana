@@ -363,12 +363,17 @@ impl ChainTable {
         if !dir.exists() {
             return Ok(());
         }
-        crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, _from, role| {
-            if role == Some("accent_chain") && crate::tablecache::is_supported_table(content) {
-                self.load_str(content);
-            }
-            Ok(())
-        })?;
+        crate::loader::for_each_toml_in_dir_roles(
+            dir,
+            excludes,
+            |role| role == Some("accent_chain"),
+            |content, _from, role| {
+                if role == Some("accent_chain") && crate::tablecache::is_supported_table(content) {
+                    self.load_str(content);
+                }
+                Ok(())
+            },
+        )?;
         self.finish();
         Ok(())
     }

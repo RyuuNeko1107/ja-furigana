@@ -334,7 +334,14 @@ impl Dict {
         // walk + schema 検証 + role 解決は `for_each_toml_in_dir` が共通担当
         // (★A1b: schema_version = "2" 必須、 alpha.10〜)。
         let mut merged = Self::default();
-        crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, from, role| {
+        // Dict が取り込む role (と人名の表) だけ全体を読む。 アクセントの表など他の role は先頭だけ見て飛ばす
+        let wants = |role: Option<&str>| {
+            matches!(
+                role,
+                Some("jukugo" | "unihan" | "works" | "kanji" | "name_sei" | "name_mei") | None
+            )
+        };
+        crate::loader::for_each_toml_in_dir_roles(dir, excludes, wants, |content, from, role| {
             // Dict に load する role 一覧。 role 不明 (None) は backwards compat
             // で Dict として扱う (古い release で role tag が無い file を救う)。
             let load_into_dict = matches!(
