@@ -596,6 +596,64 @@ pub(crate) struct NodeMeta {
     pub pos: String,
 }
 
+/// 分割表の部品をノードにする
+fn parts_to_nodes(parts: &[SplitPart]) -> (Vec<Node>, Vec<NodeMeta>) {
+    let mut nodes = Vec::with_capacity(parts.len());
+    let mut meta = Vec::with_capacity(parts.len());
+    for part in parts {
+        let mut node = new_node(
+            &part.surface,
+            usize::from(part.mora),
+            usize::from(part.accent),
+            part.pos,
+            part.renyou,
+            part.rules,
+        );
+        node.last_pos = part.pos;
+        nodes.push(node);
+        meta.push(NodeMeta {
+            surface: part.surface.to_string(),
+            reading: part.reading.to_string(),
+            estimated: false,
+            pos: part.pos_label.to_string(),
+        });
+    }
+    (nodes, meta)
+}
+
+/// 複数部品の語の分割表のキー (表記,品詞1,複合)。 品詞は IPADIC と naist-jdic で食い違う (どう = 副詞 / 感動詞) ので全部試す
+const COMPOUND_POS: [(&str, &str); 3] = [("感動詞", "複合"), ("副詞", "複合"), ("接続詞", "複合")];
+
+/// `tokens[start..]` の先頭から数 token の表記をつないだものが分割表 (複数部品の語) にあれば (token 数, 部品)。
+/// 部品の読みを連結すると token の読みの連結と一致する時だけ
+fn compound_split<'a>(
+    tokens: &[Token],
+    start: usize,
+    table: &'a ChainTable,
+) -> Option<(usize, &'a [SplitPart])> {
+    let first = &tokens[start];
+    let mut surface = String::new();
+    let mut reading = String::new();
+    let mut end = first.range.start;
+    for (k, tok) in tokens[start..].iter().take(5).enumerate() {
+        if tok.range.start != end {
+            return None;
+        }
+        end = tok.range.end;
+        surface.push_str(&tok.surface);
+        reading.push_str(&crate::kana::hira_to_kata(&tok.reading));
+        for (p1, p2) in COMPOUND_POS {
+            if let Some(parts) = table.split_get(crate::keyhash::hash_parts(&[&surface, p1, p2])) {
+                let joined: String = parts.iter().map(|p| &*p.reading).collect();
+                if joined == reading {
+                    return Some((k + 1, parts));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 形態素 1 つを ノードにする (分割表にあれば OpenJTalk の複数語に分けて)。
 fn expand_morph(
     m: &MorphToken,
@@ -611,25 +669,7 @@ fn expand_morph(
     if let Some(parts) = table.split_get(crate::keyhash::hash_parts(&[&m.surface, sp1, sp2])) {
         let joined: String = parts.iter().map(|p| &*p.reading).collect();
         if joined == reading {
-            for part in parts {
-                let mut node = new_node(
-                    &part.surface,
-                    usize::from(part.mora),
-                    usize::from(part.accent),
-                    part.pos,
-                    part.renyou,
-                    part.rules,
-                );
-                node.last_pos = part.pos;
-                out_nodes.push(node);
-                out_meta.push(NodeMeta {
-                    surface: part.surface.to_string(),
-                    reading: part.reading.to_string(),
-                    estimated: false,
-                    pos: part.pos_label.to_string(),
-                });
-            }
-            return (out_nodes, out_meta);
+            return parts_to_nodes(parts);
         }
     }
     let (pos, renyou) = map_pos(m);
@@ -915,7 +955,23 @@ fn make_nodes(
     let mut nodes: Vec<Node> = Vec::new();
     let mut meta: Vec<NodeMeta> = Vec::new();
 
-    for tok in tokens {
+    let mut ti = 0;
+    while ti < tokens.len() {
+        // naist-jdic で 1 語が複数部品になる語 (ありがとうございました = ありがとう + ございました) は、
+        // 続く token の表記をつないで分割表を引く
+        if let Some((count, parts)) = compound_split(tokens, ti, table) {
+            let (mut ns, ms) = parts_to_nodes(parts);
+            // 複数部品の語の 2 番目以降は 別のアクセント句 (OpenJTalk は連結フラグを false にする)
+            for n in ns.iter_mut().skip(1) {
+                n.chain_flag = Some(false);
+            }
+            nodes.extend(ns);
+            meta.extend(ms);
+            ti += count;
+            continue;
+        }
+        let tok = &tokens[ti];
+        ti += 1;
         let (ts, te) = (tok.range.start, tok.range.end);
         // この token に重なる形態素 (完全に含まれるもの + 端でまたぐもの)
         let idx: Vec<usize> = spans
@@ -931,6 +987,25 @@ fn make_nodes(
             .iter()
             .map(|&i| morphs[i].reading.as_deref().unwrap_or(""))
             .collect();
+
+        // 伸ばし棒だけの token (たーい / よかったー) は 前の語の一部 (OpenJTalk は ノリター のように 1 語として読む)
+        if !tok.surface.is_empty()
+            && tok.surface.chars().all(|c| matches!(c, 'ー' | 'ｰ'))
+            && tok_reading.chars().all(|c| c == 'ー')
+        {
+            if let (Some(last_node), Some(last_meta)) = (nodes.last_mut(), meta.last_mut()) {
+                if last_node.morae > 0
+                    && !last_meta.reading.is_empty()
+                    && !matches!(last_node.pos, Pos::Joshi(_))
+                {
+                    let n = tok_reading.chars().count();
+                    last_node.morae += n;
+                    last_meta.surface.push_str(&tok.surface);
+                    last_meta.reading.push_str(&tok_reading);
+                    continue;
+                }
+            }
+        }
 
         if tok_reading.is_empty() || !tok_reading.chars().any(is_kana_char) {
             // 読めない token (記号 / 絵文字 / 空白) は句を切る記号として扱う
@@ -1832,6 +1907,69 @@ ids = [
         assert_eq!(take_mora(&chars, &mut pos, 1), "ヒャ");
         assert_eq!(take_mora(&chars, &mut pos, 2), "クエ");
         assert_eq!(take_mora(&chars, &mut pos, 1), "ン");
+    }
+
+    #[test]
+    fn compound_split_joins_consecutive_tokens_and_splits_into_openjtalk_words() {
+        let t = table_of(
+            "[splits]
+\"ありがとうございました,感動詞,複合\" = \"ありがとう,アリガトウ,感動詞,*,0,2/5,*;ございました,ゴザイマシタ,感動詞,*,0,4/6,*\"
+",
+        );
+        let lex = AccentLexicon::default();
+        let toks = [
+            token("ありがとう", "ありがとう", 0..15),
+            token("ござい", "ござい", 15..24),
+            token("まし", "まし", 24..30),
+            token("た", "た", 30..33),
+        ];
+        let text = "ありがとうございました";
+        let morphs = [
+            morph("ありがとう", "アリガトウ", "感動詞", "*"),
+            morph("ござい", "ゴザイ", "助動詞", "*"),
+            morph("まし", "マシ", "助動詞", "*"),
+            morph("た", "タ", "助動詞", "*"),
+        ];
+        let (nodes, meta) = make_nodes(text, &toks, &morphs, &lex, &t);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!((nodes[0].morae, nodes[0].accent), (5, 2));
+        assert_eq!((nodes[1].morae, nodes[1].accent), (6, 4));
+        // 2 番目の部品は別の句
+        assert_eq!(nodes[1].chain_flag, Some(false));
+        assert_eq!(meta[1].reading, "ゴザイマシタ");
+        // 読みが合わなければ分けない
+        let toks2 = [
+            token("ありがとう", "ありがとう", 0..15),
+            token("ござい", "ござい", 15..24),
+            token("まし", "まし", 24..30),
+            token("た", "だ", 30..33),
+        ];
+        let (nodes2, _) = make_nodes(text, &toks2, &morphs, &lex, &t);
+        assert_eq!(nodes2.len(), 4);
+    }
+
+    #[test]
+    fn prolonged_sound_mark_joins_the_previous_word_unless_it_is_a_particle() {
+        let t = table_of("");
+        let lex = AccentLexicon::default();
+        // 「よかった」 + 「ー」 は 1 語 (ヨカッター)
+        let toks = [token("た", "た", 0..3), token("ー", "ー", 3..6)];
+        let morphs = [
+            morph("た", "タ", "助動詞", "*"),
+            morph("ー", "ー", "記号", "一般"),
+        ];
+        let (nodes, meta) = make_nodes("たー", &toks, &morphs, &lex, &t);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].morae, 2);
+        assert_eq!(meta[0].reading, "ター");
+        // 助詞の後ろは別
+        let toks = [token("に", "に", 0..3), token("ー", "ー", 3..6)];
+        let morphs = [
+            morph("に", "ニ", "助詞", "格助詞"),
+            morph("ー", "ー", "記号", "一般"),
+        ];
+        let (nodes, _) = make_nodes("にー", &toks, &morphs, &lex, &t);
+        assert_eq!(nodes.len(), 2);
     }
 
     #[test]
