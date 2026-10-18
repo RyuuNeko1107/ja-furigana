@@ -1753,6 +1753,35 @@ fn year_month_day_is_read_as_a_date() {
 }
 
 #[test]
+fn zero_padded_month_and_day_counters_drop_the_leading_zero() {
+    // 09月 = くがつ (ゼロを読まない)。 ゼロなしと同じ読み
+    for (input, want) in [
+        ("09月", "クガツ"),
+        ("03月", "サンガツ"),
+        ("9月", "クガツ"),
+        ("10月", "ジュウガツ"),
+    ] {
+        assert_eq!(
+            reading_at(input, 0, input).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
+    // 単独の N日 は期間扱いなので、 ゼロ埋めでもゼロなしと同じ読み (05日 = 5日)
+    for (padded, plain) in [("05日", "5日"), ("01日", "1日"), ("09日", "9日")] {
+        assert_eq!(
+            reading_at(padded, 0, padded),
+            reading_at(plain, 0, plain),
+            "{padded}"
+        );
+        assert!(reading_at(plain, 0, plain).is_some(), "{plain}");
+    }
+    // 月・日以外の助数詞 (007号) と、 全部ゼロ (00月) は従来どおり
+    assert_eq!(reading_at("007号", 0, "007号").as_deref(), Some("ナナゴウ"));
+    assert_eq!(reading_at("00月", 0, "00月").as_deref(), Some("ゼロガツ"));
+}
+
+#[test]
 fn year_month_is_read_as_a_date() {
     for (input, want) in [
         ("2026/09", "ニセンニジュウロクネンクガツ"),
