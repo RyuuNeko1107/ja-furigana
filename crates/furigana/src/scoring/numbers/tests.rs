@@ -1579,6 +1579,37 @@ fn slash_pair_is_a_date_when_month_and_day_are_valid() {
 }
 
 #[test]
+fn dotted_pair_before_a_weekday_is_a_date() {
+    // 10.14(水) は 小数 (じゅうてんいちよん) ではなく日付
+    assert_eq!(
+        reading_at("10.14(水)", 0, "10.14").as_deref(),
+        Some("ジュウガツジュウヨッカ")
+    );
+    assert_eq!(
+        reading_at("10.14\u{FF08}水\u{FF09}に開催", 0, "10.14").as_deref(),
+        Some("ジュウガツジュウヨッカ")
+    );
+    assert_eq!(
+        reading_at("1.5 (月)", 0, "1.5").as_deref(),
+        Some("イチガツイツカ")
+    );
+    // 曜日の括弧が無ければ小数のまま / 月日として無効 / 数字・ドットの途中は触らない
+    assert_ne!(
+        reading_at("10.14発売", 0, "10.14").as_deref(),
+        Some("ジュウガツジュウヨッカ")
+    );
+    assert_ne!(
+        reading_at("13.14(水)", 0, "13.14").as_deref(),
+        Some("サンガツジュウヨッカ")
+    );
+    let p = provider();
+    let input = "2026.10.14(水)";
+    let pos = "2026.".len();
+    let cands = p.candidates_vec(&ctx(input), pos);
+    assert!(cands.iter().all(|c| c.reading != "ジュウガツジュウヨッカ"));
+}
+
+#[test]
 fn slash_pair_that_is_not_a_date_is_a_fraction() {
     // 月 13 以上 / 日 32 以上 は分数 (分母が先)
     assert_eq!(
