@@ -48,6 +48,9 @@ pub enum ProtectedKind {
     /// アスキーアート (`/:::::{:::/ }:}` / `|---|---|---|`)。 記号の連なりで、 文字・数字を含まない。 読みは空
     /// (「すらっしゅ」 などの連呼になるので丸ごと除外)
     AsciiArt,
+    /// マークアップの記法部分 (HTML 風タグ `<center>` / `<small>` / `</i>`、 Misskey の MFM `$[x2 ` と対応する `]`)。
+    /// 中身の文章は残し、 記法だけを読まない (読みは空)
+    Markup,
 }
 
 /// 入力中の保護対象 1 件 (range + 種別)。
@@ -64,6 +67,14 @@ pub struct ProtectedToken {
 static ENTITY_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|amp|lt|gt|quot|apos|nbsp);")
         .expect("ENTITY_RE compile")
+});
+
+/// HTML 風のタグ (既知のタグ名だけ。 `<Team>` のような山括弧の使い方は対象外)。 開き・閉じ・自己閉じ
+static MARKUP_TAG_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?i)</?(?:center|plain|small|tiny|big|i|b|s|u|sub|sup|br|li|ul|ol|a|mark|strike|em|strong|p|div|span)(?:\s[^<>]*)?/?>",
+    )
+    .expect("MARKUP_TAG_RE compile")
 });
 
 static URL_RE: Lazy<Regex> = Lazy::new(|| {
@@ -190,6 +201,72 @@ fn is_kaomoji_inner(inner: &str) -> bool {
 pub use crate::char_class::is_emoji_char;
 
 // ─── 抽出 logic ──────────────────────────────────────────────────────────────
+
+/// Misskey の MFM (`$[x2 文章]` / `$[font.serif $[x2 **文章**]]`) の記法部分の range を返す。
+/// 開き `$[名前 ` (名前は英数字と `. , = -` と `_`) と、 それに対応する閉じ `]` (入れ子と `[` `]` の対を数える)。
+/// 閉じが見つからない時は開きだけを返す。 中身の文章は含めない
+fn mfm_ranges(input: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let bytes = input.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = input[from..].find("$[") {
+        let open = from + rel;
+        let name_start = open + 2;
+        let name_len = input[name_start..]
+            .bytes()
+            .take_while(|b| {
+                b.is_ascii_alphanumeric() || matches!(b, b'.' | b',' | b'=' | b'-' | b'_')
+            })
+            .count();
+        let after_name = name_start + name_len;
+        if name_len == 0 || bytes.get(after_name) != Some(&b' ') {
+            from = name_start;
+            continue;
+        }
+        let open_end = after_name + 1;
+        out.push(open..open_end);
+        // 対応する閉じ `]` (深さ 1 から数える)
+        let mut depth = 1usize;
+        for (i, b) in input[open_end..].bytes().enumerate() {
+            match b {
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        out.push(open_end + i..open_end + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        from = open_end;
+    }
+    out
+}
+
+/// 記法の直前に隣り合っていたら、 記法と同じ保護範囲に含める記号か (ASCII の記号・括弧類)。
+/// 形態素解析が記号の連なり (`...</` / `)</` / `「<`) を 1 語にまとめて、 その途中の記法へ経路が届かなくなるのを防ぐ。
+/// `。` `、` は読み上げの間になるので含めない
+fn is_markup_adjacent_symbol(c: char) -> bool {
+    c.is_ascii_punctuation()
+        || matches!(
+            c,
+            '「' | '」'
+                | '『'
+                | '』'
+                | '（'
+                | '）'
+                | '【'
+                | '】'
+                | '〈'
+                | '〉'
+                | '《'
+                | '》'
+                | '｢'
+                | '｣'
+        )
+}
 
 /// アスキーアートの部品になる文字か (ASCII の記号・罫線ブロック・全角の線)。 文字・数字・仮名・漢字は含まない
 fn is_ascii_art_char(c: char) -> bool {
@@ -326,6 +403,44 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
         tokens.push(ProtectedToken {
             range,
             kind: ProtectedKind::Entity,
+        });
+    }
+
+    // マークアップの記法 (HTML 風タグ / Misskey の MFM)。 URL・メール・文字参照と重なるものは取らない
+    let mut markup: Vec<Range<usize>> = MARKUP_TAG_RE.find_iter(input).map(|m| m.range()).collect();
+    markup.extend(mfm_ranges(input));
+    let all_markup = markup.clone();
+    for mut range in markup {
+        // 記法の直前に隣り合う記号 (ASCII の記号・括弧類。 `。` `、` は間なので除く) も同じ範囲に含める。 形態素解析が `**</` や `]</` を
+        // 1 語にまとめて、 その途中の `<` / `$` の位置へ経路が届かず、 記法の候補が評価されなくなるため。
+        // 閉じ `]` 自身は対象外 (`]]` が互いに重なるのを避ける)
+        if &input[range.clone()] != "]" {
+            while let Some(c) = input[..range.start].chars().next_back() {
+                let at = range.start - c.len_utf8();
+                // 隣の記法 (`</i><b>` の `>`) には食い込まない
+                let in_other = all_markup.iter().any(|r| r.start <= at && at < r.end);
+                if is_markup_adjacent_symbol(c) && !in_other {
+                    range.start -= c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        }
+        // 記法の中にすっぽり入る URL 風の語 (`$[font.serif ` の font.serif) は誤検出なので記法を優先する
+        tokens.retain(|t| {
+            !(t.kind == ProtectedKind::Url
+                && range.start <= t.range.start
+                && t.range.end <= range.end)
+        });
+        if tokens
+            .iter()
+            .any(|t| t.range.start < range.end && range.start < t.range.end)
+        {
+            continue;
+        }
+        tokens.push(ProtectedToken {
+            range,
+            kind: ProtectedKind::Markup,
         });
     }
 
@@ -664,9 +779,10 @@ impl CandidateProvider for ProtectTokenProvider {
                 let length = u8::try_from(char_count).unwrap_or(u8::MAX);
                 // 顔文字は読みを空にして丸ごと除外、 絵文字は辞書の読み (無ければ表記のまま)、 それ以外は表記のまま素通し
                 let reading: std::borrow::Cow<'_, str> = match token.kind {
-                    ProtectedKind::Kaomoji | ProtectedKind::Entity | ProtectedKind::AsciiArt => {
-                        "".into()
-                    }
+                    ProtectedKind::Kaomoji
+                    | ProtectedKind::Entity
+                    | ProtectedKind::AsciiArt
+                    | ProtectedKind::Markup => "".into(),
                     ProtectedKind::Emoji => emoji_reading(
                         surface,
                         &self.emoji,
@@ -1928,6 +2044,128 @@ mod tests {
         }
         // 普通の数字は絵文字にならない
         assert!(extract_protected_tokens("123").is_empty());
+    }
+
+    fn markup_surfaces(input: &str) -> Vec<&str> {
+        extract_protected_tokens(input)
+            .iter()
+            .filter(|t| t.kind == ProtectedKind::Markup)
+            .map(|t| &input[t.range.clone()])
+            .collect()
+    }
+
+    #[test]
+    fn html_like_tags_are_protected_markup() {
+        // 既知のタグ名の開き・閉じ・属性つき・自己閉じ (大文字小文字は問わない)
+        assert_eq!(
+            markup_surfaces("<center>琳琅満目</center>"),
+            vec!["<center>", "</center>"]
+        );
+        assert_eq!(
+            markup_surfaces("あ<small>ちいさい</small>い<i>斜</i><b>太</b>"),
+            vec!["<small>", "</small>", "<i>", "</i>", "<b>", "</b>"]
+        );
+        assert_eq!(markup_surfaces("<BR>え<br/>お"), vec!["<BR>", "<br/>"]);
+        assert_eq!(
+            markup_surfaces("<a href=\"x\">リンク</a>"),
+            vec!["<a href=\"x\">", "</a>"]
+        );
+        // 山括弧の普通の使い方 / 未知のタグ名 / 不等号は対象外
+        for input in [
+            "<Team Name>",
+            "<studio>",
+            "1<2>3",
+            "a < b > c",
+            "<the>",
+            "<>",
+        ] {
+            assert!(markup_surfaces(input).is_empty(), "{input}");
+        }
+    }
+
+    #[test]
+    fn mfm_functions_are_protected_markup_but_content_is_kept() {
+        let input = "$[font.serif $[x2 **琳琅満目**]]";
+        let surfaces = markup_surfaces(input);
+        assert_eq!(surfaces, vec!["$[font.serif ", "$[x2 ", "]", "]"]);
+        // 中身の文章は記法に含まれない
+        let tokens = extract_protected_tokens(input);
+        let content = input.find("琳").unwrap();
+        assert!(tokens
+            .iter()
+            .all(|t| !(t.range.start <= content && content < t.range.end)));
+        // 引数つき・複数
+        assert_eq!(
+            markup_surfaces("$[position.x=-3,y=-2 あ]い$[flip う]"),
+            vec!["$[position.x=-3,y=-2 ", "]", "$[flip ", "]"]
+        );
+        // 閉じが無ければ開きだけ
+        assert_eq!(markup_surfaces("$[x2 おわらない"), vec!["$[x2 "]);
+        // 名前が無い / 空白が無い / 英数字以外 は MFM ではない
+        for input in ["$[ あ]", "$[x2]", "$[あ い]", "お金は$100[円]"] {
+            assert!(markup_surfaces(input).is_empty(), "{input}");
+        }
+    }
+
+    #[test]
+    fn markup_takes_adjacent_symbols_so_the_path_can_reach_it() {
+        // 形態素解析が `**</` / `]</` / `...</` を 1 語にまとめても記法に届くよう、 直前に隣り合う記号も記法の範囲に含める
+        assert_eq!(markup_surfaces("**あ**</center>"), vec!["**</center>"]);
+        assert_eq!(markup_surfaces("[URL]</center>"), vec!["]</center>"]);
+        assert_eq!(markup_surfaces("おわり...</small>"), vec!["...</small>"]);
+        assert_eq!(
+            markup_surfaces("「<plain>あ</plain>」"),
+            vec!["「<plain>", "</plain>"]
+        );
+        assert_eq!(markup_surfaces("**$[x2 あ]**"), vec!["**$[x2 ", "]"]);
+        // 隣の記法には食い込まない (`</i><b>` の `>` は前のタグのもの)
+        assert_eq!(
+            markup_surfaces("<i>斜</i><b>太</b>"),
+            vec!["<i>", "</i>", "<b>", "</b>"]
+        );
+        // 離れた所に別の記法があっても、 隣り合う記号は取り込む
+        assert_eq!(
+            markup_surfaces("<br>あ**</center>"),
+            vec!["<br>", "**</center>"]
+        );
+        // 記法と記法のあいだに記号が 1 つだけ挟まる時は、 その記号は後ろの記法に含める
+        assert_eq!(
+            markup_surfaces("<i>x</i>*<b>y</b>"),
+            vec!["<i>", "</i>", "*<b>", "</b>"]
+        );
+        // `。` `、` は間なので含めない
+        assert_eq!(markup_surfaces("おわり。</small>"), vec!["</small>"]);
+        assert_eq!(markup_surfaces("おわり、<small>"), vec!["<small>"]);
+        // 文字や数字は含めない
+        assert_eq!(markup_surfaces("A1</small>"), vec!["</small>"]);
+    }
+
+    #[test]
+    fn markup_is_kept_next_to_other_tokens_but_dropped_when_overlapping() {
+        // 隣り合うだけ (重ならない) なら、 両方取る: 直前にメール
+        assert_eq!(
+            kinds_and_surfaces("a@b.co<br>"),
+            vec![
+                (ProtectedKind::Email, "a@b.co"),
+                (ProtectedKind::Markup, "<br>")
+            ]
+        );
+        // 文字参照を属性に含むタグは、 文字参照と重なるのでタグの開きは取らない (閉じは取る)
+        assert_eq!(markup_surfaces(r#"<a title="&amp;">x</a>"#), vec!["</a>"]);
+    }
+
+    #[test]
+    fn markup_does_not_override_url_or_entity() {
+        // URL の直後のタグは別々に取る (URL は URL のまま、 タグはタグ)
+        let input = "https://example.com/a<b>x</b>";
+        let tokens = extract_protected_tokens(input);
+        assert!(tokens
+            .iter()
+            .any(|t| t.kind == ProtectedKind::Url
+                && &input[t.range.clone()] == "https://example.com/a"));
+        assert_eq!(markup_surfaces(input), vec!["<b>", "</b>"]);
+        // 文字参照 (&lt;b&gt;) はタグではない
+        assert!(markup_surfaces("&lt;b&gt;").is_empty());
     }
 
     #[test]
