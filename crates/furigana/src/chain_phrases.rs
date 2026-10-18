@@ -587,6 +587,22 @@ pub(crate) fn debug_nodes(
         .collect()
 }
 
+/// 診断用: 各ノードの (表記, 読み, 品詞, 拍数, 語単体の核, 推定か)。 句の連結の前の値
+pub(crate) fn debug_nodes_detail(
+    text: &str,
+    tokens: &[Token],
+    morphs: &[MorphToken],
+    lexicon: &AccentLexicon,
+    table: &ChainTable,
+) -> Vec<(String, String, String, usize, usize, bool)> {
+    let (nodes, meta) = make_nodes(text, tokens, morphs, lexicon, table);
+    nodes
+        .iter()
+        .zip(meta)
+        .map(|(n, m)| (m.surface, m.reading, m.pos, n.morae, n.accent, m.estimated))
+        .collect()
+}
+
 /// ノード 1 つの付随情報 (出力の組み立てと、 欠けている核の診断に使う)
 pub(crate) struct NodeMeta {
     pub surface: String,
@@ -697,8 +713,17 @@ fn expand_morph(
         (usize::from(a), usize::from(mo), r)
     } else {
         let rules = table.rules_for_key(key, p1, p2);
-        if let Some((a, mo)) = lexicon
-            .lookup(&m.surface, &reading)
+        // 活用語は 原形つきの表を最初に引く (たべ = 食べる 2 型 / 食ぶ 1 型 のように 綴りだけでは核が割れる語)
+        let by_base = m
+            .base_form
+            .as_deref()
+            .filter(|_| matches!(p1, "動詞" | "形容詞"))
+            .and_then(|base| {
+                let tail = format!("{p1},{base}");
+                table.word_get(crate::keyhash::hash_parts(&[&m.surface, &reading, &tail]))
+            });
+        if let Some((a, mo)) = by_base
+            .or_else(|| lexicon.lookup(&m.surface, &reading))
             .or_else(|| table.word_get(crate::keyhash::hash_parts(&[&m.surface, &reading, p1])))
         {
             (usize::from(a), usize::from(mo), rules)
@@ -2127,6 +2152,31 @@ ids = [
         assert_eq!(loanword_accent("ー", 1), 0);
         assert_eq!(loanword_accent("ーーーー", 4), 0);
         assert_eq!(loanword_accent("ペコ猫ーラ", 5), 0);
+    }
+
+    #[test]
+    fn conjugated_forms_are_looked_up_by_base_form_first() {
+        // たべ は 食べる (2 型) と 食ぶ (1 型) で核が違う。 原形つきの key で引く
+        let t = table_of(
+            "[words]
+\"たべ,タベ,動詞,たべる\" = \"2/2\"
+\"たべ,タベ,動詞,たぶ\" = \"1/2\"
+",
+        );
+        let lex = AccentLexicon::default();
+        let mut m = morph("たべ", "タベ", "動詞", "自立");
+        m.base_form = Some("たべる".to_string());
+        let (nodes, meta) = expand_morph(&m, &lex, &t);
+        assert_eq!((nodes[0].morae, nodes[0].accent), (2, 2));
+        assert!(!meta[0].estimated);
+        m.base_form = Some("たぶ".to_string());
+        let (nodes, _) = expand_morph(&m, &lex, &t);
+        assert_eq!(nodes[0].accent, 1);
+        // 原形が無ければ 従来どおり (表に無い → 推定の平板)
+        m.base_form = None;
+        let (nodes, meta) = expand_morph(&m, &lex, &t);
+        assert_eq!(nodes[0].accent, 0);
+        assert!(meta[0].estimated);
     }
 
     #[test]
