@@ -2123,11 +2123,35 @@ mod tests {
             markup_surfaces("<i>斜</i><b>太</b>"),
             vec!["<i>", "</i>", "<b>", "</b>"]
         );
+        // 離れた所に別の記法があっても、 隣り合う記号は取り込む
+        assert_eq!(
+            markup_surfaces("<br>あ**</center>"),
+            vec!["<br>", "**</center>"]
+        );
+        // 記法と記法のあいだに記号が 1 つだけ挟まる時は、 その記号は後ろの記法に含める
+        assert_eq!(
+            markup_surfaces("<i>x</i>*<b>y</b>"),
+            vec!["<i>", "</i>", "*<b>", "</b>"]
+        );
         // `。` `、` は間なので含めない
         assert_eq!(markup_surfaces("おわり。</small>"), vec!["</small>"]);
         assert_eq!(markup_surfaces("おわり、<small>"), vec!["<small>"]);
         // 文字や数字は含めない
         assert_eq!(markup_surfaces("A1</small>"), vec!["</small>"]);
+    }
+
+    #[test]
+    fn markup_is_kept_next_to_other_tokens_but_dropped_when_overlapping() {
+        // 隣り合うだけ (重ならない) なら、 両方取る: 直前にメール
+        assert_eq!(
+            kinds_and_surfaces("a@b.co<br>"),
+            vec![
+                (ProtectedKind::Email, "a@b.co"),
+                (ProtectedKind::Markup, "<br>")
+            ]
+        );
+        // 文字参照を属性に含むタグは、 文字参照と重なるのでタグの開きは取らない (閉じは取る)
+        assert_eq!(markup_surfaces(r#"<a title="&amp;">x</a>"#), vec!["</a>"]);
     }
 
     #[test]
