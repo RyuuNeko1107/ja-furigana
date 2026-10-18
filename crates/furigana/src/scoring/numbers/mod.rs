@@ -298,6 +298,12 @@ impl NumberCandidateProvider {
     /// 数値 + 助数詞 を読みに変換 (= chunker の `read_counter` と同 logic、 「N日」 単独は期間扱い)。
     fn read_counter(&self, raw_num: &str, counter: &str) -> String {
         let normalized = kansuji_to_arabic(raw_num).unwrap_or_else(|| raw_num.to_string());
+        // 月・日は 09月 / 05日 のようにゼロ埋めで書かれる (くがつ / いつか)。 ほかの助数詞 (007号 など) は従来どおり
+        let normalized = if matches!(counter, "月" | "日") {
+            trim_leading_zeros(&normalized)
+        } else {
+            normalized
+        };
         let nk = number_to_katakana(&normalized);
 
         if counter == "日" {
@@ -321,12 +327,17 @@ impl NumberCandidateProvider {
     fn read_counter_in_date(&self, raw_num: &str, counter: &str) -> String {
         let normalized = kansuji_to_arabic_date(raw_num).unwrap_or_else(|| raw_num.to_string());
         // 先頭のゼロは読まない (2026/09/05 の 09 → 9月 = くがつ、 05 → 5日 = いつか)
-        let normalized = match normalized.trim_start_matches('0') {
-            "" => normalized.clone(),
-            trimmed => trimmed.to_string(),
-        };
+        let normalized = trim_leading_zeros(&normalized);
         let nk = number_to_katakana(&normalized);
         euphonic_counter_read(&nk, counter, &normalized, &self.counters, &self.days)
+    }
+}
+
+/// 先頭のゼロを落とす (`09` → `9`)。 全部ゼロ (`00`) ならそのまま
+fn trim_leading_zeros(s: &str) -> String {
+    match s.trim_start_matches('0') {
+        "" => s.to_string(),
+        trimmed => trimmed.to_string(),
     }
 }
 
