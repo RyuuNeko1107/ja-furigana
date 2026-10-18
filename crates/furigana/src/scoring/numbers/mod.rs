@@ -374,11 +374,18 @@ fn is_trailing_punctuation(c: char) -> bool {
 fn scale_trailing_counter_suffix(
     counter: &str,
     num: &str,
+    scale: &str,
     counters: &CountersData,
 ) -> Option<String> {
     let rule = counters.counter.get(counter)?;
     let normalized = kansuji_to_arabic(num).unwrap_or_else(|| num.to_string());
-    let last = crate::numbers::helpers::last_digit(&normalized);
+    // 数の読みが 万 / 千 (まん / せん) の「ん」で終わる時は 3 と同じ連濁にする (5万本 = ごまんぼん / 10万匹 = じゅうまんびき)。
+    // 億 以上は直前の数字で決める (従来どおり)
+    let last = if matches!(scale, "万" | "千") {
+        3
+    } else {
+        crate::numbers::helpers::last_digit(&normalized)
+    };
     // last_digit が rule に match すればその suffix を、 無ければ default を採用
     for r in &rule.rules {
         if r.last_digit.contains(&last) {
@@ -835,7 +842,9 @@ impl NumberCandidateProvider {
             if let Some(u) = trailing_unit {
                 if let Some(unit_kana) = self.units.lookup(u) {
                     reading.push_str(unit_kana);
-                } else if let Some(suffix) = scale_trailing_counter_suffix(u, num, &self.counters) {
+                } else if let Some(suffix) =
+                    scale_trailing_counter_suffix(u, num, scale, &self.counters)
+                {
                     // ★alpha.21 round 7: trailing unit が SI units に無いとき
                     // counter rules から suffix を append (= 「1 万歩」 → イチマン+ポ)。
                     reading.push_str(&suffix);
