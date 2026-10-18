@@ -395,13 +395,54 @@ fn symbol_skipped_when_not_in_table() {
 
 #[test]
 fn tilde_emits_kara_in_numeric_context() {
-    // 「2〜3回」 のような range context では 〜 → から (= 既存挙動維持)。
+    // 「2〜5回」 のような離れた range context では 〜 → から (= 既存挙動維持)。
+    // 隣り合う 1 桁 (2〜3回) は 「にさんかい」 と詰める (tilde_between_adjacent_small_digits_is_silent)。
     let p = provider();
-    let input = "2〜3回";
+    let input = "2〜5回";
     let pos = "2".len(); // 〜 の byte position
     let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "〜").expect("tilde candidate in numeric context");
     assert_eq!(c.reading, "から");
+}
+
+#[test]
+fn tilde_between_adjacent_small_digits_is_silent() {
+    // 隣り合う 1 桁 + 助数詞 (2〜3時間 / 3~4人 / 8〜9個) は 「にさんじかん」 のように詰める (区切りは読まない)
+    let p = provider();
+    for (input, ch) in [
+        ("2〜3時間", "〜"),
+        ("3~4人", "~"),
+        ("8〜9個", "〜"),
+        ("１〜２日", "〜"),
+    ] {
+        let pos = input.find(ch).unwrap();
+        let cands = p.candidates_vec(&ctx(input), pos);
+        let c = cands
+            .iter()
+            .find(|c| ["〜", "~", "～", "-"].contains(&c.surface.as_ref()))
+            .unwrap_or_else(|| panic!("{input}: 区切りの候補"));
+        assert_eq!(c.reading, "", "{input}: 隣り合う 1 桁は詰める");
+    }
+    // 2 桁 / 離れた数 / 9 の次 / 助数詞なし / 逆順 / 前に数字が続く は 「から」 のまま (ハイフンは従来どおり)
+    for (input, ch, want) in [
+        ("10〜20人", "〜", "から"),
+        ("2〜5回", "〜", "から"),
+        ("9〜10回", "〜", "から"),
+        ("2〜3", "〜", "から"),
+        ("3〜2回", "〜", "から"),
+        ("12〜13人", "〜", "から"),
+        ("22〜3回", "〜", "から"),
+        // ハイフン (スコア・面数と紛れる) は隣り合う 1 桁でも従来どおり 「から」
+        ("2-3人", "-", "から"),
+    ] {
+        let pos = input.find(ch).unwrap();
+        let cands = p.candidates_vec(&ctx(input), pos);
+        let c = cands
+            .iter()
+            .find(|c| ["〜", "~", "～", "-"].contains(&c.surface.as_ref()))
+            .unwrap_or_else(|| panic!("{input}: 区切りの候補"));
+        assert_eq!(c.reading, want, "{input}");
+    }
 }
 
 #[test]

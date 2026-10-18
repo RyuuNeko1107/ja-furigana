@@ -534,6 +534,33 @@ fn hyphen_is_year_range(input: &str, pos: usize, ch: char) -> bool {
     }
 }
 
+/// 区切り (`〜` / `~` / `～`) が `N〜M<助数詞>` の形で、 N / M がともに 1 桁で M = N + 1 か (2〜3時間 / 3~4人)。
+/// 話し言葉では 「にさんじかん」 のように詰めるので、 区切りの 「から」 を読まない時に使う。
+/// 2 桁以上 (10〜20人) や離れた数 (2〜5回) は 「から」 を残す
+fn range_is_adjacent_small(input: &str, pos: usize, ch: char) -> bool {
+    const COUNTERS: &str = "人日個回名枚本冊台件歳年月時間分秒度倍点位階匹頭羽";
+    let before = &input[..pos];
+    let after = &input[pos + ch.len_utf8()..];
+    let mut b = before.chars().rev();
+    let (Some(d1), prev2) = (b.next(), b.next()) else {
+        return false;
+    };
+    let mut a = after.chars();
+    let (Some(d2), next2) = (a.next(), a.next()) else {
+        return false;
+    };
+    if prev2.is_some_and(is_digit_like_char) || !next2.is_some_and(|c| COUNTERS.contains(c)) {
+        return false;
+    }
+    let (Some(x), Some(y)) = (
+        normalize_digits(&d1.to_string()).parse::<u32>().ok(),
+        normalize_digits(&d2.to_string()).parse::<u32>().ok(),
+    ) else {
+        return false;
+    };
+    (1..=8).contains(&x) && y == x + 1
+}
+
 /// `10-20人` の `-`: 数字 - 数字 の直後に助数詞が続き、 後ろの数が大きい時は範囲の区切り (から)。
 /// `3-2` (スコア) や `2024-10-12` (日付) のように助数詞が無い / 後ろが小さい組は従来どおり読まない
 fn hyphen_is_count_range(input: &str, pos: usize, ch: char) -> bool {
@@ -1300,7 +1327,12 @@ impl NumberCandidateProvider {
             // 2024-2025 (年範囲) ばかりで、 マイナス と読むべき例は無い。
             // 負数は -3 のように前が数字でない形で書かれるので、
             // 前が数字のときだけ読まない (区切りとして surface のみ消費する)。
-            let final_read = if is_minus
+            // 隣り合う 1 桁の数 + 助数詞 (2〜3時間 / 3~4人) は、 話し言葉では 「にさんじかん」 と詰める。
+            // 「から」 を入れると 「にからさんじかん」 と硬い (user 方針、 2026-10-19)。 離れた数 (2〜5回) や 2 桁 (10〜20人) は 「から」 のまま。
+            // ハイフン (1-2日 / 3-4人) はスコア・面数と紛れるので対象外 (従来どおり hyphen_is_count_range で 「から」)
+            let final_read = if is_range_marker && range_is_adjacent_small(input, pos, ch) {
+                String::new()
+            } else if is_minus
                 && (hyphen_is_time_range(input, pos, ch)
                     || hyphen_is_count_range(input, pos, ch)
                     || hyphen_is_clock_range(input, pos, ch)
