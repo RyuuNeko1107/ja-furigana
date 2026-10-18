@@ -1249,6 +1249,42 @@ fn hyphen_after_time_unit_is_kara() {
 }
 
 #[test]
+fn hyphen_between_years_and_ages_is_kara() {
+    // 年・歳 (と、 年のあとの 頃) の直後で、 数字のあとに同じ単位が続く時は範囲 (から)
+    let p = provider();
+    for (input, pos) in [
+        ("1534年-1582年", "1534年".len()),
+        ("872年頃-945年頃", "872年頃".len()),
+        ("20歳-30歳", "20歳".len()),
+        ("709年\u{FF0D}788年", "709年".len()),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        let c = cands
+            .iter()
+            .find(|c| c.surface == "-" || c.surface == "\u{FF0D}")
+            .unwrap_or_else(|| panic!("{input}: ハイフンの候補"));
+        assert_eq!(c.reading, "から", "{input}");
+    }
+    // 片側だけ / 単位が違う / 数字が続かない / 年以外の単位 は範囲にしない
+    for (input, pos) in [
+        ("1534年-1582", "1534年".len()),
+        ("1534年-1582歳", "1534年".len()),
+        ("1534年-あ", "1534年".len()),
+        ("1534月-1582月", "1534月".len()),
+        ("頃-1582年", "頃".len()),
+        ("20歳-30年", "20歳".len()),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(
+            cands
+                .iter()
+                .all(|c| !(c.surface == "-" && c.reading == "から")),
+            "{input}"
+        );
+    }
+}
+
+#[test]
 fn tilde_between_single_capitals_is_kara() {
     let p = provider();
     for (input, pos) in [("A〜Z", 1), ("A~C", 1)] {
