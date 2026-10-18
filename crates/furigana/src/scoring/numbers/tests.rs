@@ -1712,6 +1712,58 @@ fn year_month_day_is_read_as_a_date() {
 }
 
 #[test]
+fn year_month_is_read_as_a_date() {
+    for (input, want) in [
+        ("2026/09", "ニセンニジュウロクネンクガツ"),
+        ("2026/9", "ニセンニジュウロクネンクガツ"),
+        (
+            "1999/12",
+            "センキュウヒャクキュウジュウキュウネンジュウニガツ",
+        ),
+        ("2026/01", "ニセンニジュウロクネンイチガツ"),
+    ] {
+        assert_eq!(
+            reading_at(input, 0, input).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
+    // 月が範囲外 / 年が 19xx・20xx でない / 数字・区切りの途中 / 英字の直後 は読まない
+    for (input, start) in [
+        ("2026/13", 0),
+        ("2026/00", 0),
+        ("1800/09", 0),
+        ("2026/091", 0),
+        ("x2026/09", 1),
+        ("1/2026/09", 2),
+        ("v2026/09", 1),
+        // 直前がハイフン・ドット (型番・版・小数の途中) も読まない
+        ("a-2026/09", 2),
+        ("1.2026/09", 2),
+    ] {
+        let surface = &input[start..];
+        assert!(reading_at(input, start, surface).is_none(), "{input}");
+    }
+    // 直後が数字・区切りの途中 (2026/091 / 2026/09-1) は、 年月の部分 (2026/09) だけを切り出して読まない
+    for input in ["2026/091", "2026/09-1", "2026/09/1x"] {
+        assert!(
+            reading_at(input, 0, "2026/09").is_none(),
+            "{input}: 年月だけで切らない"
+        );
+    }
+    // 先頭ゼロの月日 (09 → 9月 = くがつ、 05 → 5日 = いつか)
+    assert_eq!(
+        reading_at("2026/09/05", 0, "2026/09/05").as_deref(),
+        Some("ニセンニジュウロクネンクガツイツカ")
+    );
+    // 年月日は年月日として読む (年月だけで切らない)
+    assert_eq!(
+        reading_at("2026/09/15", 0, "2026/09/15").as_deref(),
+        Some("ニセンニジュウロクネンクガツジュウゴニチ")
+    );
+}
+
+#[test]
 fn time_after_midnight_notation_reads_hours_up_to_29() {
     assert_eq!(
         reading_at("25:00", 0, "25:00").as_deref(),
