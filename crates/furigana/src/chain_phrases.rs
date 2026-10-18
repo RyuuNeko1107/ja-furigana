@@ -612,6 +612,84 @@ pub(crate) struct NodeMeta {
     pub pos: String,
 }
 
+/// 半角の英数字を全角にする (naist-jdic は 英字の語を全角の表記で持つ: `ＰＣ` / `ＳＮＳ`)。 英数字を含まなければ `None`
+fn fullwidth_alnum(s: &str) -> Option<String> {
+    if !s.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    char::from_u32(u32::from(c) - u32::from('!') + 0xFF01).unwrap_or(c)
+                } else {
+                    c
+                }
+            })
+            .collect(),
+    )
+}
+
+/// 語単体の核の表を、 半角のまま → 全角に直して (英小文字は大文字にも) の順に引く
+fn word_get_alnum(table: &ChainTable, surface: &str, reading: &str, p1: &str) -> Option<(u8, u8)> {
+    table
+        .word_get(crate::keyhash::hash_parts(&[surface, reading, p1]))
+        .or_else(|| {
+            let fw = fullwidth_alnum(surface)?;
+            table
+                .word_get(crate::keyhash::hash_parts(&[&fw, reading, p1]))
+                .or_else(|| {
+                    let up = fullwidth_alnum(&surface.to_ascii_uppercase())?;
+                    table.word_get(crate::keyhash::hash_parts(&[&up, reading, p1]))
+                })
+        })
+}
+
+/// 英字 1 文字の読み (名前)。 長音の綴り違い (エイ / エー) は両方
+const LETTER_NAMES: [(char, &[&str]); 26] = [
+    ('A', &["エイ", "エー"]),
+    ('B', &["ビー"]),
+    ('C', &["シー"]),
+    ('D', &["ディー"]),
+    ('E', &["イー"]),
+    ('F', &["エフ"]),
+    ('G', &["ジー"]),
+    ('H', &["エイチ", "エッチ"]),
+    ('I', &["アイ"]),
+    ('J', &["ジェイ", "ジェー"]),
+    ('K', &["ケイ", "ケー"]),
+    ('L', &["エル"]),
+    ('M', &["エム"]),
+    ('N', &["エヌ"]),
+    ('O', &["オー", "オウ"]),
+    ('P', &["ピー"]),
+    ('Q', &["キュー"]),
+    ('R', &["アール"]),
+    ('S', &["エス"]),
+    ('T', &["ティー"]),
+    ('U', &["ユー"]),
+    ('V', &["ブイ"]),
+    ('W', &["ダブリュー", "ダブルユー"]),
+    ('X', &["エックス"]),
+    ('Y', &["ワイ"]),
+    ('Z', &["ゼット", "ズィー"]),
+];
+
+/// 大文字だけの英字略語 (2〜4 字、 読みが文字の名前の連なり) の核: 最後の文字の名前の最初の拍 (OpenJTalk は URL / OP / PTSD …
+/// を 辞書語として 後ろから 2 拍目付近に置く。 コメント等 49 語で 25 語が一致、 外れは MTG / NTR / TRPG など辞書に無い略語)。 当てはまらなければ `None`
+fn abbreviation_accent(surface: &str, reading: &str) -> Option<usize> {
+    let n = surface.chars().count();
+    if !(2..=4).contains(&n) || !surface.chars().all(|c| c.is_ascii_uppercase()) {
+        return None;
+    }
+    let last = surface.chars().last()?;
+    let names = LETTER_NAMES.iter().find(|(c, _)| *c == last)?.1;
+    let name = names.iter().find(|nm| reading.ends_with(**nm))?;
+    let total = count_mora(reading);
+    let tail = count_mora(name);
+    (total > tail).then(|| total - tail + 1)
+}
+
 /// 表に無い名詞のカタカナ語 (外来語) の核: 4 拍以上は 後ろから 3 拍目 (OpenJTalk の未知語の傾向。 コメント / 国会 / 法令 / Wikipedia / 青空
 /// 41 語で 22 語が一致、 平板は 9 語)。 3 拍以下 / 伸ばし棒だけは平板
 fn loanword_accent(surface: &str, morae: usize) -> usize {
@@ -724,14 +802,15 @@ fn expand_morph(
             });
         if let Some((a, mo)) = by_base
             .or_else(|| lexicon.lookup(&m.surface, &reading))
-            .or_else(|| table.word_get(crate::keyhash::hash_parts(&[&m.surface, &reading, p1])))
+            .or_else(|| word_get_alnum(table, &m.surface, &reading, p1))
         {
             (usize::from(a), usize::from(mo), rules)
         } else {
             estimated = true;
             let morae = count_mora(&reading);
             let accent = if p1 == "名詞" {
-                loanword_accent(&m.surface, morae)
+                abbreviation_accent(&m.surface, &reading)
+                    .unwrap_or_else(|| loanword_accent(&m.surface, morae))
             } else {
                 0
             };
@@ -1214,12 +1293,16 @@ fn make_nodes(
                 usize::from(p.accent.unwrap_or(0))
             }
             _ => {
-                if let Some((a, _)) = lexicon.lookup(&tok.surface, &tok_reading) {
+                if let Some((a, _)) = lexicon
+                    .lookup(&tok.surface, &tok_reading)
+                    .or_else(|| word_get_alnum(table, &tok.surface, &tok_reading, p1))
+                {
                     usize::from(a)
                 } else {
                     estimated = true;
                     if p1 == "名詞" {
-                        loanword_accent(&tok.surface, mora)
+                        abbreviation_accent(&tok.surface, &tok_reading)
+                            .unwrap_or_else(|| loanword_accent(&tok.surface, mora))
                     } else {
                         0
                     }
@@ -2143,6 +2226,20 @@ ids = [
     }
 
     #[test]
+    fn abbreviation_accent_puts_the_nucleus_on_the_last_letter() {
+        assert_eq!(abbreviation_accent("OP", "オーピー"), Some(3));
+        assert_eq!(abbreviation_accent("URL", "ユーアールエル"), Some(6));
+        assert_eq!(abbreviation_accent("AI", "エーアイ"), Some(3));
+        assert_eq!(abbreviation_accent("PTSD", "ピーティーエスディー"), Some(7));
+        // 小文字 / 混在 / 5 字以上 / 読みが文字の名前でない語は対象外
+        assert_eq!(abbreviation_accent("op", "オーピー"), None);
+        assert_eq!(abbreviation_accent("DbD", "ディービーディー"), None);
+        assert_eq!(abbreviation_accent("ABCDE", "エイビーシーディーイー"), None);
+        assert_eq!(abbreviation_accent("MAX", "マックス"), None);
+        assert_eq!(abbreviation_accent("OP", "オープン"), None);
+    }
+
+    #[test]
     fn loanword_accent_is_the_third_mora_from_the_end() {
         assert_eq!(loanword_accent("クロスフォリオ", 6), 4);
         assert_eq!(loanword_accent("ゴブリンブリーチ", 8), 6);
@@ -2177,6 +2274,21 @@ ids = [
         let (nodes, meta) = expand_morph(&m, &lex, &t);
         assert_eq!(nodes[0].accent, 0);
         assert!(meta[0].estimated);
+    }
+
+    #[test]
+    fn alphanumeric_words_are_looked_up_in_fullwidth_form() {
+        // naist-jdic は 英字の語を全角で持つ (ＰＣ)
+        let t = table_of(
+            "[words]
+\"ＰＣ,ピーシー,名詞\" = \"3/4\"
+",
+        );
+        assert_eq!(word_get_alnum(&t, "PC", "ピーシー", "名詞"), Some((3, 4)));
+        assert_eq!(word_get_alnum(&t, "pc", "ピーシー", "名詞"), Some((3, 4)));
+        assert_eq!(word_get_alnum(&t, "PC", "ピーシー", "動詞"), None);
+        assert_eq!(fullwidth_alnum("あいう"), None);
+        assert_eq!(fullwidth_alnum("A1"), Some("Ａ１".to_string()));
     }
 
     #[test]
