@@ -781,6 +781,68 @@ fn month_of(words: &[crate::accent_digit::Word]) -> Option<(String, usize)> {
     Some((format!("{kanji}月"), n - 1))
 }
 
+/// `tokens[start..]` から、 数字と助数詞の形態素だけでできた token の連なり (2 つ以上) を 1 つの token にまとめる。
+/// 先頭の token は数字の形態素だけ。 連なりが 1 つだけ / 数字の形態素で始まらない時は `None`
+fn numeral_run(
+    tokens: &[Token],
+    start: usize,
+    morphs: &[MorphToken],
+    spans: &[Option<(usize, usize)>],
+) -> Option<(usize, Token)> {
+    let overlapping = |tok: &Token| -> Vec<usize> {
+        spans
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                s.and_then(|(a, b)| (a < tok.range.end && b > tok.range.start).then_some(i))
+            })
+            .collect()
+    };
+    let inside = |tok: &Token, idx: &[usize]| {
+        idx.iter()
+            .all(|&i| spans[i].is_some_and(|(a, b)| a >= tok.range.start && b <= tok.range.end))
+    };
+    let first = &tokens[start];
+    let fi = overlapping(first);
+    if fi.is_empty() || !inside(first, &fi) || !fi.iter().all(|&i| is_number_morph(&morphs[i])) {
+        return None;
+    }
+    let mut end = first.range.end;
+    let mut count = 1;
+    for tok in &tokens[start + 1..] {
+        if tok.range.start != end {
+            break;
+        }
+        let idx = overlapping(tok);
+        if idx.is_empty()
+            || !inside(tok, &idx)
+            || !idx
+                .iter()
+                .all(|&i| is_number_morph(&morphs[i]) || is_counter_morph(&morphs[i]))
+        {
+            break;
+        }
+        end = tok.range.end;
+        count += 1;
+    }
+    if count < 2 {
+        return None;
+    }
+    let run = &tokens[start..start + count];
+    Some((
+        count,
+        Token {
+            surface: run.iter().map(|t| t.surface.as_str()).collect(),
+            reading: run.iter().map(|t| t.reading.as_str()).collect(),
+            range: first.range.start..end,
+            accent_phrases: Vec::new(),
+            ambiguous: false,
+            alternatives: Vec::new(),
+            is_name: false,
+        },
+    ))
+}
+
 /// 数字 + 助数詞 (年月日のように繰り返してもよい) の token を、 数字段階の移植 ([`crate::accent_digit`]) で
 /// ノード列にする。
 ///
@@ -969,6 +1031,32 @@ fn make_nodes(
             meta.extend(ms);
             ti += count;
             continue;
+        }
+        // 数字 + 助数詞が複数 token に分かれている (漢数字は 1 字ずつ、 2 + 千円 など) 時は、 つないで数字段階を通す
+        if let Some((count, merged)) = numeral_run(tokens, ti, morphs, &spans) {
+            let (ms_, me_) = (merged.range.start, merged.range.end);
+            let midx: Vec<usize> = spans
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.and_then(|(a, b)| (a < me_ && b > ms_).then_some(i)))
+                .collect();
+            let reading = crate::kana::hira_to_kata(&merged.reading);
+            let prev_surface = meta.last().map_or("", |m| m.surface.as_str());
+            if let Some((ns, ms)) = numeral_nodes(
+                &merged,
+                &reading,
+                &midx,
+                &spans,
+                morphs,
+                lexicon,
+                table,
+                prev_surface,
+            ) {
+                nodes.extend(ns);
+                meta.extend(ms);
+                ti += count;
+                continue;
+            }
         }
         let tok = &tokens[ti];
         ti += 1;
@@ -1970,6 +2058,40 @@ ids = [
         ];
         let (nodes, _) = make_nodes("にー", &toks, &morphs, &lex, &t);
         assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn numeral_run_joins_kanji_digits_written_one_per_token() {
+        let t = table_of(
+            "[words]
+\"年,ネン,名詞\" = \"1/2\"
+",
+        );
+        let lex = AccentLexicon::default();
+        // 三十二年 (漢数字は 1 字ずつ token)
+        let toks = [
+            token("三", "さん", 0..3),
+            token("十", "じゅう", 3..6),
+            token("二", "に", 6..9),
+            token("年", "ねん", 9..12),
+        ];
+        let morphs = [
+            morph("三", "サン", "名詞", "数"),
+            morph("十", "ジュウ", "名詞", "数"),
+            morph("二", "ニ", "名詞", "数"),
+            morph("年", "ネン", "名詞", "接尾"),
+        ];
+        let (nodes, meta) = make_nodes("三十二年", &toks, &morphs, &lex, &t);
+        // 三 + 十 は 句を分けず、 二 から新しい句 (OpenJTalk: サンジュウ | ニネン)
+        let phrases = build_phrases(&mut nodes.clone());
+        assert_eq!(phrases.len(), 2);
+        assert_eq!(phrases[0].morae, 4);
+        assert_eq!(phrases[1].morae, 3);
+        let readings: Vec<&str> = meta.iter().map(|m| m.reading.as_str()).collect();
+        assert_eq!(readings.concat(), "サンジュウニネン");
+        // 数字が 1 つだけの token は まとめない
+        let one = [token("三", "さん", 0..3)];
+        assert!(numeral_run(&one, 0, &morphs[..1], &align("三", &morphs[..1])).is_none());
     }
 
     #[test]
