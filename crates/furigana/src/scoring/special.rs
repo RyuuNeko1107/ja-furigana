@@ -45,6 +45,9 @@ pub enum ProtectedKind {
     /// HTML 文字参照 (`&#8230;` / `&#x2026;` / `&amp;` / `&lt;`)。 bot の投稿や RSS 由来で混ざる。
     /// 数字の羅列として読まれるのを避けるため読みは空 (`&` 単体も読まないので揃う)
     Entity,
+    /// アスキーアート (`/:::::{:::/ }:}` / `|---|---|---|`)。 記号の連なりで、 文字・数字を含まない。 読みは空
+    /// (「すらっしゅ」 などの連呼になるので丸ごと除外)
+    AsciiArt,
 }
 
 /// 入力中の保護対象 1 件 (range + 種別)。
@@ -188,6 +191,105 @@ pub use crate::char_class::is_emoji_char;
 
 // ─── 抽出 logic ──────────────────────────────────────────────────────────────
 
+/// アスキーアートの部品になる文字か (ASCII の記号・罫線ブロック・全角の線)。 文字・数字・仮名・漢字は含まない
+fn is_ascii_art_char(c: char) -> bool {
+    matches!(
+        c,
+        '|' | '\\'
+            | '\''
+            | '`'
+            | '-'
+            | '='
+            | '^'
+            | '('
+            | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '<'
+            | '>'
+            | ';'
+            | ','
+            | '/'
+            | '*'
+            | '_'
+            | ':'
+            | '"'
+            | '.'
+            | '!'
+            | '?'
+            | '~'
+            | '\u{FF0F}'
+            | '\u{FF3C}'
+            | '\u{FFE3}'
+            | '\u{FF3F}'
+    ) || ('\u{2500}'..='\u{259F}').contains(&c)
+}
+
+/// 強調・間の記号 (アスキーアートの種類には数えない): `. ! ? ~ ,`
+fn is_ascii_art_filler(c: char) -> bool {
+    matches!(c, '.' | '!' | '?' | '~' | ',')
+}
+
+/// 入力中のアスキーアートらしい記号の連なりの byte range を列挙する。
+///
+/// 記号 (空白をはさんでよい) だけが並び、 空白を除いて 6 文字以上で、 強調記号 (`. ! ? ~ ,`) を除いた記号の種類が
+/// 3 以上 (2 種類なら 12 文字以上)。 `!!!!!` / `......` / `?!?!?!` のような同じ記号・強調の連続は対象外。
+fn ascii_art_runs(input: &str) -> Vec<Range<usize>> {
+    fn judge(chars: &[char]) -> bool {
+        let mut kinds: Vec<char> = chars
+            .iter()
+            .copied()
+            .filter(|&c| !is_ascii_art_filler(c))
+            .collect();
+        kinds.sort_unstable();
+        kinds.dedup();
+        chars.len() >= 6 && (kinds.len() >= 3 || (kinds.len() >= 2 && chars.len() >= 12))
+    }
+    // 線に見える 1 文字の英字 (l i j r ...) が記号にはさまれていれば、 連なりを途切れさせない (数え方には入れない)
+    let is_bridge = |c: char| {
+        matches!(
+            c,
+            'l' | 'i' | 'j' | 'r' | 'f' | 't' | 'v' | 'V' | 'T' | 'Y' | 'L' | 'I' | '1'
+        )
+    };
+    let all: Vec<(usize, char)> = input.char_indices().collect();
+    let mut runs = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut last_end = 0usize;
+    let mut art: Vec<char> = Vec::new();
+    for (k, &(idx, c)) in all.iter().enumerate() {
+        let next = all.get(k + 1).map(|&(_, n)| n);
+        let prev_is_art = k > 0 && (is_ascii_art_char(all[k - 1].1) || all[k - 1].1 == ' ');
+        let next_is_art = next.is_some_and(|n| is_ascii_art_char(n) || n == ' ');
+        if is_ascii_art_char(c) {
+            if start.is_none() {
+                start = Some(idx);
+            }
+            last_end = idx + c.len_utf8();
+            art.push(c);
+        } else if c == ' ' && start.is_some() {
+            // 空白は記号のあいだだけ許す (run の末尾には含めない: last_end は更新しない)
+        } else if is_bridge(c) && start.is_some() && prev_is_art && next_is_art {
+            last_end = idx + c.len_utf8();
+        } else {
+            if let Some(s) = start.take() {
+                if judge(&art) {
+                    runs.push(s..last_end);
+                }
+            }
+            art.clear();
+        }
+    }
+    if let Some(s) = start {
+        if judge(&art) {
+            runs.push(s..last_end);
+        }
+    }
+    runs
+}
+
 /// 入力から保護トークン (URL / Email / 絵文字) を全列挙して返す。
 ///
 /// 重なる token は **start 位置順で先行を優先** (= 先頭 URL がカバーする range 内に
@@ -253,6 +355,20 @@ pub fn extract_protected_tokens(input: &str) -> Vec<ProtectedToken> {
                 kind: ProtectedKind::Kaomoji,
             });
         }
+    }
+
+    // アスキーアート。 URL・メール・顔文字などと重なるものは取らない
+    for range in ascii_art_runs(input) {
+        if tokens
+            .iter()
+            .any(|t| t.range.start < range.end && range.start < t.range.end)
+        {
+            continue;
+        }
+        tokens.push(ProtectedToken {
+            range,
+            kind: ProtectedKind::AsciiArt,
+        });
     }
 
     // 絵文字 (連続範囲を 1 つの token に集約)。 VS16 / 肌色 / ZWJ / keycap (1️⃣) / 国旗も同じ token に含める
@@ -548,7 +664,9 @@ impl CandidateProvider for ProtectTokenProvider {
                 let length = u8::try_from(char_count).unwrap_or(u8::MAX);
                 // 顔文字は読みを空にして丸ごと除外、 絵文字は辞書の読み (無ければ表記のまま)、 それ以外は表記のまま素通し
                 let reading: std::borrow::Cow<'_, str> = match token.kind {
-                    ProtectedKind::Kaomoji | ProtectedKind::Entity => "".into(),
+                    ProtectedKind::Kaomoji | ProtectedKind::Entity | ProtectedKind::AsciiArt => {
+                        "".into()
+                    }
                     ProtectedKind::Emoji => emoji_reading(
                         surface,
                         &self.emoji,
@@ -1810,6 +1928,213 @@ mod tests {
         }
         // 普通の数字は絵文字にならない
         assert!(extract_protected_tokens("123").is_empty());
+    }
+
+    #[test]
+    fn ascii_art_runs_of_mixed_symbols_are_protected_with_empty_reading() {
+        // 種類の違う記号が 3 種類以上 (6 文字以上)、 または 2 種類で 12 文字以上の連なり
+        for art in [
+            "/:::::::::::{:::/ }:}",
+            "!:.:.:.:.:l|:! '",
+            r"|\_::::\__ ' :: / ",
+            "|---|---|---|",
+            "=======-------=======",
+            "┌──┬──┐",
+            "(((((((((())))))))))",
+        ] {
+            let input = format!("あ{}い", art.trim());
+            let tokens = extract_protected_tokens(&input);
+            assert_eq!(tokens.len(), 1, "{art}");
+            assert_eq!(tokens[0].kind, ProtectedKind::AsciiArt, "{art}");
+            assert_eq!(&input[tokens[0].range.clone()], art.trim(), "{art}");
+        }
+        // 読みは空 (丸ごと除外)
+        let input = "ヽ/:::{:::/ }:}丶";
+        let provider = ProtectTokenProvider::new(input);
+        let start = input.find('/').unwrap();
+        let mut cands = Vec::new();
+        provider.candidates_at(&ctx(input), start, &mut cands);
+        assert!(!cands.is_empty());
+        assert!(cands.iter().all(|c| c.reading.is_empty()));
+    }
+
+    #[test]
+    fn ascii_art_does_not_swallow_ordinary_punctuation() {
+        // 同じ記号・強調の連続 / 短い記号 / 文字や数字をはさむ記号 / 数式・日付・URL は対象外
+        for input in [
+            "えええ!!!!!!!!!!",
+            "うーん......",
+            "?!?!?!?!?!",
+            "-----",
+            "**太字**",
+            "(1,0,0)→(0,1,0)",
+            "10/8(木)-14(水)",
+            "A / B / C",
+            "a-b-c-d",
+            "(笑)",
+            "ほげ!:3",
+            "11:00-19:00",
+        ] {
+            assert!(
+                extract_protected_tokens(input)
+                    .iter()
+                    .all(|t| t.kind != ProtectedKind::AsciiArt),
+                "{input}"
+            );
+        }
+        // 境界: 5 文字は対象外、 6 文字 (3 種類) は対象
+        assert!(extract_protected_tokens(r"あ|\/_:い")
+            .iter()
+            .all(|t| t.kind != ProtectedKind::AsciiArt));
+        assert!(extract_protected_tokens(r#"あ|\/_:"い"#)
+            .iter()
+            .any(|t| t.kind == ProtectedKind::AsciiArt));
+        // 空白を除いて数える (前後の空白は run に含めない)
+        let input = r#"あ  |\/ _:"  い"#;
+        let tokens = extract_protected_tokens(input);
+        let art: Vec<_> = tokens
+            .iter()
+            .filter(|t| t.kind == ProtectedKind::AsciiArt)
+            .collect();
+        assert_eq!(art.len(), 1);
+        assert_eq!(&input[art[0].range.clone()], r#"|\/ _:""#);
+    }
+
+    fn art_runs(input: &str) -> Vec<&str> {
+        ascii_art_runs(input)
+            .into_iter()
+            .map(|r| &input[r])
+            .collect()
+    }
+
+    #[test]
+    fn ascii_art_judge_thresholds_are_exact() {
+        // 6 文字 (種類 3 以上) からが対象: 5 文字は対象外
+        assert_eq!(art_runs(r#"|\/_:""#), vec![r#"|\/_:""#]);
+        assert!(art_runs(r"|\/_:").is_empty());
+        // ちょうど 3 種類・6 文字
+        assert_eq!(art_runs(r"||//\\"), vec![r"||//\\"]);
+        // 2 種類は 12 文字から (11 文字は対象外、 12 文字は対象)
+        assert!(art_runs("|-|-|-|-|-|").is_empty());
+        assert_eq!(art_runs("|-|-|-|-|-|-"), vec!["|-|-|-|-|-|-"]);
+        // 1 種類は何文字でも対象外
+        assert!(art_runs("------------------------").is_empty());
+        // 2 種類で短い (8 文字) は対象外
+        assert!(art_runs("|-|-|-|-").is_empty());
+        // 強調記号 (. ! ? ~ ,) は種類に数えない: 2 種類 + 強調だけ → 対象外
+        assert!(art_runs("|-|-.!?~,").is_empty());
+        // 強調記号は文字数には数える: 3 種類 + 強調 3 つで 6 文字
+        assert_eq!(art_runs(r"|\/!!!"), vec![r"|\/!!!"]);
+        // 強調記号だけの連なりは何文字でも対象外
+        assert!(art_runs("!!!!!!!!!!????????......~~~~~,,,,,").is_empty());
+    }
+
+    #[test]
+    fn ascii_art_run_bridges_look_alike_letters_only_between_symbols() {
+        // 記号にはさまれた 1 文字の「線に見える英字」 は連なりを続ける (範囲に含める)
+        assert_eq!(art_runs("|:/l/:|"), vec!["|:/l/:|"]);
+        assert_eq!(art_runs("|:/i/:|"), vec!["|:/i/:|"]);
+        // 前後が空白でもよい (前だけ / 後ろだけ / 両方)
+        assert_eq!(art_runs("|:/ l /:|"), vec!["|:/ l /:|"]);
+        assert_eq!(art_runs("|:/ l/:|"), vec!["|:/ l/:|"]);
+        assert_eq!(art_runs("|:/l /:|"), vec!["|:/l /:|"]);
+        // 橋渡しの対象でない英字は連なりを切る (それぞれ 3 文字で短く、 対象外)
+        assert!(art_runs("|:/a/:|").is_empty());
+        assert!(art_runs("|:/あ/:|").is_empty());
+        // 連なりの先頭・末尾・記号の外側の英字は範囲に含めない
+        assert_eq!(art_runs(r"l|:/_\|"), vec![r"|:/_\|"]);
+        assert_eq!(art_runs(r"|:/_\|l"), vec![r"|:/_\|"]);
+        assert_eq!(art_runs(r"あl|:/_\|"), vec![r"|:/_\|"]);
+        assert_eq!(art_runs(r"|:/_\|lあ"), vec![r"|:/_\|"]);
+        // 橋渡しの英字の直後が空白で連なりが終わる時は、 範囲の末尾はその英字まで (空白は含めない)
+        assert_eq!(art_runs(r"|:/_\|l あ"), vec![r"|:/_\|l"]);
+        assert_eq!(art_runs(r"|:/_\|l  "), vec![r"|:/_\|l"]);
+        // 橋渡しの英字が 2 つ続くと切れる (片方は前も後ろも記号ではない)
+        assert!(art_runs("|:/ll/:|").is_empty());
+    }
+
+    #[test]
+    fn ascii_art_runs_split_and_end_at_the_right_places() {
+        // 文字をはさんだ 2 つの連なりは別々に返す
+        let input = r#"|\/_:"|あ|\/_:"|"#;
+        assert_eq!(art_runs(input), vec![r#"|\/_:"|"#, r#"|\/_:"|"#]);
+        let runs = ascii_art_runs(input);
+        assert_eq!(runs[0].start, 0);
+        assert_eq!(runs[1].end, input.len());
+        // 末尾で終わる連なり (最後まで走査して返す)
+        assert_eq!(art_runs(r#"あ|\/_:""#), vec![r#"|\/_:""#]);
+        // 先頭・末尾の空白は範囲に含めず、 中の空白は含める
+        assert_eq!(art_runs(r#"あ  |\/ _:"  い"#), vec![r#"|\/ _:""#]);
+        // 空白を除いて数える (6 文字ちょうど)
+        assert_eq!(art_runs(r#"|\ / _ : ""#), vec![r#"|\ / _ : ""#]);
+        // 記号が無い / 空
+        assert!(art_runs("").is_empty());
+        assert!(art_runs("あいう abc").is_empty());
+    }
+
+    fn kinds_and_surfaces(input: &str) -> Vec<(ProtectedKind, &str)> {
+        extract_protected_tokens(input)
+            .into_iter()
+            .map(|t| (t.kind, &input[t.range]))
+            .collect()
+    }
+
+    #[test]
+    fn ascii_art_is_kept_next_to_other_tokens_but_dropped_when_overlapping() {
+        let art = r#"|\/_:"|"#;
+        // 隣り合うだけ (重ならない) なら、 両方取る: 直後に文字参照 / 直前にメール
+        assert_eq!(
+            kinds_and_surfaces(&format!("{art}&amp;")),
+            vec![
+                (ProtectedKind::AsciiArt, art),
+                (ProtectedKind::Entity, "&amp;")
+            ]
+        );
+        assert_eq!(
+            kinds_and_surfaces(&format!("a@b.co{art}")),
+            vec![
+                (ProtectedKind::Email, "a@b.co"),
+                (ProtectedKind::AsciiArt, art)
+            ]
+        );
+        // 離れていれば両方取る
+        assert_eq!(
+            kinds_and_surfaces(&format!("あ&amp;い{art}")),
+            vec![
+                (ProtectedKind::Entity, "&amp;"),
+                (ProtectedKind::AsciiArt, art)
+            ]
+        );
+        // 先頭が他のトークンの末尾と重なる (文字参照の `;` が記号の連なりに入る) / 他のトークンを含む / 他のトークンに含まれる は取らない
+        assert_eq!(
+            kinds_and_surfaces(&format!("&amp;{art}")),
+            vec![(ProtectedKind::Entity, "&amp;")]
+        );
+        assert_eq!(
+            kinds_and_surfaces(&format!("(^_^){art}")),
+            vec![(ProtectedKind::Kaomoji, "(^_^)")]
+        );
+        assert_eq!(
+            kinds_and_surfaces(&format!("{art}(^_^)")),
+            vec![(ProtectedKind::Kaomoji, "(^_^)")]
+        );
+        let url_input = format!("https://example.com/a{art}");
+        let tokens = extract_protected_tokens(&url_input);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, ProtectedKind::Url);
+    }
+
+    #[test]
+    fn ascii_art_does_not_override_url_or_kaomoji() {
+        // URL の中の記号は URL が取る
+        let url = "https://example.com/a/b/c?x=1&y=2";
+        let tokens = extract_protected_tokens(url);
+        assert!(tokens.iter().all(|t| t.kind != ProtectedKind::AsciiArt));
+        // 括弧の顔文字は顔文字のまま
+        let kao = "(´・ω・`)";
+        let tokens = extract_protected_tokens(kao);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, ProtectedKind::Kaomoji);
     }
 
     #[test]
