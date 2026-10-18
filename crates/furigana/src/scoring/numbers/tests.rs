@@ -1249,6 +1249,88 @@ fn hyphen_after_time_unit_is_kara() {
 }
 
 #[test]
+fn date_range_digit_helpers_handle_width_length_and_empty() {
+    // 半角・全角の数字 (全角の ０〜９ は半角と同じ値)
+    assert_eq!(digit_value('0'), Some(0));
+    assert_eq!(digit_value('9'), Some(9));
+    assert_eq!(digit_value('\u{FF10}'), Some(0));
+    assert_eq!(digit_value('\u{FF15}'), Some(5));
+    assert_eq!(digit_value('\u{FF19}'), Some(9));
+    assert_eq!(digit_value('a'), None);
+    assert_eq!(digit_value('/'), None);
+    // 末尾の数字: 値とバイト長 (全角は 1 桁 3 バイト)。 4 桁まで、 5 桁以上と数字なしは None
+    assert_eq!(trailing_number("x12"), Some((12, 2)));
+    assert_eq!(trailing_number("2026"), Some((2026, 4)));
+    assert_eq!(trailing_number("12345"), None);
+    assert_eq!(trailing_number("abc"), None);
+    assert_eq!(trailing_number(""), None);
+    assert_eq!(trailing_number("x\u{FF11}\u{FF12}"), Some((12, 6)));
+    // 先頭の数字も同様
+    assert_eq!(leading_number("12x"), Some((12, 2)));
+    assert_eq!(leading_number("2026"), Some((2026, 4)));
+    assert_eq!(leading_number("12345"), None);
+    assert_eq!(leading_number("x"), None);
+    assert_eq!(leading_number(""), None);
+    assert_eq!(leading_number("\u{FF11}\u{FF12}x"), Some((12, 6)));
+}
+
+#[test]
+fn hyphen_between_fullwidth_dates_is_kara() {
+    // 全角数字の日付 (１０/３１－１１/１) も範囲として読む
+    let p = provider();
+    let input = "\u{FF11}\u{FF10}/\u{FF13}\u{FF11}-\u{FF11}\u{FF11}/\u{FF11}";
+    let pos = "\u{FF11}\u{FF10}/\u{FF13}\u{FF11}".len();
+    let cands = p.candidates_vec(&ctx(input), pos);
+    assert!(
+        cands
+            .iter()
+            .any(|c| c.surface == "-" && c.reading == "から"),
+        "{input}"
+    );
+}
+
+#[test]
+fn hyphen_between_dates_is_kara() {
+    // 日付 (月/日・N日) の直後で、 後ろも日付 (月/日・N月・同じ月の日) の時は範囲 (から)
+    let p = provider();
+    for (input, pos) in [
+        ("10/31-11/1", "10/31".len()),
+        ("9/5-9/7", "9/5".len()),
+        ("9/26-27", "9/26".len()),
+        ("10/6-11京都", "10/6".len()),
+        ("10月31日-11月1日", "10月31日".len()),
+        ("2026/10/31-11/1", "2026/10/31".len()),
+        ("10/31\u{FF0D}11/1", "10/31".len()),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(
+            cands
+                .iter()
+                .any(|c| (c.surface == "-" || c.surface == "\u{FF0D}") && c.reading == "から"),
+            "{input}"
+        );
+    }
+    // 月が 13 以上 / 日が 32 以上 / 後ろが前より前の日 / 時刻・小数・年月日の途中は範囲にしない
+    for (input, pos) in [
+        ("13/5-14/6", "13/5".len()),
+        ("10/40-11/1", "10/40".len()),
+        ("9/26-25", "9/26".len()),
+        ("9/26-27:30", "9/26".len()),
+        ("9/26-27.5", "9/26".len()),
+        ("1/2-1/3/4", "1/2".len()),
+        ("3-4", "3".len()),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(
+            cands
+                .iter()
+                .all(|c| !(c.surface == "-" && c.reading == "から")),
+            "{input}"
+        );
+    }
+}
+
+#[test]
 fn hyphen_between_years_and_ages_is_kara() {
     // 年・歳 (と、 年のあとの 頃) の直後で、 数字のあとに同じ単位が続く時は範囲 (から)
     let p = provider();
