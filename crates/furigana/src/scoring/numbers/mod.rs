@@ -64,9 +64,9 @@ use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, PHONE_RE, POSTAL_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
-    SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE, SLASH_PAIR_RE,
-    SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
+    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, KANJI_DECIMAL_UNIT_RE, PHONE_RE, POSTAL_RE, RATIO_RE,
+    SLASH_DATE_AFTER_RE, SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE,
+    SLASH_PAIR_RE, SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
     SLASH_SENTENCE_FRACTION_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
     YMD_RE,
 };
@@ -989,11 +989,32 @@ impl NumberCandidateProvider {
         rest: &str,
         out: &mut Vec<RawCandidate<'_>>,
     ) {
-        let Some(caps) = at_start(&KANJI_DECIMAL_RE, rest).or_else(|| {
-            // 小数部 1 桁 (三八・四％) は 整数部が位取り 2 桁の時だけ。 一・二 / 三・四 は並列の列挙
-            at_start(&KANJI_DECIMAL_SHORT_RE, rest)
-                .filter(|c| two_digit_positional(c.get(1).unwrap().as_str(), false))
-        }) else {
+        let Some(caps) = at_start(&KANJI_DECIMAL_RE, rest)
+            .or_else(|| {
+                // 小数部 1 桁 (三八・四％) は 整数部が位取り 2 桁の時だけ。 一・二 / 三・四 は並列の列挙
+                at_start(&KANJI_DECIMAL_SHORT_RE, rest)
+                    .filter(|c| two_digit_positional(c.get(1).unwrap().as_str(), false))
+            })
+            .or_else(|| {
+                // 1 桁・1 桁でも、 直後に単位 (％ / 倍 / 万円 …) が付けば小数 (二・五％ / 一・八倍)。
+                // 三・四 のように 1 つ違いで上がる並びは 並列・範囲 (3 と 4) の可能性が高いので除く (〇・一 は小数)
+                at_start(&KANJI_DECIMAL_UNIT_RE, rest).filter(|c| {
+                    let d = |i: usize| {
+                        c.get(i)
+                            .unwrap()
+                            .as_str()
+                            .chars()
+                            .next()
+                            .and_then(kanji_digit)
+                            .and_then(|x| x.to_digit(10))
+                    };
+                    match (d(1), d(2)) {
+                        (Some(a), Some(b)) => a == 0 || b != a + 1,
+                        _ => false,
+                    }
+                })
+            })
+        else {
             return;
         };
         if input[..pos]
@@ -1003,7 +1024,8 @@ impl NumberCandidateProvider {
         {
             return;
         }
-        let m_end = caps.get(0).unwrap().end();
+        // 数の終わり (単位つきの形では単位は数に含めない)
+        let m_end = caps.get(2).unwrap().end();
         let to_arabic = |s: &str| s.chars().filter_map(kanji_digit).collect::<String>();
         let num = format!(
             "{}.{}",

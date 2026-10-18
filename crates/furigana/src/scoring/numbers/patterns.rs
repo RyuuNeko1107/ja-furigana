@@ -79,6 +79,15 @@ pub(super) static KANJI_DECIMAL_SHORT_RE: Lazy<Regex> = Lazy::new(|| {
         .expect("scoring KANJI_DECIMAL_SHORT regex build failed")
 });
 
+/// 1 桁・1 桁の漢数字の小数で、 直後に単位が付く形 (二・五％ / 一・八倍 / 〇・七ポイント / 一・五万円)。
+/// 列挙 (一・二・三) と区別するため、 直後の単位を必須にする (単位は数の一部ではないので取らない側の group 3)
+pub(super) static KANJI_DECIMAL_UNIT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        "^([〇一二三四五六七八九])・([〇一二三四五六七八九])(％|%|倍|割|万|億|兆|円|パーセント|ポイント|キロ|ミリ|センチ|メートル|ヶ月|か月|ヵ月|カ月)",
+    )
+    .expect("scoring KANJI_DECIMAL_UNIT regex build failed")
+});
+
 /// ドット区切り 3 要素以上の数字列 (バージョン `1.2.3` / IP `192.168.0.1`)。
 /// 小数としては読めない (1.2 と .3 に割れる) ので、 各要素を数として読み 「テン」 で繋ぐ。
 pub(super) static VERSION_RE: Lazy<Regex> = Lazy::new(|| {
