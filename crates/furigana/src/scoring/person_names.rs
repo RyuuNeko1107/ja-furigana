@@ -597,6 +597,62 @@ mod tests {
         assert_eq!(t.len(), 3);
     }
 
+    /// 位置 (byte) を連続させて token 列を作る
+    fn chain(parts: &[(&str, &str)]) -> Vec<Token> {
+        let mut pos = 0;
+        let mut out = Vec::new();
+        for (s, r) in parts {
+            out.push(token(s, r, pos..pos + s.len()));
+            pos += s.len();
+        }
+        out
+    }
+
+    #[test]
+    fn several_names_in_one_sentence_are_all_converted() {
+        let d = dict();
+        // 前置きの語 2 つ + 姓 名 敬称 (4 token → 3 token に減る) + 助詞 + 姓 敬称 + 姓 敬称
+        let mut t = chain(&[
+            ("ああ", "アア"),
+            ("ええ", "エエ"),
+            ("水田", "スイデン"),
+            ("雄", "ユウ"),
+            ("一郎", "イチロウ"),
+            ("さん", "サン"),
+            ("と", "ト"),
+            ("水田", "スイデン"),
+            ("さん", "サン"),
+            ("と", "ト"),
+            ("橋本", "ハシモト"),
+            ("環奈", "タマキナ"),
+            ("さん", "サン"),
+        ]);
+        PersonNamePass::new(&d).apply(&mut t);
+        let surfaces: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
+        assert_eq!(
+            surfaces,
+            [
+                "ああ",
+                "ええ",
+                "水田",
+                "雄一郎",
+                "さん",
+                "と",
+                "水田",
+                "さん",
+                "と",
+                "橋本",
+                "環奈",
+                "さん"
+            ]
+        );
+        assert_eq!(t[2].reading, "ミズタ");
+        assert_eq!(t[3].reading, "ユウイチロウ");
+        assert_eq!(t[6].reading, "ミズタ");
+        assert_eq!(t[9].reading, "ハシモト");
+        assert_eq!(t[10].reading, "カンナ");
+    }
+
     #[test]
     fn surname_and_given_with_honorific_is_split() {
         let d = dict();

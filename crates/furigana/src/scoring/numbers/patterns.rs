@@ -79,6 +79,15 @@ pub(super) static KANJI_DECIMAL_SHORT_RE: Lazy<HeadRegex> = Lazy::new(|| {
         .expect("scoring KANJI_DECIMAL_SHORT regex build failed")
 });
 
+/// 1 桁・1 桁の漢数字の小数で、 直後に単位が付く形 (二・五％ / 一・八倍 / 〇・七ポイント / 一・五万円)。
+/// 列挙 (一・二・三) と区別するため、 直後の単位を必須にする (単位は数の一部ではないので取らない側の group 3)
+pub(super) static KANJI_DECIMAL_UNIT_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(
+        "([〇一二三四五六七八九])・([〇一二三四五六七八九])(％|%|倍|割|万|億|兆|円|パーセント|ポイント|キロ|ミリ|センチ|メートル|ヶ月|か月|ヵ月|カ月)",
+    )
+    .expect("scoring KANJI_DECIMAL_UNIT regex build failed")
+});
+
 /// ドット区切り 3 要素以上の数字列 (バージョン `1.2.3` / IP `192.168.0.1`)。
 /// 小数としては読めない (1.2 と .3 に割れる) ので、 各要素を数として読み 「テン」 で繋ぐ。
 pub(super) static VERSION_RE: Lazy<HeadRegex> = Lazy::new(|| {
@@ -160,6 +169,11 @@ pub(super) static SLASH_SENTENCE_FRACTION_RE: Lazy<Regex> = Lazy::new(|| {
 pub(super) static YMD_RE: Lazy<HeadRegex> = Lazy::new(|| {
     HeadRegex::new(r"([0-9]{4})([/\-.])([0-9]{1,2})([/\-.])([0-9]{1,2})")
         .expect("scoring YMD regex build failed")
+});
+
+/// 年月 `2026/09` (年 4 桁は 19xx / 20xx だけ。 年月日 `2026/09/15` は `YMD_RE`)
+pub(super) static YM_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"((?:19|20)[0-9]{2})/([0-9]{1,2})").expect("scoring YM regex build failed")
 });
 
 /// 郵便番号 `〒100-0001` / `〒1000001` / `郵便番号 100-0001` の数字部分 (3 桁 + 4 桁、 間のハイフンは任意)

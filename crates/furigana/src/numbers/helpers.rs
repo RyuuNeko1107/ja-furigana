@@ -102,6 +102,20 @@ pub(crate) fn kansuji_to_arabic(s: &str) -> Option<String> {
         }
     }
 
+    // 単位 (十 / 百 / 千 / 万 / 億) を含む数の中に 「六七」 「二三」 のような連続する 2 つの数字があるものは概数
+    // (二十六七歳 = 26〜27 歳 / 二三万円 / 三四百円)。 additive で解くと手前の桁を捨てて
+    // 「にじゅうななさい」 「さんまんえん」 になる。 数としては扱わず、 1 字ずつの読みに任せる。
+    if has_unit
+        && chars.windows(2).any(|w| {
+            matches!(
+                (digit_of_kansuji(w[0]), digit_of_kansuji(w[1])),
+                (Some(a), Some(b)) if b == a + 1
+            )
+        })
+    {
+        return None;
+    }
+
     // additive: current=単位直前の桁、 section=万未満の累積、 total=万以上の累積。
     let mut total: u64 = 0;
     let mut section: u64 = 0;
@@ -424,6 +438,31 @@ mod tests {
         assert_eq!(
             kansuji_to_arabic("六七万八九〇〇").as_deref(),
             Some("678900")
+        );
+    }
+
+    #[test]
+    fn approximate_digit_pairs_with_units_are_not_numbers() {
+        // 連続する 2 つの数字 (概数) を含む単位つきの数は、 手前の桁を捨てて読まないよう None
+        for s in [
+            "二十六七",
+            "十七八",
+            "十二三万",
+            "三四百",
+            "二三万",
+            "二三百",
+            "百二三十",
+            "三四十",
+        ] {
+            assert_eq!(kansuji_to_arabic(s), None, "{s}");
+        }
+        // 連続でない / 単位の無い / 位取りの大きな数は従来どおり
+        assert_eq!(kansuji_to_arabic("二十七").as_deref(), Some("27"));
+        assert_eq!(kansuji_to_arabic("三百").as_deref(), Some("300"));
+        assert_eq!(kansuji_to_arabic("二五七").as_deref(), Some("257"));
+        assert_eq!(
+            kansuji_to_arabic("一二三八億五九〇〇万").as_deref(),
+            Some("123859000000")
         );
     }
 }

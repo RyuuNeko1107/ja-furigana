@@ -395,13 +395,54 @@ fn symbol_skipped_when_not_in_table() {
 
 #[test]
 fn tilde_emits_kara_in_numeric_context() {
-    // 「2〜3回」 のような range context では 〜 → から (= 既存挙動維持)。
+    // 「2〜5回」 のような離れた range context では 〜 → から (= 既存挙動維持)。
+    // 隣り合う 1 桁 (2〜3回) は 「にさんかい」 と詰める (tilde_between_adjacent_small_digits_is_silent)。
     let p = provider();
-    let input = "2〜3回";
+    let input = "2〜5回";
     let pos = "2".len(); // 〜 の byte position
     let cands = p.candidates_vec(&ctx(input), pos);
     let c = find(&cands, "〜").expect("tilde candidate in numeric context");
     assert_eq!(c.reading, "から");
+}
+
+#[test]
+fn tilde_between_adjacent_small_digits_is_silent() {
+    // 隣り合う 1 桁 + 助数詞 (2〜3時間 / 3~4人 / 8〜9個) は 「にさんじかん」 のように詰める (区切りは読まない)
+    let p = provider();
+    for (input, ch) in [
+        ("2〜3時間", "〜"),
+        ("3~4人", "~"),
+        ("8〜9個", "〜"),
+        ("１〜２日", "〜"),
+    ] {
+        let pos = input.find(ch).unwrap();
+        let cands = p.candidates_vec(&ctx(input), pos);
+        let c = cands
+            .iter()
+            .find(|c| ["〜", "~", "～", "-"].contains(&c.surface.as_ref()))
+            .unwrap_or_else(|| panic!("{input}: 区切りの候補"));
+        assert_eq!(c.reading, "", "{input}: 隣り合う 1 桁は詰める");
+    }
+    // 2 桁 / 離れた数 / 9 の次 / 助数詞なし / 逆順 / 前に数字が続く は 「から」 のまま (ハイフンは従来どおり)
+    for (input, ch, want) in [
+        ("10〜20人", "〜", "から"),
+        ("2〜5回", "〜", "から"),
+        ("9〜10回", "〜", "から"),
+        ("2〜3", "〜", "から"),
+        ("3〜2回", "〜", "から"),
+        ("12〜13人", "〜", "から"),
+        ("22〜3回", "〜", "から"),
+        // ハイフン (スコア・面数と紛れる) は隣り合う 1 桁でも従来どおり 「から」
+        ("2-3人", "-", "から"),
+    ] {
+        let pos = input.find(ch).unwrap();
+        let cands = p.candidates_vec(&ctx(input), pos);
+        let c = cands
+            .iter()
+            .find(|c| ["〜", "~", "～", "-"].contains(&c.surface.as_ref()))
+            .unwrap_or_else(|| panic!("{input}: 区切りの候補"));
+        assert_eq!(c.reading, want, "{input}");
+    }
 }
 
 #[test]
@@ -783,6 +824,33 @@ fn kanji_decimal_reads_as_decimal() {
         find(&c, "一・〇〇七").expect("decimal").reading,
         "イチテンゼロゼロナナ"
     );
+}
+
+#[test]
+fn single_digit_kanji_decimal_with_unit_reads_as_decimal() {
+    // 1 桁・1 桁の小数は、 直後に単位 (％ / 倍 / 万円 …) が付く時だけ小数 (国会の予算・割合の表記)
+    let p = provider();
+    for (input, num, want) in [
+        ("二・五％", "二・五", "ニテンゴ"),
+        ("一・八倍", "一・八", "イチテンハチ"),
+        ("〇・七ポイント", "〇・七", "ゼロテンナナ"),
+        ("一・五万円", "一・五", "イチテンゴ"),
+        ("〇・四割", "〇・四", "ゼロテンヨン"),
+    ] {
+        let c = p.candidates_vec(&ctx(input), 0);
+        assert_eq!(
+            find(&c, num).unwrap_or_else(|| panic!("{input}")).reading,
+            want,
+            "{input}"
+        );
+    }
+    // 単位が無い / 1 つ違いで上がる並び (三・四) / 列挙 (一・二・三) は小数にしない。 〇 始まりは 1 つ違いでも小数
+    assert!(find(&p.candidates_vec(&ctx("二・五を"), 0), "二・五").is_none());
+    assert!(find(&p.candidates_vec(&ctx("三・四％"), 0), "三・四").is_none());
+    assert!(find(&p.candidates_vec(&ctx("一・二・三％"), 0), "一・二").is_none());
+    assert!(find(&p.candidates_vec(&ctx("〇・一％"), 0), "〇・一").is_some());
+    // 漢数字の列の途中からは出さない
+    assert!(find(&p.candidates_vec(&ctx("三二・五％"), "三".len()), "二・五").is_none());
 }
 
 #[test]
@@ -1178,6 +1246,124 @@ fn hyphen_after_time_unit_is_kara() {
     // 数字が続かなければ範囲ではない
     let cands = p.candidates_vec(&ctx("9時-あ"), "9時".len());
     assert!(cands.iter().all(|c| c.reading != "から"));
+}
+
+#[test]
+fn date_range_digit_helpers_handle_width_length_and_empty() {
+    // 半角・全角の数字 (全角の ０〜９ は半角と同じ値)
+    assert_eq!(digit_value('0'), Some(0));
+    assert_eq!(digit_value('9'), Some(9));
+    assert_eq!(digit_value('\u{FF10}'), Some(0));
+    assert_eq!(digit_value('\u{FF15}'), Some(5));
+    assert_eq!(digit_value('\u{FF19}'), Some(9));
+    assert_eq!(digit_value('a'), None);
+    assert_eq!(digit_value('/'), None);
+    // 末尾の数字: 値とバイト長 (全角は 1 桁 3 バイト)。 4 桁まで、 5 桁以上と数字なしは None
+    assert_eq!(trailing_number("x12"), Some((12, 2)));
+    assert_eq!(trailing_number("2026"), Some((2026, 4)));
+    assert_eq!(trailing_number("12345"), None);
+    assert_eq!(trailing_number("abc"), None);
+    assert_eq!(trailing_number(""), None);
+    assert_eq!(trailing_number("x\u{FF11}\u{FF12}"), Some((12, 6)));
+    // 先頭の数字も同様
+    assert_eq!(leading_number("12x"), Some((12, 2)));
+    assert_eq!(leading_number("2026"), Some((2026, 4)));
+    assert_eq!(leading_number("12345"), None);
+    assert_eq!(leading_number("x"), None);
+    assert_eq!(leading_number(""), None);
+    assert_eq!(leading_number("\u{FF11}\u{FF12}x"), Some((12, 6)));
+}
+
+#[test]
+fn hyphen_between_fullwidth_dates_is_kara() {
+    // 全角数字の日付 (１０/３１－１１/１) も範囲として読む
+    let p = provider();
+    let input = "\u{FF11}\u{FF10}/\u{FF13}\u{FF11}-\u{FF11}\u{FF11}/\u{FF11}";
+    let pos = "\u{FF11}\u{FF10}/\u{FF13}\u{FF11}".len();
+    let cands = p.candidates_vec(&ctx(input), pos);
+    assert!(
+        cands
+            .iter()
+            .any(|c| c.surface == "-" && c.reading == "から"),
+        "{input}"
+    );
+}
+
+#[test]
+fn hyphen_between_dates_is_kara() {
+    // 日付 (月/日・N日) の直後で、 後ろも日付 (月/日・N月・同じ月の日) の時は範囲 (から)
+    let p = provider();
+    for (input, pos) in [
+        ("10/31-11/1", "10/31".len()),
+        ("9/5-9/7", "9/5".len()),
+        ("9/26-27", "9/26".len()),
+        ("10/6-11京都", "10/6".len()),
+        ("10月31日-11月1日", "10月31日".len()),
+        ("2026/10/31-11/1", "2026/10/31".len()),
+        ("10/31\u{FF0D}11/1", "10/31".len()),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(
+            cands
+                .iter()
+                .any(|c| (c.surface == "-" || c.surface == "\u{FF0D}") && c.reading == "から"),
+            "{input}"
+        );
+    }
+    // 月が 13 以上 / 日が 32 以上 / 後ろが前より前の日 / 時刻・小数・年月日の途中は範囲にしない
+    for (input, pos) in [
+        ("13/5-14/6", "13/5".len()),
+        ("10/40-11/1", "10/40".len()),
+        ("9/26-25", "9/26".len()),
+        ("9/26-27:30", "9/26".len()),
+        ("9/26-27.5", "9/26".len()),
+        ("1/2-1/3/4", "1/2".len()),
+        ("3-4", "3".len()),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(
+            cands
+                .iter()
+                .all(|c| !(c.surface == "-" && c.reading == "から")),
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn hyphen_between_years_and_ages_is_kara() {
+    // 年・歳 (と、 年のあとの 頃) の直後で、 数字のあとに同じ単位が続く時は範囲 (から)
+    let p = provider();
+    for (input, pos) in [
+        ("1534年-1582年", "1534年".len()),
+        ("872年頃-945年頃", "872年頃".len()),
+        ("20歳-30歳", "20歳".len()),
+        ("709年\u{FF0D}788年", "709年".len()),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        let c = cands
+            .iter()
+            .find(|c| c.surface == "-" || c.surface == "\u{FF0D}")
+            .unwrap_or_else(|| panic!("{input}: ハイフンの候補"));
+        assert_eq!(c.reading, "から", "{input}");
+    }
+    // 片側だけ / 単位が違う / 数字が続かない / 年以外の単位 は範囲にしない
+    for (input, pos) in [
+        ("1534年-1582", "1534年".len()),
+        ("1534年-1582歳", "1534年".len()),
+        ("1534年-あ", "1534年".len()),
+        ("1534月-1582月", "1534月".len()),
+        ("頃-1582年", "頃".len()),
+        ("20歳-30年", "20歳".len()),
+    ] {
+        let cands = p.candidates_vec(&ctx(input), pos);
+        assert!(
+            cands
+                .iter()
+                .all(|c| !(c.surface == "-" && c.reading == "から")),
+            "{input}"
+        );
+    }
 }
 
 #[test]
@@ -1681,6 +1867,108 @@ fn year_month_day_is_read_as_a_date() {
     assert_eq!(
         reading_at("2025-10-13T10:00", 0, "2025-10-13").as_deref(),
         Some("ニセンニジュウゴネンジュウガツジュウサンニチ")
+    );
+}
+
+#[test]
+fn scaled_numbers_voice_the_counter_like_three() {
+    // 万 / 千 の「ん」で終わる読みの後ろは 3 と同じ連濁 (5万本 = ごまんぼん / 10万匹 = じゅうまんびき)
+    for (input, want) in [
+        ("5万本", "ゴマンボン"),
+        ("100万本", "ヒャクマンボン"),
+        ("10万匹", "ジュウマンビキ"),
+    ] {
+        assert_eq!(
+            reading_at(input, 0, input).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
+    // 億は直前の数字で決める (従来どおり): 1億本 = いちおくぽん
+    assert_eq!(
+        reading_at("1億本", 0, "1億本").as_deref(),
+        Some("イチオクポン")
+    );
+}
+
+#[test]
+fn zero_padded_month_and_day_counters_drop_the_leading_zero() {
+    // 09月 = くがつ (ゼロを読まない)。 ゼロなしと同じ読み
+    for (input, want) in [
+        ("09月", "クガツ"),
+        ("03月", "サンガツ"),
+        ("9月", "クガツ"),
+        ("10月", "ジュウガツ"),
+    ] {
+        assert_eq!(
+            reading_at(input, 0, input).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
+    // 単独の N日 は期間扱いなので、 ゼロ埋めでもゼロなしと同じ読み (05日 = 5日)
+    for (padded, plain) in [("05日", "5日"), ("01日", "1日"), ("09日", "9日")] {
+        assert_eq!(
+            reading_at(padded, 0, padded),
+            reading_at(plain, 0, plain),
+            "{padded}"
+        );
+        assert!(reading_at(plain, 0, plain).is_some(), "{plain}");
+    }
+    // 月・日以外の助数詞 (007号) と、 全部ゼロ (00月) は従来どおり
+    assert_eq!(reading_at("007号", 0, "007号").as_deref(), Some("ナナゴウ"));
+    assert_eq!(reading_at("00月", 0, "00月").as_deref(), Some("ゼロガツ"));
+}
+
+#[test]
+fn year_month_is_read_as_a_date() {
+    for (input, want) in [
+        ("2026/09", "ニセンニジュウロクネンクガツ"),
+        ("2026/9", "ニセンニジュウロクネンクガツ"),
+        (
+            "1999/12",
+            "センキュウヒャクキュウジュウキュウネンジュウニガツ",
+        ),
+        ("2026/01", "ニセンニジュウロクネンイチガツ"),
+    ] {
+        assert_eq!(
+            reading_at(input, 0, input).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
+    // 月が範囲外 / 年が 19xx・20xx でない / 数字・区切りの途中 / 英字の直後 は読まない
+    for (input, start) in [
+        ("2026/13", 0),
+        ("2026/00", 0),
+        ("1800/09", 0),
+        ("2026/091", 0),
+        ("x2026/09", 1),
+        ("1/2026/09", 2),
+        ("v2026/09", 1),
+        // 直前がハイフン・ドット (型番・版・小数の途中) も読まない
+        ("a-2026/09", 2),
+        ("1.2026/09", 2),
+    ] {
+        let surface = &input[start..];
+        assert!(reading_at(input, start, surface).is_none(), "{input}");
+    }
+    // 直後が数字・区切りの途中 (2026/091 / 2026/09-1) は、 年月の部分 (2026/09) だけを切り出して読まない
+    for input in ["2026/091", "2026/09-1", "2026/09/1x"] {
+        assert!(
+            reading_at(input, 0, "2026/09").is_none(),
+            "{input}: 年月だけで切らない"
+        );
+    }
+    // 先頭ゼロの月日 (09 → 9月 = くがつ、 05 → 5日 = いつか)
+    assert_eq!(
+        reading_at("2026/09/05", 0, "2026/09/05").as_deref(),
+        Some("ニセンニジュウロクネンクガツイツカ")
+    );
+    // 年月日は年月日として読む (年月だけで切らない)
+    assert_eq!(
+        reading_at("2026/09/15", 0, "2026/09/15").as_deref(),
+        Some("ニセンニジュウロクネンクガツジュウゴニチ")
     );
 }
 

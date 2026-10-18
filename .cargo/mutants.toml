@@ -23,6 +23,19 @@ exclude_re = [
     # (結果の cache が無い)。 空にしても観測できる差は最初のリクエストの遅さだけなので、 テストでは検出できない。
     # 「呼んでも出力が変わらない」 ことは api::tests::warm_up_does_not_change_output が固定している。
     "Furigana::warm_up",
+
+    # Analyzer::tokenize_light の cache key `id | (lex_type << 32)` — id は 32 bit 未満で、 lex_type を 32 bit 左へ
+    # 寄せているので 2 つは重なる bit を持たない。 `|` と `^` は同じ値になる (真の等価変異)。
+    'replace \| with \^ in Analyzer::tokenize_light',
+
+    # PersonNamePass::apply の `c = s + added + 1;` — c は 「手がかりの位置」。 置換後の手がかりは s + added にあり、
+    # +1 はその次へ進める。 `*` に変えても (a) 手がかり自身をもう 1 度見る → 直前は置換済みで 「すでに正しい」 として読み飛ばし、
+    # (b) 手がかりの次を飛ばす → 手がかりの次は漢字でない (敬称の直後) ので、 その位置が手がかりになる並びは無い。 出力は変わらない。
+    'replace \+ with \* in <impl ReadingPostPass for PersonNamePass<.+>>::apply',
+
+    # PersonNamePass::apply の最良の連なりの比較 `(姓+名の有無, 長さ) > (…)` — 長さは遡るごとに必ず増えるので、
+    # 同点 (`>` と `>=` で結果が分かれる並び) は作れない (同じ長さの連なりは 1 つだけ)。
+    'replace > with >= in <impl ReadingPostPass for PersonNamePass<.+>>::apply',
 ]
 
 # 注記 (除外せず backlog 扱いの既知等価変異):

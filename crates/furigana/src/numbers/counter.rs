@@ -30,6 +30,25 @@ fn sokuonize_hundred(body: &str, suffix: &str) -> String {
     body.to_string()
 }
 
+/// 連濁・促音化の判定に使う末尾の数字。
+///
+/// 数の読みが「ん」(千 / 万) で終わる時は、 3 (さん) と同じ連濁にする
+/// (1000本 = せんぼん / 3000匹 = さんぜんびき / 5万本 = ごまんぼん / 100万本 = ひゃくまんぼん)。
+/// 対象は、 末尾の 0 が 3〜7 個 (1,000 〜 9,999,0000 台) の数と、 末尾が 万 / 千 の表記。
+/// 10 / 100 (じゅっぽん / ひゃっぽん) と、 億以上 (末尾の 0 が 8 個以上) は従来どおり。
+fn effective_last_digit(raw_num: &str) -> u32 {
+    let norm = norm_num(raw_num);
+    let t = norm.trim();
+    if t.ends_with('万') || t.ends_with('千') {
+        return 3;
+    }
+    let zeros = t.chars().rev().take_while(|&c| c == '0').count();
+    if (3..=7).contains(&zeros) && t.chars().all(|c| c.is_ascii_digit()) && t.len() > zeros {
+        return 3;
+    }
+    last_digit(raw_num)
+}
+
 /// 「数値 + 助数詞」の読みを構築する (data-driven)
 ///
 /// 優先順位:
@@ -53,7 +72,7 @@ pub fn euphonic_counter_read(
     let sd = if norm_num(raw_num) == "0" {
         99
     } else {
-        last_digit(raw_num)
+        effective_last_digit(raw_num)
     };
 
     // ─── 1. simple 表 ──────────────────────────────────────────────────────
@@ -163,6 +182,52 @@ mod tests {
         assert_eq!(euphonic_counter_read("イチ", "本", "1", &c, &d), "イッポン");
         assert_eq!(euphonic_counter_read("サン", "本", "3", &c, &d), "サンボン");
         assert_eq!(euphonic_counter_read("ニ", "本", "2", &c, &d), "ニホン");
+    }
+
+    #[test]
+    fn thousand_and_ten_thousand_endings_voice_like_three() {
+        // 数の読みが「ん」(千 / 万) で終わる時は 3 と同じ連濁 (1000本 = せんぼん / 5万本 = ごまんぼん)
+        let c = load_counters();
+        let d = load_days();
+        for (kata, raw, want) in [
+            ("セン", "1000", "センボン"),
+            ("サンゼン", "3000", "サンゼンボン"),
+            ("サンゼン", "3,000", "サンゼンボン"),
+            ("イチマン", "10000", "イチマンボン"),
+            ("ゴマン", "5万", "ゴマンボン"),
+            ("ゴセン", "5千", "ゴセンボン"),
+            ("ヒャクマン", "1000000", "ヒャクマンボン"),
+            ("センマン", "10000000", "センマンボン"),
+        ] {
+            assert_eq!(
+                euphonic_counter_read(kata, "本", raw, &c, &d),
+                want,
+                "{raw}"
+            );
+        }
+        // 境界: 末尾の 0 が 2 個以下 (10 / 100) と 8 個以上 (億) は従来どおり
+        assert_eq!(
+            euphonic_counter_read("ヒャク", "本", "100", &c, &d),
+            "ヒャッポン"
+        );
+        assert_eq!(
+            euphonic_counter_read("ジュウ", "本", "10", &c, &d),
+            "ジュッポン"
+        );
+        assert_eq!(
+            euphonic_counter_read("イチオク", "本", "100000000", &c, &d),
+            "イチオクポン"
+        );
+        // 全部が 0 の列 (0000) は 千 / 万 ではないので 3 扱いにしない (末尾の 0 で判定する)
+        assert_eq!(
+            euphonic_counter_read("ゼロ", "本", "0000", &c, &d),
+            "ゼロポン"
+        );
+        // 0 が 3 個でも 1 桁だけ (1000) でなく 1001 のような数は末尾の 1 で判定する
+        assert_eq!(
+            euphonic_counter_read("センイチ", "本", "1001", &c, &d),
+            "センイッポン"
+        );
     }
 
     #[test]

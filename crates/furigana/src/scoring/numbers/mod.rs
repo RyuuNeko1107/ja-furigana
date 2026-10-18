@@ -64,11 +64,11 @@ use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, HeadRegex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, PHONE_RE, POSTAL_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
-    SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE, SLASH_PAIR_RE,
-    SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
+    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, KANJI_DECIMAL_UNIT_RE, PHONE_RE, POSTAL_RE, RATIO_RE,
+    SLASH_DATE_AFTER_RE, SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE,
+    SLASH_PAIR_RE, SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
     SLASH_SENTENCE_FRACTION_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
-    YMD_RE,
+    YMD_RE, YM_RE,
 };
 use regex::Regex;
 
@@ -298,6 +298,12 @@ impl NumberCandidateProvider {
     /// 数値 + 助数詞 を読みに変換 (= chunker の `read_counter` と同 logic、 「N日」 単独は期間扱い)。
     fn read_counter(&self, raw_num: &str, counter: &str) -> String {
         let normalized = kansuji_to_arabic(raw_num).unwrap_or_else(|| raw_num.to_string());
+        // 月・日は 09月 / 05日 のようにゼロ埋めで書かれる (くがつ / いつか)。 ほかの助数詞 (007号 など) は従来どおり
+        let normalized = if matches!(counter, "月" | "日") {
+            trim_leading_zeros(&normalized)
+        } else {
+            normalized
+        };
         let nk = number_to_katakana(&normalized);
 
         if counter == "日" {
@@ -320,8 +326,18 @@ impl NumberCandidateProvider {
     /// 数値 + 助数詞 を読みに変換 (= 日付内、 「N日」 が days.toml 特殊読みを採用)。
     fn read_counter_in_date(&self, raw_num: &str, counter: &str) -> String {
         let normalized = kansuji_to_arabic_date(raw_num).unwrap_or_else(|| raw_num.to_string());
+        // 先頭のゼロは読まない (2026/09/05 の 09 → 9月 = くがつ、 05 → 5日 = いつか)
+        let normalized = trim_leading_zeros(&normalized);
         let nk = number_to_katakana(&normalized);
         euphonic_counter_read(&nk, counter, &normalized, &self.counters, &self.days)
+    }
+}
+
+/// 先頭のゼロを落とす (`09` → `9`)。 全部ゼロ (`00`) ならそのまま
+fn trim_leading_zeros(s: &str) -> String {
+    match s.trim_start_matches('0') {
+        "" => s.to_string(),
+        trimmed => trimmed.to_string(),
     }
 }
 
@@ -358,11 +374,18 @@ fn is_trailing_punctuation(c: char) -> bool {
 fn scale_trailing_counter_suffix(
     counter: &str,
     num: &str,
+    scale: &str,
     counters: &CountersData,
 ) -> Option<String> {
     let rule = counters.counter.get(counter)?;
     let normalized = kansuji_to_arabic(num).unwrap_or_else(|| num.to_string());
-    let last = crate::numbers::helpers::last_digit(&normalized);
+    // 数の読みが 万 / 千 (まん / せん) の「ん」で終わる時は 3 と同じ連濁にする (5万本 = ごまんぼん / 10万匹 = じゅうまんびき)。
+    // 億 以上は直前の数字で決める (従来どおり)
+    let last = if matches!(scale, "万" | "千") {
+        3
+    } else {
+        crate::numbers::helpers::last_digit(&normalized)
+    };
     // last_digit が rule に match すればその suffix を、 無ければ default を採用
     for r in &rule.rules {
         if r.last_digit.contains(&last) {
@@ -416,6 +439,129 @@ fn hyphen_is_time_range(input: &str, pos: usize, ch: char) -> bool {
             .chars()
             .next()
             .is_some_and(is_digit_like_char)
+}
+
+/// `1534年-1582年` / `872年頃-945年頃` / `20歳-30歳` の `-`: 年・歳 (と、 年のあとの 頃) の直後で、 数字が続き、 その数字の直後が同じ単位の時は
+/// 範囲の区切り (から)。 両側に同じ単位が揃う時だけ (`9日-17` のような片側だけの形は従来どおり読まない)
+fn hyphen_is_unit_range(input: &str, pos: usize, ch: char) -> bool {
+    let before = &input[..pos];
+    let unit = match before.chars().next_back() {
+        Some(c @ ('年' | '歳')) => c,
+        Some('頃') if before.trim_end_matches('頃').ends_with('年') => '年',
+        _ => return false,
+    };
+    let after = &input[pos + ch.len_utf8()..];
+    let digits = after.chars().take_while(|&c| is_digit_like_char(c)).count();
+    digits > 0 && after.chars().nth(digits).is_some_and(|c| c == unit)
+}
+
+fn digit_value(c: char) -> Option<u32> {
+    match c {
+        '0'..='9' => Some(u32::from(c) - u32::from('0')),
+        '\u{FF10}'..='\u{FF19}' => Some(u32::from(c) - u32::from('\u{FF10}')),
+        _ => None,
+    }
+}
+
+/// 文字列の末尾の数字 (最大 4 桁) の値と、 そのバイト長
+fn trailing_number(s: &str) -> Option<(u32, usize)> {
+    let mut value = 0;
+    let mut place = 1;
+    let mut bytes = 0;
+    let mut count = 0;
+    for c in s.chars().rev() {
+        let Some(d) = digit_value(c) else { break };
+        if count == 4 {
+            return None;
+        }
+        value += d * place;
+        place *= 10;
+        bytes += c.len_utf8();
+        count += 1;
+    }
+    (count > 0).then_some((value, bytes))
+}
+
+/// 文字列の先頭の数字 (最大 4 桁) の値と、 そのバイト長
+fn leading_number(s: &str) -> Option<(u32, usize)> {
+    let mut value = 0;
+    let mut bytes = 0;
+    let mut count = 0;
+    for c in s.chars() {
+        let Some(d) = digit_value(c) else { break };
+        if count == 4 {
+            return None;
+        }
+        value = value * 10 + d;
+        bytes += c.len_utf8();
+        count += 1;
+    }
+    (count > 0).then_some((value, bytes))
+}
+
+/// `10/31-11/1` / `9/26-27` / `10月31日-11月1日` の `-`: 日付 (月/日 か N日) の直後で、 後ろも日付 (月/日・N月・同じ月の日) の時は
+/// 範囲の区切り (から)。 月は 1〜12、 日は 1〜31 の時だけ (分数や点数と区別する)。 `〜` と同じ扱い
+fn hyphen_is_date_range(input: &str, pos: usize, ch: char) -> bool {
+    let before = &input[..pos];
+    let after = &input[pos + ch.len_utf8()..];
+    // 前: `N日` か `M/D` (年/月/日 の前に 4 桁の年が付いてもよい)
+    let mut slash_day = None;
+    if let Some(rest) = before.strip_suffix('\u{65E5}') {
+        match trailing_number(rest) {
+            Some((d, _)) if (1..=31).contains(&d) => {}
+            _ => return false,
+        }
+    } else {
+        let Some((day, day_len)) = trailing_number(before) else {
+            return false;
+        };
+        let Some(rest) = before[..before.len() - day_len].strip_suffix('/') else {
+            return false;
+        };
+        let Some((month, month_len)) = trailing_number(rest) else {
+            return false;
+        };
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+            return false;
+        }
+        let head = &rest[..rest.len() - month_len];
+        let head_ok = match head.chars().next_back() {
+            None => true,
+            Some('/') => trailing_number(&head[..head.len() - 1]).is_some_and(|(_, n)| n == 4),
+            Some(c) => digit_value(c).is_none(),
+        };
+        if !head_ok {
+            return false;
+        }
+        slash_day = Some(day);
+    }
+    let Some((first, first_len)) = leading_number(after) else {
+        return false;
+    };
+    let tail = &after[first_len..];
+    // 後ろ: `N月` / `M/D` / (前が M/D の時だけ) 同じ月の日 D
+    if tail.starts_with('\u{6708}') {
+        return (1..=12).contains(&first);
+    }
+    if let Some(rest) = tail.strip_prefix('/') {
+        let Some((day, day_len)) = leading_number(rest) else {
+            return false;
+        };
+        let next = rest[day_len..].chars().next();
+        return (1..=12).contains(&first)
+            && (1..=31).contains(&day)
+            && !next.is_some_and(|c| c == '/' || digit_value(c).is_some());
+    }
+    match slash_day {
+        Some(from) => {
+            (from < first && first <= 31)
+                && !tail
+                    .chars()
+                    .next()
+                    .is_some_and(|c| matches!(c, ':' | '.' | '%' | '\u{FF1A}'))
+        }
+        None => false,
+    }
 }
 
 /// 装飾にも使われる図形記号。 伏せ字の書き方 (`■■さん` / `△△`) の時だけ読む
@@ -527,6 +673,33 @@ fn hyphen_is_year_range(input: &str, pos: usize, ch: char) -> bool {
         (Ok(x), Ok(y)) => (1900..=2100).contains(&x) && (1900..=2100).contains(&y) && x < y,
         _ => false,
     }
+}
+
+/// 区切り (`〜` / `~` / `～`) が `N〜M<助数詞>` の形で、 N / M がともに 1 桁で M = N + 1 か (2〜3時間 / 3~4人)。
+/// 話し言葉では 「にさんじかん」 のように詰めるので、 区切りの 「から」 を読まない時に使う。
+/// 2 桁以上 (10〜20人) や離れた数 (2〜5回) は 「から」 を残す
+fn range_is_adjacent_small(input: &str, pos: usize, ch: char) -> bool {
+    const COUNTERS: &str = "人日個回名枚本冊台件歳年月時間分秒度倍点位階匹頭羽";
+    let before = &input[..pos];
+    let after = &input[pos + ch.len_utf8()..];
+    let mut b = before.chars().rev();
+    let (Some(d1), prev2) = (b.next(), b.next()) else {
+        return false;
+    };
+    let mut a = after.chars();
+    let (Some(d2), next2) = (a.next(), a.next()) else {
+        return false;
+    };
+    if prev2.is_some_and(is_digit_like_char) || !next2.is_some_and(|c| COUNTERS.contains(c)) {
+        return false;
+    }
+    let (Some(x), Some(y)) = (
+        normalize_digits(&d1.to_string()).parse::<u32>().ok(),
+        normalize_digits(&d2.to_string()).parse::<u32>().ok(),
+    ) else {
+        return false;
+    };
+    (1..=8).contains(&x) && y == x + 1
 }
 
 /// `10-20人` の `-`: 数字 - 数字 の直後に助数詞が続き、 後ろの数が大きい時は範囲の区切り (から)。
@@ -778,7 +951,9 @@ impl NumberCandidateProvider {
             if let Some(u) = trailing_unit {
                 if let Some(unit_kana) = self.units.lookup(u) {
                     reading.push_str(unit_kana);
-                } else if let Some(suffix) = scale_trailing_counter_suffix(u, num, &self.counters) {
+                } else if let Some(suffix) =
+                    scale_trailing_counter_suffix(u, num, scale, &self.counters)
+                {
                     // ★alpha.21 round 7: trailing unit が SI units に無いとき
                     // counter rules から suffix を append (= 「1 万歩」 → イチマン+ポ)。
                     reading.push_str(&suffix);
@@ -989,11 +1164,32 @@ impl NumberCandidateProvider {
         rest: &str,
         out: &mut Vec<RawCandidate<'_>>,
     ) {
-        let Some(caps) = at_start(&KANJI_DECIMAL_RE, rest).or_else(|| {
-            // 小数部 1 桁 (三八・四％) は 整数部が位取り 2 桁の時だけ。 一・二 / 三・四 は並列の列挙
-            at_start(&KANJI_DECIMAL_SHORT_RE, rest)
-                .filter(|c| two_digit_positional(c.get(1).unwrap().as_str(), false))
-        }) else {
+        let Some(caps) = at_start(&KANJI_DECIMAL_RE, rest)
+            .or_else(|| {
+                // 小数部 1 桁 (三八・四％) は 整数部が位取り 2 桁の時だけ。 一・二 / 三・四 は並列の列挙
+                at_start(&KANJI_DECIMAL_SHORT_RE, rest)
+                    .filter(|c| two_digit_positional(c.get(1).unwrap().as_str(), false))
+            })
+            .or_else(|| {
+                // 1 桁・1 桁でも、 直後に単位 (％ / 倍 / 万円 …) が付けば小数 (二・五％ / 一・八倍)。
+                // 三・四 のように 1 つ違いで上がる並びは 並列・範囲 (3 と 4) の可能性が高いので除く (〇・一 は小数)
+                at_start(&KANJI_DECIMAL_UNIT_RE, rest).filter(|c| {
+                    let d = |i: usize| {
+                        c.get(i)
+                            .unwrap()
+                            .as_str()
+                            .chars()
+                            .next()
+                            .and_then(kanji_digit)
+                            .and_then(|x| x.to_digit(10))
+                    };
+                    match (d(1), d(2)) {
+                        (Some(a), Some(b)) => a == 0 || b != a + 1,
+                        _ => false,
+                    }
+                })
+            })
+        else {
             return;
         };
         if input[..pos]
@@ -1003,7 +1199,8 @@ impl NumberCandidateProvider {
         {
             return;
         }
-        let m_end = caps.get(0).unwrap().end();
+        // 数の終わり (単位つきの形では単位は数に含めない)
+        let m_end = caps.get(2).unwrap().end();
         let to_arabic = |s: &str| s.chars().filter_map(kanji_digit).collect::<String>();
         let num = format!(
             "{}.{}",
@@ -1273,11 +1470,18 @@ impl NumberCandidateProvider {
             // 2024-2025 (年範囲) ばかりで、 マイナス と読むべき例は無い。
             // 負数は -3 のように前が数字でない形で書かれるので、
             // 前が数字のときだけ読まない (区切りとして surface のみ消費する)。
-            let final_read = if is_minus
+            // 隣り合う 1 桁の数 + 助数詞 (2〜3時間 / 3~4人) は、 話し言葉では 「にさんじかん」 と詰める。
+            // 「から」 を入れると 「にからさんじかん」 と硬い (user 方針、 2026-10-19)。 離れた数 (2〜5回) や 2 桁 (10〜20人) は 「から」 のまま。
+            // ハイフン (1-2日 / 3-4人) はスコア・面数と紛れるので対象外 (従来どおり hyphen_is_count_range で 「から」)
+            let final_read = if is_range_marker && range_is_adjacent_small(input, pos, ch) {
+                String::new()
+            } else if is_minus
                 && (hyphen_is_time_range(input, pos, ch)
                     || hyphen_is_count_range(input, pos, ch)
                     || hyphen_is_clock_range(input, pos, ch)
-                    || hyphen_is_year_range(input, pos, ch))
+                    || hyphen_is_year_range(input, pos, ch)
+                    || hyphen_is_unit_range(input, pos, ch)
+                    || hyphen_is_date_range(input, pos, ch))
             {
                 "から".to_string()
             } else if (is_minus && !minus_is_sign(input, pos, ch))
@@ -1675,6 +1879,33 @@ impl NumberCandidateProvider {
         out.push(self.make(input, pos, whole.end(), reading));
     }
 
+    /// 年月 (`2026/09`)。 年 19xx / 20xx + 月 1〜12。 年月日 (`2026/09/15`) は `try_ymd` が読む。
+    /// 数字・区切りの途中 (`1/2026/09` / `2026/091` / `2026/09/15`) や、 英字の直後 (版・型番) は読まない
+    fn try_year_month(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
+        let Some(caps) = at_start(&YM_RE, rest) else {
+            return;
+        };
+        let whole = caps.get(0).unwrap();
+        let (y, m) = (caps.get(1).unwrap().as_str(), caps.get(2).unwrap().as_str());
+        let Ok(mn) = m.parse::<u32>() else {
+            return;
+        };
+        let prev = input[..pos].chars().next_back();
+        let after = &rest[whole.end()..];
+        if !(1..=12).contains(&mn)
+            || prev.is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '.'))
+            || after.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '/' | '-'))
+        {
+            return;
+        }
+        let reading = format!(
+            "{}{}",
+            self.read_counter_in_date(y, "年"),
+            self.read_counter_in_date(m, "月")
+        );
+        out.push(self.make(input, pos, whole.end(), reading));
+    }
+
     /// `N/M` を日付か分数か決める。 雑談では日付のほうが多いので、 手がかりが無ければ日付に倒す。
     /// - 分数の手がかり (直後: サイズ / 倍 / 割 / くらい / ぐらい / ずつ …、 直前: HP / MP / 確率 / ゲージ …) が最優先
     ///   (1/2サイズ = にぶんのいちさいず / HP 12/25 = にじゅうごぶんのじゅうに)
@@ -1897,13 +2128,16 @@ impl CandidateProvider for NumberCandidateProvider {
         // 読んでいた (実データ 704 万行のハイフンはスコア・面数・年範囲ばかりで、
         // 減算の例は無い)。 負数は 「-3」 「弾道 -3」 のように前が数字でない形。
         // 記号 edge (読み無し) だけ出し、 数字は次の位置で読ませる。
-        let sign_is_separator =
-            matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
+        let sign_is_separator = matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
                 && input[..pos].chars().next_back().is_some_and(|c| {
                     is_digit_like_char(c)
                         || c.is_ascii_alphabetic()
                         || matches!(c, '時' | '分' | '秒')
-                });
+                })
+                // 1534年-1582年 / 20歳-30歳 の - も範囲の区切り (負数 -1582 ではない)
+                || (matches!(first_char, '-' | '\u{2212}' | '\u{FF0D}')
+                    && (hyphen_is_unit_range(input, pos, first_char)
+                        || hyphen_is_date_range(input, pos, first_char)));
         if !numeric_lead || sign_is_separator {
             // 何百件 / 何千円 は 何 の位置から 1 候補にする (try_counter_kanji、 2026-09-28)
             if first_char == '何' {
@@ -1956,6 +2190,7 @@ impl CandidateProvider for NumberCandidateProvider {
             self.try_fraction(input, pos, rest, out);
             self.try_phone(input, pos, rest, out);
             self.try_ymd(input, pos, rest, out);
+            self.try_year_month(input, pos, rest, out);
             self.try_postal_after_label(input, pos, rest, out);
             self.try_slash_pair(input, pos, rest, out);
             self.try_version(input, pos, rest, out);
