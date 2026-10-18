@@ -434,6 +434,20 @@ fn hyphen_is_time_range(input: &str, pos: usize, ch: char) -> bool {
             .is_some_and(is_digit_like_char)
 }
 
+/// `1534年-1582年` / `872年頃-945年頃` / `20歳-30歳` の `-`: 年・歳 (と、 年のあとの 頃) の直後で、 数字が続き、 その数字の直後が同じ単位の時は
+/// 範囲の区切り (から)。 両側に同じ単位が揃う時だけ (`9日-17` のような片側だけの形は従来どおり読まない)
+fn hyphen_is_unit_range(input: &str, pos: usize, ch: char) -> bool {
+    let before = &input[..pos];
+    let unit = match before.chars().next_back() {
+        Some(c @ ('年' | '歳')) => c,
+        Some('頃') if before.trim_end_matches('頃').ends_with('年') => '年',
+        _ => return false,
+    };
+    let after = &input[pos + ch.len_utf8()..];
+    let digits = after.chars().take_while(|&c| is_digit_like_char(c)).count();
+    digits > 0 && after.chars().nth(digits).is_some_and(|c| c == unit)
+}
+
 /// 装飾にも使われる図形記号。 伏せ字の書き方 (`■■さん` / `△△`) の時だけ読む
 const DECORATIVE_SHAPES: &str = "●■▲▼◆◇";
 
@@ -1347,7 +1361,8 @@ impl NumberCandidateProvider {
                 && (hyphen_is_time_range(input, pos, ch)
                     || hyphen_is_count_range(input, pos, ch)
                     || hyphen_is_clock_range(input, pos, ch)
-                    || hyphen_is_year_range(input, pos, ch))
+                    || hyphen_is_year_range(input, pos, ch)
+                    || hyphen_is_unit_range(input, pos, ch))
             {
                 "から".to_string()
             } else if (is_minus && !minus_is_sign(input, pos, ch))
@@ -1994,13 +2009,15 @@ impl CandidateProvider for NumberCandidateProvider {
         // 読んでいた (実データ 704 万行のハイフンはスコア・面数・年範囲ばかりで、
         // 減算の例は無い)。 負数は 「-3」 「弾道 -3」 のように前が数字でない形。
         // 記号 edge (読み無し) だけ出し、 数字は次の位置で読ませる。
-        let sign_is_separator =
-            matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
+        let sign_is_separator = matches!(first_char, '+' | '-' | '\u{2212}' | '\u{FF0D}' | '\u{FF0B}')
                 && input[..pos].chars().next_back().is_some_and(|c| {
                     is_digit_like_char(c)
                         || c.is_ascii_alphabetic()
                         || matches!(c, '時' | '分' | '秒')
-                });
+                })
+                // 1534年-1582年 / 20歳-30歳 の - も範囲の区切り (負数 -1582 ではない)
+                || (matches!(first_char, '-' | '\u{2212}' | '\u{FF0D}')
+                    && hyphen_is_unit_range(input, pos, first_char));
         if !numeric_lead || sign_is_separator {
             // 何百件 / 何千円 は 何 の位置から 1 候補にする (try_counter_kanji、 2026-09-28)
             if first_char == '何' {
