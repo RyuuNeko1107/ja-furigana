@@ -1789,6 +1789,27 @@ fn year_month_day_is_read_as_a_date() {
 }
 
 #[test]
+fn scaled_numbers_voice_the_counter_like_three() {
+    // 万 / 千 の「ん」で終わる読みの後ろは 3 と同じ連濁 (5万本 = ごまんぼん / 10万匹 = じゅうまんびき)
+    for (input, want) in [
+        ("5万本", "ゴマンボン"),
+        ("100万本", "ヒャクマンボン"),
+        ("10万匹", "ジュウマンビキ"),
+    ] {
+        assert_eq!(
+            reading_at(input, 0, input).as_deref(),
+            Some(want),
+            "{input}"
+        );
+    }
+    // 億は直前の数字で決める (従来どおり): 1億本 = いちおくぽん
+    assert_eq!(
+        reading_at("1億本", 0, "1億本").as_deref(),
+        Some("イチオクポン")
+    );
+}
+
+#[test]
 fn zero_padded_month_and_day_counters_drop_the_leading_zero() {
     // 09月 = くがつ (ゼロを読まない)。 ゼロなしと同じ読み
     for (input, want) in [
