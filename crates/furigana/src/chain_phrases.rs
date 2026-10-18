@@ -596,6 +596,19 @@ pub(crate) struct NodeMeta {
     pub pos: String,
 }
 
+/// 表に無い名詞のカタカナ語 (外来語) の核: 4 拍以上は 後ろから 3 拍目 (OpenJTalk の未知語の傾向。 コメント / 国会 / 法令 / Wikipedia / 青空
+/// 41 語で 22 語が一致、 平板は 9 語)。 3 拍以下 / 伸ばし棒だけは平板
+fn loanword_accent(surface: &str, morae: usize) -> usize {
+    let katakana = !surface.is_empty()
+        && surface.chars().all(|c| matches!(c, 'ァ'..='ヶ' | 'ー'))
+        && surface.chars().any(|c| c != 'ー');
+    if katakana && morae >= 4 {
+        morae - 2
+    } else {
+        0
+    }
+}
+
 /// 分割表の部品をノードにする
 fn parts_to_nodes(parts: &[SplitPart]) -> (Vec<Node>, Vec<NodeMeta>) {
     let mut nodes = Vec::with_capacity(parts.len());
@@ -691,7 +704,13 @@ fn expand_morph(
             (usize::from(a), usize::from(mo), rules)
         } else {
             estimated = true;
-            (0, count_mora(&reading), rules)
+            let morae = count_mora(&reading);
+            let accent = if p1 == "名詞" {
+                loanword_accent(&m.surface, morae)
+            } else {
+                0
+            };
+            (accent, morae, rules)
         }
     };
     let mora = if mora == 0 {
@@ -1174,7 +1193,11 @@ fn make_nodes(
                     usize::from(a)
                 } else {
                     estimated = true;
-                    0
+                    if p1 == "名詞" {
+                        loanword_accent(&tok.surface, mora)
+                    } else {
+                        0
+                    }
                 }
             }
         };
@@ -2092,6 +2115,18 @@ ids = [
         // 数字が 1 つだけの token は まとめない
         let one = [token("三", "さん", 0..3)];
         assert!(numeral_run(&one, 0, &morphs[..1], &align("三", &morphs[..1])).is_none());
+    }
+
+    #[test]
+    fn loanword_accent_is_the_third_mora_from_the_end() {
+        assert_eq!(loanword_accent("クロスフォリオ", 6), 4);
+        assert_eq!(loanword_accent("ゴブリンブリーチ", 8), 6);
+        assert_eq!(loanword_accent("ジオゲッサー", 6), 4);
+        // 3 拍以下 / 漢字まじり / 伸ばし棒だけは平板
+        assert_eq!(loanword_accent("ヤバイ", 3), 0);
+        assert_eq!(loanword_accent("ー", 1), 0);
+        assert_eq!(loanword_accent("ーーーー", 4), 0);
+        assert_eq!(loanword_accent("ペコ猫ーラ", 5), 0);
     }
 
     #[test]
