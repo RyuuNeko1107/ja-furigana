@@ -2087,6 +2087,43 @@ ids = [
     }
 
     #[test]
+    fn numeral_nodes_picks_the_right_month_for_every_number() {
+        // 1〜12 月が それぞれの漢字の月 (一月 … 十二月) の辞書語になる
+        let kanji = [
+            "一月",
+            "二月",
+            "三月",
+            "四月",
+            "五月",
+            "六月",
+            "七月",
+            "八月",
+            "九月",
+            "十月",
+            "十一月",
+            "十二月",
+        ];
+        let mut body = String::from("[words]\n");
+        for (k, r) in kanji.iter().zip(MONTH_READINGS.iter()) {
+            body.push_str(&format!("\"{k},{r},名詞\" = \"1/{}\"\n", count_mora(r)));
+        }
+        let t = table_of(&body);
+        for (i, k) in kanji.iter().enumerate() {
+            let n = (i + 1).to_string();
+            let ms = [
+                morph(&n, "", "名詞", "数"),
+                morph("月", "ツキ", "名詞", "一般"),
+            ];
+            let surface = format!("{n}月");
+            let (nodes, meta) = numeral_case(&surface, MONTH_READINGS[i], &ms, &t).unwrap();
+            assert_eq!(nodes.len(), 1, "{surface}");
+            assert_eq!(nodes[0].surface, *k, "{surface}");
+            assert_eq!(nodes[0].morae, count_mora(MONTH_READINGS[i]), "{surface}");
+            assert_eq!(meta[0].reading, MONTH_READINGS[i]);
+        }
+    }
+
+    #[test]
     fn numeral_nodes_splits_repeated_number_and_counter_pairs() {
         let t = table_of(
             "[words]

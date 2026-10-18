@@ -573,4 +573,115 @@ mod tests {
         assert_eq!(n.pos, Pos::Meishi(MeishiKind::Kazu));
         assert_eq!(n.chain_flag, Some(false));
     }
+
+    #[test]
+    fn every_kanji_digit_and_unit_is_parsed_as_its_own_word() {
+        for c in "一二三四五六七八九".chars() {
+            let (words, used) = parse_numeral(&format!("{c}円")).unwrap();
+            assert_eq!(words.len(), 1, "{c}");
+            assert_eq!(words[0].surface, c.to_string());
+            assert_eq!(used, c.len_utf8());
+        }
+        for c in "十百千万億兆".chars() {
+            let (words, used) = parse_numeral(&format!("三{c}円")).unwrap();
+            let s: Vec<&str> = words.iter().map(|w| w.surface.as_str()).collect();
+            assert_eq!(s, ["三", &c.to_string()], "{c}");
+            assert_eq!(used, "三".len() + c.len_utf8());
+        }
+        // 一字目が単位でも読める (十円 / 百円)
+        assert_eq!(parse_numeral("百円").unwrap().0[0].surface, "百");
+    }
+
+    #[test]
+    fn sixteen_digits_are_the_limit() {
+        let (words, _) = parse_numeral("1234567890123456円").unwrap();
+        assert!(words.iter().any(|w| w.surface == "兆"));
+        assert!(parse_numeral("12345678901234567円").is_none());
+        // 先頭が 0 / 全部 0 の複数桁
+        assert!(parse_numeral("00円").is_none());
+        assert!(parse_numeral("0123円").is_none());
+    }
+
+    #[test]
+    fn comma_groups_must_be_three_digits() {
+        assert!(parse_numeral("1,234円").is_some());
+        assert!(parse_numeral("12,345,678円").is_some());
+        assert!(parse_numeral("1,23円").is_none());
+        assert!(parse_numeral("1,2345円").is_none());
+        assert!(parse_numeral("1234,567円").is_none());
+        // 全角のカンマも同じ
+        assert!(parse_numeral("1\u{FF0C}234円").is_some());
+        // 末尾のカンマは数に含めない
+        assert_eq!(parse_numeral("5,円").unwrap().1, 1);
+    }
+
+    #[test]
+    fn base_values_of_every_numeral_word_match_openjtalk() {
+        // (語, 拍数, 核, 結合型) — jpreprocess の辞書 / 数字列の語
+        let table = [
+            ("一", 2, 2, "C3"),
+            ("二", 1, 1, "C3"),
+            ("三", 2, 0, "C3"),
+            ("四", 2, 1, "C1"),
+            ("五", 1, 1, "C3"),
+            ("六", 2, 2, "C3"),
+            ("七", 2, 1, "C3"),
+            ("八", 2, 2, "C3"),
+            ("九", 2, 1, "C3"),
+            ("十", 2, 1, "C3"),
+            ("百", 2, 2, "C3"),
+            ("千", 2, 1, "C3"),
+            ("万", 2, 1, "C3"),
+            ("億", 2, 1, "C3"),
+            ("兆", 2, 1, "C3"),
+        ];
+        for (s, m, a, r) in table {
+            let w = Word {
+                surface: s.to_string(),
+                generated: false,
+            };
+            assert_eq!(base(&w), Some((m, a, r)), "{s}");
+        }
+        // 位取りで作った語 (算用数字の桁) は十・百・千・万・億の結合型が `*`、 兆だけ C3
+        for s in ["十", "百", "千", "万", "億"] {
+            let w = Word {
+                surface: s.to_string(),
+                generated: true,
+            };
+            assert_eq!(base(&w).unwrap().2, "*", "{s}");
+        }
+        let w = Word {
+            surface: "兆".to_string(),
+            generated: true,
+        };
+        assert_eq!(base(&w).unwrap().2, "C3");
+        let w = Word {
+            surface: "x".to_string(),
+            generated: false,
+        };
+        assert_eq!(base(&w), None);
+    }
+
+    #[test]
+    fn place_value_words_for_every_position() {
+        let w = |s: &str| {
+            parse_numeral(s)
+                .unwrap()
+                .0
+                .into_iter()
+                .map(|w| w.surface)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(w("11円"), ["十", "一"]);
+        assert_eq!(w("101円"), ["百", "一"]);
+        assert_eq!(w("1001円"), ["千", "一"]);
+        assert_eq!(w("20000円"), ["二", "万"]);
+        assert_eq!(w("100000000円"), ["一", "億"]);
+        assert_eq!(w("1000000000000円"), ["一", "兆"]);
+        assert_eq!(
+            w("12345円"),
+            ["一", "万", "二", "千", "三", "百", "四", "十", "五"]
+        );
+        assert_eq!(w("30005円"), ["三", "万", "五"]);
+    }
 }
