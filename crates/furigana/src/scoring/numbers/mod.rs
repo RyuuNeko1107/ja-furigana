@@ -63,10 +63,11 @@ use crate::scoring::digit_reading::DigitStyle;
 use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
-    build_si_unit_regex, HeadRegex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE, FRACTION_RE,
-    KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE, KANJI_DECIMAL_UNIT_RE, PHONE_RE, POSTAL_RE, RATIO_RE,
-    SLASH_DATE_AFTER_RE, SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE,
-    SLASH_PAIR_RE, SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
+    build_si_unit_regex, HeadRegex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE,
+    DOT_DATE_WEEKDAY_RE, FRACTION_RE, KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE,
+    KANJI_DECIMAL_UNIT_RE, PHONE_RE, POSTAL_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
+    SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE, SLASH_PAIR_RE,
+    SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
     SLASH_SENTENCE_FRACTION_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
     YMD_RE, YM_RE,
 };
@@ -1969,6 +1970,35 @@ impl NumberCandidateProvider {
         out.push(self.make(input, pos, whole.end(), reading));
     }
 
+    /// `10.14(水)` — 曜日の括弧が続く `月.日` は日付 (じゅうがつじゅうよっか)。 それまでは小数 (じゅうてんいちよん) だった。
+    /// 数字・ドットの途中 (2026.10.14(水) / 1.10.14) は触らない
+    fn try_dot_date(&self, input: &str, pos: usize, rest: &str, out: &mut Vec<RawCandidate<'_>>) {
+        let Some(caps) = at_start(&DOT_DATE_WEEKDAY_RE, rest) else {
+            return;
+        };
+        let (a, b) = (caps.get(1).unwrap().as_str(), caps.get(2).unwrap().as_str());
+        let (Ok(x), Ok(y)) = (a.parse::<u32>(), b.parse::<u32>()) else {
+            return;
+        };
+        if !(1..=12).contains(&x) || !(1..=31).contains(&y) {
+            return;
+        }
+        let end = caps.get(2).unwrap().end();
+        if input[..pos]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_digit() || c == '.')
+        {
+            return;
+        }
+        let reading = format!(
+            "{}{}",
+            self.read_counter_in_date(a, "月"),
+            self.read_counter_in_date(b, "日")
+        );
+        out.push(self.make(input, pos, end, reading));
+    }
+
     /// 日付の手がかり: 直後 (曜日の括弧 / 時刻 / まで・から・発売 …)、 直前 (本日 / 締切 …)、 範囲 `6/26〜7/2` の両端
     fn date_cue(&self, before: &str, after: &str, x: u32, y: u32) -> bool {
         SLASH_DATE_AFTER_RE.is_match(after)
@@ -2193,6 +2223,7 @@ impl CandidateProvider for NumberCandidateProvider {
             self.try_year_month(input, pos, rest, out);
             self.try_postal_after_label(input, pos, rest, out);
             self.try_slash_pair(input, pos, rest, out);
+            self.try_dot_date(input, pos, rest, out);
             self.try_version(input, pos, rest, out);
             self.try_counter(input, pos, rest, out);
         } else {

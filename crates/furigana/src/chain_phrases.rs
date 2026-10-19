@@ -592,6 +592,22 @@ pub(crate) fn debug_nodes(
         .collect()
 }
 
+/// 診断用: 各ノードの (表記, 読み, 品詞, 拍数, 語単体の核, 推定か)。 句の連結の前の値
+pub(crate) fn debug_nodes_detail(
+    text: &str,
+    tokens: &[Token],
+    morphs: &[MorphToken],
+    lexicon: &AccentLexicon,
+    table: &ChainTable,
+) -> Vec<(String, String, String, usize, usize, bool)> {
+    let (nodes, meta) = make_nodes(text, tokens, morphs, lexicon, table);
+    nodes
+        .iter()
+        .zip(meta)
+        .map(|(n, m)| (m.surface, m.reading, m.pos, n.morae, n.accent, m.estimated))
+        .collect()
+}
+
 /// ノード 1 つの付随情報 (出力の組み立てと、 欠けている核の診断に使う)
 pub(crate) struct NodeMeta {
     pub surface: String,
@@ -599,6 +615,523 @@ pub(crate) struct NodeMeta {
     pub estimated: bool,
     /// 品詞 (IPADIC の 大分類,細分類1)。 診断用
     pub pos: String,
+}
+
+/// 半角の英数字を全角にする (naist-jdic は 英字の語を全角の表記で持つ: `ＰＣ` / `ＳＮＳ`)。 英数字を含まなければ `None`
+fn fullwidth_alnum(s: &str) -> Option<String> {
+    if !s.chars().any(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    Some(
+        s.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    char::from_u32(u32::from(c) - u32::from('!') + 0xFF01).unwrap_or(c)
+                } else {
+                    c
+                }
+            })
+            .collect(),
+    )
+}
+
+/// 語単体の核の表を、 半角のまま → 全角に直して (英小文字は大文字にも) の順に引く
+fn word_get_alnum(table: &ChainTable, surface: &str, reading: &str, p1: &str) -> Option<(u8, u8)> {
+    table
+        .word_get(crate::keyhash::hash_parts(&[surface, reading, p1]))
+        .or_else(|| {
+            let fw = fullwidth_alnum(surface)?;
+            table
+                .word_get(crate::keyhash::hash_parts(&[&fw, reading, p1]))
+                .or_else(|| {
+                    let up = fullwidth_alnum(&surface.to_ascii_uppercase())?;
+                    table.word_get(crate::keyhash::hash_parts(&[&up, reading, p1]))
+                })
+        })
+}
+
+/// 英字 1 文字の読み (名前)。 長音の綴り違い (エイ / エー) は両方
+const LETTER_NAMES: [(char, &[&str]); 26] = [
+    ('A', &["エイ", "エー"]),
+    ('B', &["ビー"]),
+    ('C', &["シー"]),
+    ('D', &["ディー"]),
+    ('E', &["イー"]),
+    ('F', &["エフ"]),
+    ('G', &["ジー"]),
+    ('H', &["エイチ", "エッチ"]),
+    ('I', &["アイ"]),
+    ('J', &["ジェイ", "ジェー"]),
+    ('K', &["ケイ", "ケー"]),
+    ('L', &["エル"]),
+    ('M', &["エム"]),
+    ('N', &["エヌ"]),
+    ('O', &["オー", "オウ"]),
+    ('P', &["ピー"]),
+    ('Q', &["キュー"]),
+    ('R', &["アール"]),
+    ('S', &["エス"]),
+    ('T', &["ティー"]),
+    ('U', &["ユー"]),
+    ('V', &["ブイ"]),
+    ('W', &["ダブリュー", "ダブルユー"]),
+    ('X', &["エックス"]),
+    ('Y', &["ワイ"]),
+    ('Z', &["ゼット", "ズィー"]),
+];
+
+/// 大文字だけの英字略語 (2〜4 字、 読みが文字の名前の連なり) の核: 最後の文字の名前の最初の拍 (OpenJTalk は URL / OP / PTSD …
+/// を 辞書語として 後ろから 2 拍目付近に置く。 コメント等 49 語で 25 語が一致、 外れは MTG / NTR / TRPG など辞書に無い略語)。 当てはまらなければ `None`
+fn abbreviation_accent(surface: &str, reading: &str) -> Option<usize> {
+    let n = surface.chars().count();
+    if !(2..=4).contains(&n) || !surface.chars().all(|c| c.is_ascii_uppercase()) {
+        return None;
+    }
+    let last = surface.chars().last()?;
+    let names = LETTER_NAMES.iter().find(|(c, _)| *c == last)?.1;
+    let name = names.iter().find(|nm| reading.ends_with(**nm))?;
+    let total = count_mora(reading);
+    let tail = count_mora(name);
+    (total > tail).then(|| total - tail + 1)
+}
+
+/// 表に無い名詞のカタカナ語 (外来語) の核: 4 拍以上は 後ろから 3 拍目 (OpenJTalk の未知語の傾向。 コメント / 国会 / 法令 / Wikipedia / 青空
+/// 41 語で 22 語が一致、 平板は 9 語)。 3 拍以下 / 伸ばし棒だけは平板
+fn loanword_accent(surface: &str, morae: usize) -> usize {
+    let katakana = !surface.is_empty()
+        && surface.chars().all(|c| matches!(c, 'ァ'..='ヶ' | 'ー'))
+        && surface.chars().any(|c| c != 'ー');
+    if katakana && morae >= 4 {
+        morae - 2
+    } else {
+        0
+    }
+}
+
+/// 分割表の部品をノードにする
+fn parts_to_nodes(parts: &[SplitPart]) -> (Vec<Node>, Vec<NodeMeta>) {
+    let mut nodes = Vec::with_capacity(parts.len());
+    let mut meta = Vec::with_capacity(parts.len());
+    for part in parts {
+        let mut node = new_node(
+            &part.surface,
+            usize::from(part.mora),
+            usize::from(part.accent),
+            part.pos,
+            part.renyou,
+            part.rules,
+        );
+        node.last_pos = part.pos;
+        nodes.push(node);
+        meta.push(NodeMeta {
+            surface: part.surface.to_string(),
+            reading: part.reading.to_string(),
+            estimated: false,
+            pos: part.pos_label.to_string(),
+        });
+    }
+    (nodes, meta)
+}
+
+/// 複数部品の語の分割表のキー (表記,品詞1,複合)。 品詞は IPADIC と naist-jdic で食い違う (どう = 副詞 / 感動詞) ので全部試す
+const COMPOUND_POS: [(&str, &str); 3] = [("感動詞", "複合"), ("副詞", "複合"), ("接続詞", "複合")];
+
+/// `tokens[start..]` の先頭から数 token の表記をつないだものが分割表 (複数部品の語) にあれば (token 数, 部品)。
+/// 部品の読みを連結すると token の読みの連結と一致する時だけ
+fn compound_split<'a>(
+    tokens: &[Token],
+    start: usize,
+    table: &'a ChainTable,
+) -> Option<(usize, &'a [SplitPart])> {
+    let first = &tokens[start];
+    let mut surface = String::new();
+    let mut reading = String::new();
+    let mut end = first.range.start;
+    for (k, tok) in tokens[start..].iter().take(5).enumerate() {
+        if tok.range.start != end {
+            return None;
+        }
+        end = tok.range.end;
+        surface.push_str(&tok.surface);
+        reading.push_str(&crate::kana::hira_to_kata(&tok.reading));
+        for (p1, p2) in COMPOUND_POS {
+            if let Some(parts) = table.split_get(crate::keyhash::hash_parts(&[&surface, p1, p2])) {
+                let joined: String = parts.iter().map(|p| &*p.reading).collect();
+                if joined == reading {
+                    return Some((k + 1, parts));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 形態素 1 つを ノードにする (分割表にあれば OpenJTalk の複数語に分けて)。
+fn expand_morph(
+    m: &MorphToken,
+    lexicon: &AccentLexicon,
+    table: &ChainTable,
+) -> (Vec<Node>, Vec<NodeMeta>) {
+    let mut out_nodes: Vec<Node> = Vec::new();
+    let mut out_meta: Vec<NodeMeta> = Vec::new();
+    let reading = crate::kana::hira_to_kata(m.reading.as_deref().unwrap_or(""));
+    // Lindera の 1 語を OpenJTalk の複数語に分ける (助詞連語 など)
+    let sp1 = m.pos.as_deref().unwrap_or("*");
+    let sp2 = m.pos_detail.as_deref().unwrap_or("*");
+    if let Some(parts) = table.split_get(crate::keyhash::hash_parts(&[&m.surface, sp1, sp2])) {
+        let joined: String = parts.iter().map(|p| &*p.reading).collect();
+        if joined == reading {
+            return parts_to_nodes(parts);
+        }
+    }
+    let (pos, renyou) = map_pos(m);
+    // IPADIC の 「*」 は None で返る。 表のキーは 「*」 なので揃える
+    let (p1, p2) = (
+        m.pos.as_deref().unwrap_or("*"),
+        m.pos_detail.as_deref().unwrap_or("*"),
+    );
+    let mut estimated = false;
+    let key = crate::keyhash::hash_parts(&[&m.surface, &reading, p1, p2]);
+    let (accent, mora, rules) = if let Some((a, mo, r)) = table.functional_get(key) {
+        (usize::from(a), usize::from(mo), r)
+    } else {
+        let rules = table.rules_for_key(key, p1, p2);
+        // 活用語は 原形つきの表を最初に引く (たべ = 食べる 2 型 / 食ぶ 1 型 のように 綴りだけでは核が割れる語)
+        let by_base = m
+            .base_form
+            .as_deref()
+            .filter(|_| matches!(p1, "動詞" | "形容詞"))
+            .and_then(|base| {
+                let tail = format!("{p1},{base}");
+                table.word_get(crate::keyhash::hash_parts(&[&m.surface, &reading, &tail]))
+            });
+        if let Some((a, mo)) = by_base
+            .or_else(|| lexicon.lookup(&m.surface, &reading))
+            .or_else(|| word_get_alnum(table, &m.surface, &reading, p1))
+        {
+            (usize::from(a), usize::from(mo), rules)
+        } else {
+            estimated = true;
+            let morae = count_mora(&reading);
+            let accent = if p1 == "名詞" {
+                abbreviation_accent(&m.surface, &reading)
+                    .unwrap_or_else(|| loanword_accent(&m.surface, morae))
+            } else {
+                0
+            };
+            (accent, morae, rules)
+        }
+    };
+    let mora = if mora == 0 {
+        count_mora(&reading)
+    } else {
+        mora
+    };
+    let mut node = new_node(&m.surface, mora, accent, pos, renyou, rules);
+    node.last_pos = pos;
+    out_nodes.push(node);
+    out_meta.push(NodeMeta {
+        surface: m.surface.clone(),
+        reading,
+        estimated,
+        pos: format!("{},{}", p1, p2),
+    });
+    (out_nodes, out_meta)
+}
+
+/// 読み (カタカナ) から 拍数 `n` 分の文字を切り出す (小書きの拗音は前の拍に含める)
+fn take_mora(chars: &[char], pos: &mut usize, n: usize) -> String {
+    let counts = |c: char| {
+        is_kana_char(c) && !matches!(c, 'ャ' | 'ュ' | 'ョ' | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ')
+    };
+    let mut out = String::new();
+    let mut got = 0;
+    while got < n && *pos < chars.len() {
+        let c = chars[*pos];
+        if counts(c) {
+            got += 1;
+        }
+        out.push(c);
+        *pos += 1;
+    }
+    while *pos < chars.len() && is_kana_char(chars[*pos]) && !counts(chars[*pos]) {
+        out.push(chars[*pos]);
+        *pos += 1;
+    }
+    out
+}
+
+const MONTH_READINGS: [&str; 12] = [
+    "イチガツ",
+    "ニガツ",
+    "サンガツ",
+    "シガツ",
+    "ゴガツ",
+    "ロクガツ",
+    "シチガツ",
+    "ハチガツ",
+    "クガツ",
+    "ジュウガツ",
+    "ジュウイチガツ",
+    "ジュウニガツ",
+];
+
+fn is_counter_morph(m: &MorphToken) -> bool {
+    // IPADIC は 「月」 を 名詞・一般 にしている (OpenJTalk の辞書では助数詞)
+    m.pos.as_deref() == Some("名詞")
+        && (matches!(m.pos_detail.as_deref(), Some("接尾") | Some("副詞可能")) || m.surface == "月")
+        && m.reading.as_deref().is_some_and(|r| !r.is_empty())
+}
+
+fn is_number_morph(m: &MorphToken) -> bool {
+    m.pos_detail.as_deref() == Some("数") || matches!(m.surface.as_str(), "," | "，")
+}
+
+/// 1〜12 の数字の語から月の漢字表記 (一月 … 十二月) と読みの添字を得る
+fn month_of(words: &[crate::accent_digit::Word]) -> Option<(String, usize)> {
+    let surfaces: Vec<&str> = words.iter().map(|w| w.surface.as_str()).collect();
+    let n = match surfaces.as_slice() {
+        ["一"] => 1,
+        ["二"] => 2,
+        ["三"] => 3,
+        ["四"] => 4,
+        ["五"] => 5,
+        ["六"] => 6,
+        ["七"] => 7,
+        ["八"] => 8,
+        ["九"] => 9,
+        ["十"] => 10,
+        ["十", "一"] => 11,
+        ["十", "二"] => 12,
+        _ => return None,
+    };
+    let kanji = surfaces.concat();
+    Some((format!("{kanji}月"), n - 1))
+}
+
+/// `tokens[start..]` から、 数字と助数詞の形態素だけでできた token の連なり (2 つ以上) を 1 つの token にまとめる。
+/// 先頭の token は数字の形態素だけ。 連なりが 1 つだけ / 数字の形態素で始まらない時は `None`
+fn numeral_run(
+    tokens: &[Token],
+    start: usize,
+    morphs: &[MorphToken],
+    spans: &[Option<(usize, usize)>],
+) -> Option<(usize, Token)> {
+    let overlapping = |tok: &Token| -> Vec<usize> {
+        spans
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                s.and_then(|(a, b)| (a < tok.range.end && b > tok.range.start).then_some(i))
+            })
+            .collect()
+    };
+    let inside = |tok: &Token, idx: &[usize]| {
+        idx.iter()
+            .all(|&i| spans[i].is_some_and(|(a, b)| a >= tok.range.start && b <= tok.range.end))
+    };
+    let first = &tokens[start];
+    let fi = overlapping(first);
+    if fi.is_empty() || !inside(first, &fi) || !fi.iter().all(|&i| is_number_morph(&morphs[i])) {
+        return None;
+    }
+    let mut end = first.range.end;
+    let mut count = 1;
+    for tok in &tokens[start + 1..] {
+        if tok.range.start != end {
+            break;
+        }
+        let idx = overlapping(tok);
+        if idx.is_empty()
+            || !inside(tok, &idx)
+            || !idx
+                .iter()
+                .all(|&i| is_number_morph(&morphs[i]) || is_counter_morph(&morphs[i]))
+        {
+            break;
+        }
+        end = tok.range.end;
+        count += 1;
+    }
+    if count < 2 {
+        return None;
+    }
+    let run = &tokens[start..start + count];
+    Some((
+        count,
+        Token {
+            surface: run.iter().map(|t| t.surface.as_str()).collect(),
+            reading: run.iter().map(|t| t.reading.as_str()).collect(),
+            range: first.range.start..end,
+            accent_phrases: Vec::new(),
+            ambiguous: false,
+            alternatives: Vec::new(),
+            is_name: false,
+            band: 50,
+            why: None,
+        },
+    ))
+}
+
+/// 数字 + 助数詞 (年月日のように繰り返してもよい) の token を、 数字段階の移植 ([`crate::accent_digit`]) で
+/// ノード列にする。
+///
+/// 数字側の形態素がすべて 「名詞・数」 (か桁区切り)、 助数詞が 名詞・接尾 / 副詞可能 の時だけ。 数 + 助数詞の並びが終わった後の
+/// 形態素は通常どおり。 作ったノードの拍数の合計が token の読みの拍数と食い違う時は `None` (従来どおり)。
+#[allow(clippy::too_many_arguments)]
+fn numeral_nodes(
+    tok: &Token,
+    tok_reading: &str,
+    idx: &[usize],
+    spans: &[Option<(usize, usize)>],
+    morphs: &[MorphToken],
+    lexicon: &AccentLexicon,
+    table: &ChainTable,
+    prev_surface: &str,
+) -> Option<(Vec<Node>, Vec<NodeMeta>)> {
+    // 数字側が token の先頭から始まること (先頭の形態素が 数)
+    if idx.is_empty() || !is_number_morph(&morphs[idx[0]]) {
+        return None;
+    }
+    for &i in idx {
+        let (a, b) = spans[i]?;
+        if a < tok.range.start || b > tok.range.end {
+            return None;
+        }
+    }
+    // (数字の形態素, 助数詞の形態素) の並びに分け、 残りは tail
+    let mut segs: Vec<(Vec<usize>, Option<usize>)> = Vec::new();
+    let mut cur: Vec<usize> = Vec::new();
+    let mut tail_from = idx.len();
+    for (k, &i) in idx.iter().enumerate() {
+        let m = &morphs[i];
+        if is_number_morph(m) {
+            cur.push(i);
+        } else if !cur.is_empty() && is_counter_morph(m) {
+            segs.push((std::mem::take(&mut cur), Some(i)));
+        } else {
+            tail_from = k;
+            break;
+        }
+    }
+    if !cur.is_empty() {
+        segs.push((cur, None));
+    }
+    if segs.is_empty() {
+        return None;
+    }
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut meta: Vec<NodeMeta> = Vec::new();
+    let mut before = prev_surface.to_string();
+    for (num_idx, counter_idx) in &segs {
+        let surface: String = num_idx
+            .iter()
+            .map(|&i| morphs[i].surface.as_str())
+            .collect();
+        let (words, used) = crate::accent_digit::parse_numeral(&surface)?;
+        if used != surface.len() {
+            return None;
+        }
+        let counter = counter_idx.map(|i| {
+            let m = &morphs[i];
+            (
+                m.surface.as_str(),
+                crate::kana::hira_to_kata(m.reading.as_deref().unwrap_or("")),
+            )
+        });
+        // 月 (一月 … 十二月) は辞書語: 語単体の核が表にあればそれを使う
+        if let (Some(ci), Some((month, n))) = (counter_idx, month_of(&words)) {
+            if morphs[*ci].surface == "月" {
+                let reading = MONTH_READINGS[n];
+                let found = lexicon.lookup(&month, reading).or_else(|| {
+                    table.word_get(crate::keyhash::hash_parts(&[&month, reading, "名詞"]))
+                });
+                if let Some((a, mo)) = found {
+                    let key = crate::keyhash::hash_parts(&[&month, reading, "名詞", "副詞可能"]);
+                    let rules = table.rules_for_key(key, "名詞", "副詞可能");
+                    let mora = if mo == 0 {
+                        count_mora(reading)
+                    } else {
+                        usize::from(mo)
+                    };
+                    nodes.push(new_node(
+                        &month,
+                        mora,
+                        usize::from(a),
+                        Pos::Meishi(MeishiKind::FukushiKanou),
+                        false,
+                        rules,
+                    ));
+                    meta.push(NodeMeta {
+                        surface: format!("{surface}{}", morphs[*ci].surface),
+                        reading: String::new(),
+                        estimated: false,
+                        pos: "名詞,副詞可能".to_string(),
+                    });
+                    before = "月".to_string();
+                    continue;
+                }
+            }
+        }
+        let staged = crate::accent_digit::stage(
+            &words,
+            counter.as_ref().map(|(s, r)| (*s, r.as_str())),
+            before.contains('月'),
+        )?;
+        let first = nodes.len();
+        for d in &staged.nodes {
+            let n = d.to_node();
+            let pos_label = if n.pos == Pos::Meishi(MeishiKind::FukushiKanou) {
+                "名詞,副詞可能"
+            } else {
+                "名詞,数"
+            };
+            nodes.push(n);
+            meta.push(NodeMeta {
+                surface: String::new(),
+                reading: String::new(),
+                estimated: false,
+                pos: pos_label.to_string(),
+            });
+        }
+        meta[first].surface = surface;
+        if staged.counter_merged {
+            if let (Some(ci), Some(m)) = (counter_idx, meta.last_mut()) {
+                m.surface.push_str(&morphs[*ci].surface);
+            }
+        } else if let Some(ci) = counter_idx {
+            let at = nodes.len();
+            let (ns, ms) = expand_morph(&morphs[*ci], lexicon, table);
+            nodes.extend(ns);
+            meta.extend(ms);
+            if let (Some(flag), Some(n)) = (staged.counter_flag, nodes.get_mut(at)) {
+                n.chain_flag = Some(flag);
+            }
+        }
+        before = counter_idx.map_or_else(String::new, |i| morphs[i].surface.clone());
+    }
+    for &i in &idx[tail_from..] {
+        let (ns, ms) = expand_morph(&morphs[i], lexicon, table);
+        nodes.extend(ns);
+        meta.extend(ms);
+    }
+    // 拍数の合計が token の読みと合うことを確かめ、 読みを拍数ごとに配る
+    let total: usize = nodes.iter().map(|n| n.morae).sum();
+    if total != count_mora(tok_reading) {
+        return None;
+    }
+    let chars: Vec<char> = tok_reading.chars().collect();
+    let mut pos = 0;
+    let last = nodes.len() - 1;
+    for (k, (n, m)) in nodes.iter().zip(meta.iter_mut()).enumerate() {
+        m.reading = take_mora(&chars, &mut pos, n.morae);
+        if k == last {
+            m.reading.extend(&chars[pos..]);
+            pos = chars.len();
+        }
+    }
+    debug_assert_eq!(pos, chars.len());
+    Some((nodes, meta))
 }
 
 /// 採択 token と形態素から ノード列を作る。
@@ -614,7 +1147,49 @@ fn make_nodes(
     let mut nodes: Vec<Node> = Vec::new();
     let mut meta: Vec<NodeMeta> = Vec::new();
 
-    for tok in tokens {
+    let mut ti = 0;
+    while ti < tokens.len() {
+        // naist-jdic で 1 語が複数部品になる語 (ありがとうございました = ありがとう + ございました) は、
+        // 続く token の表記をつないで分割表を引く
+        if let Some((count, parts)) = compound_split(tokens, ti, table) {
+            let (mut ns, ms) = parts_to_nodes(parts);
+            // 複数部品の語の 2 番目以降は 別のアクセント句 (OpenJTalk は連結フラグを false にする)
+            for n in ns.iter_mut().skip(1) {
+                n.chain_flag = Some(false);
+            }
+            nodes.extend(ns);
+            meta.extend(ms);
+            ti += count;
+            continue;
+        }
+        // 数字 + 助数詞が複数 token に分かれている (漢数字は 1 字ずつ、 2 + 千円 など) 時は、 つないで数字段階を通す
+        if let Some((count, merged)) = numeral_run(tokens, ti, morphs, &spans) {
+            let (ms_, me_) = (merged.range.start, merged.range.end);
+            let midx: Vec<usize> = spans
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.and_then(|(a, b)| (a < me_ && b > ms_).then_some(i)))
+                .collect();
+            let reading = crate::kana::hira_to_kata(&merged.reading);
+            let prev_surface = meta.last().map_or("", |m| m.surface.as_str());
+            if let Some((ns, ms)) = numeral_nodes(
+                &merged,
+                &reading,
+                &midx,
+                &spans,
+                morphs,
+                lexicon,
+                table,
+                prev_surface,
+            ) {
+                nodes.extend(ns);
+                meta.extend(ms);
+                ti += count;
+                continue;
+            }
+        }
+        let tok = &tokens[ti];
+        ti += 1;
         let (ts, te) = (tok.range.start, tok.range.end);
         // この token に重なる形態素 (完全に含まれるもの + 端でまたぐもの)
         let idx: Vec<usize> = spans
@@ -630,6 +1205,25 @@ fn make_nodes(
             .iter()
             .map(|&i| morphs[i].reading.as_deref().unwrap_or(""))
             .collect();
+
+        // 伸ばし棒だけの token (たーい / よかったー) は 前の語の一部 (OpenJTalk は ノリター のように 1 語として読む)
+        if !tok.surface.is_empty()
+            && tok.surface.chars().all(|c| matches!(c, 'ー' | 'ｰ'))
+            && tok_reading.chars().all(|c| c == 'ー')
+        {
+            if let (Some(last_node), Some(last_meta)) = (nodes.last_mut(), meta.last_mut()) {
+                if last_node.morae > 0
+                    && !last_meta.reading.is_empty()
+                    && !matches!(last_node.pos, Pos::Joshi(_))
+                {
+                    let n = tok_reading.chars().count();
+                    last_node.morae += n;
+                    last_meta.surface.push_str(&tok.surface);
+                    last_meta.reading.push_str(&tok_reading);
+                    continue;
+                }
+            }
+        }
 
         if tok_reading.is_empty() || !tok_reading.chars().any(is_kana_char) {
             // 読めない token (記号 / 絵文字 / 空白) は句を切る記号として扱う
@@ -652,78 +1246,34 @@ fn make_nodes(
             continue;
         }
 
+        // 数字 + 助数詞: 数字を OpenJTalk と同じ手順で 1 語ずつのノードにする (六 + 本 = ロッ、 二千円 の核 …)
+        if inside {
+            let prev_surface = meta.last().map_or("", |m| m.surface.as_str());
+            if let Some((ns, ms)) = numeral_nodes(
+                tok,
+                &tok_reading,
+                &idx,
+                &spans,
+                morphs,
+                lexicon,
+                table,
+                prev_surface,
+            ) {
+                nodes.extend(ns);
+                meta.extend(ms);
+                continue;
+            }
+        }
+
         if inside
             && !morph_reading.is_empty()
             && crate::kana::hira_to_kata(&morph_reading) == tok_reading
         {
             // 形態素ごとのノードに展開
             for &i in &idx {
-                let m = &morphs[i];
-                let reading = crate::kana::hira_to_kata(m.reading.as_deref().unwrap_or(""));
-                // Lindera の 1 語を OpenJTalk の複数語に分ける (助詞連語 など)
-                let sp1 = m.pos.as_deref().unwrap_or("*");
-                let sp2 = m.pos_detail.as_deref().unwrap_or("*");
-                if let Some(parts) =
-                    table.split_get(crate::keyhash::hash_parts(&[&m.surface, sp1, sp2]))
-                {
-                    let joined: String = parts.iter().map(|p| &*p.reading).collect();
-                    if joined == reading {
-                        for part in parts {
-                            let mut node = new_node(
-                                &part.surface,
-                                usize::from(part.mora),
-                                usize::from(part.accent),
-                                part.pos,
-                                part.renyou,
-                                part.rules,
-                            );
-                            node.last_pos = part.pos;
-                            nodes.push(node);
-                            meta.push(NodeMeta {
-                                surface: part.surface.to_string(),
-                                reading: part.reading.to_string(),
-                                estimated: false,
-                                pos: part.pos_label.to_string(),
-                            });
-                        }
-                        continue;
-                    }
-                }
-                let (pos, renyou) = map_pos(m);
-                // IPADIC の 「*」 は None で返る。 表のキーは 「*」 なので揃える
-                let (p1, p2) = (
-                    m.pos.as_deref().unwrap_or("*"),
-                    m.pos_detail.as_deref().unwrap_or("*"),
-                );
-                let mut estimated = false;
-                let key = crate::keyhash::hash_parts(&[&m.surface, &reading, p1, p2]);
-                let (accent, mora, rules) = if let Some((a, mo, r)) = table.functional_get(key) {
-                    (usize::from(a), usize::from(mo), r)
-                } else {
-                    let rules = table.rules_for_key(key, p1, p2);
-                    if let Some((a, mo)) = lexicon.lookup(&m.surface, &reading).or_else(|| {
-                        table.word_get(crate::keyhash::hash_parts(&[&m.surface, &reading, p1]))
-                    }) {
-                        (usize::from(a), usize::from(mo), rules)
-                    } else {
-                        estimated = true;
-                        (0, count_mora(&reading), rules)
-                    }
-                };
-                let mora = if mora == 0 {
-                    count_mora(&reading)
-                } else {
-                    mora
-                };
-                let mut node = new_node(&m.surface, mora, accent, pos, renyou, rules);
-                node.last_pos = pos;
-                nodes.push(node);
-                meta.push(NodeMeta {
-                    surface: m.surface.clone(),
-                    reading,
-                    estimated,
-                    pos: format!("{},{}", p1, p2),
-                });
+                let (ns, ms) = expand_morph(&morphs[i], lexicon, table);
+                nodes.extend(ns);
+                meta.extend(ms);
             }
             continue;
         }
@@ -750,11 +1300,19 @@ fn make_nodes(
                 usize::from(p.accent.unwrap_or(0))
             }
             _ => {
-                if let Some((a, _)) = lexicon.lookup(&tok.surface, &tok_reading) {
+                if let Some((a, _)) = lexicon
+                    .lookup(&tok.surface, &tok_reading)
+                    .or_else(|| word_get_alnum(table, &tok.surface, &tok_reading, p1))
+                {
                     usize::from(a)
                 } else {
                     estimated = true;
-                    0
+                    if p1 == "名詞" {
+                        abbreviation_accent(&tok.surface, &tok_reading)
+                            .unwrap_or_else(|| loanword_accent(&tok.surface, mora))
+                    } else {
+                        0
+                    }
                 }
             }
         };
@@ -1459,6 +2017,324 @@ ids = [
         ));
         t.finish();
         t
+    }
+
+    fn numeral_case(
+        surface: &str,
+        reading: &str,
+        morphs: &[MorphToken],
+        table: &ChainTable,
+    ) -> Option<(Vec<Node>, Vec<NodeMeta>)> {
+        let lex = AccentLexicon::default();
+        let tok = token(surface, reading, 0..surface.len());
+        let spans = align(surface, morphs);
+        let idx: Vec<usize> = (0..morphs.len()).collect();
+        numeral_nodes(&tok, reading, &idx, &spans, morphs, &lex, table, "")
+    }
+
+    #[test]
+    fn numeral_nodes_expands_digits_one_word_at_a_time() {
+        let t = table_of(
+            "[words]
+\"円,エン,名詞\" = \"1/2\"
+",
+        );
+        let ms = [
+            morph("2000", "", "名詞", "数"),
+            morph("円", "エン", "名詞", "接尾"),
+        ];
+        let (nodes, meta) = numeral_case("2000円", "ニセンエン", &ms, &t).unwrap();
+        let shape: Vec<(&str, usize, usize, Option<bool>)> = nodes
+            .iter()
+            .map(|n| (n.surface.as_str(), n.morae, n.accent, n.chain_flag))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("二", 1, 1, Some(false)),
+                ("千", 2, 1, Some(true)),
+                ("円", 2, 1, Some(true))
+            ]
+        );
+        let readings: Vec<&str> = meta.iter().map(|m| m.reading.as_str()).collect();
+        assert_eq!(readings, ["ニ", "セン", "エン"]);
+        let surfaces: String = meta.iter().map(|m| m.surface.as_str()).collect();
+        assert_eq!(surfaces, "2000円");
+    }
+
+    #[test]
+    fn numeral_nodes_gives_up_when_the_mora_total_disagrees_with_the_reading() {
+        let t = table_of(
+            "[words]
+\"円,エン,名詞\" = \"1/2\"
+",
+        );
+        let ms = [
+            morph("2000", "", "名詞", "数"),
+            morph("円", "エン", "名詞", "接尾"),
+        ];
+        // 読みが数字段階の拍数と合わない (二千円 = 5 拍 のはずが 6 拍)
+        assert!(numeral_case("2000円", "ニセンエンン", &ms, &t).is_none());
+    }
+
+    #[test]
+    fn numeral_nodes_keeps_months_as_dictionary_words() {
+        let t = table_of(
+            "[words]
+\"九月,クガツ,名詞\" = \"1/3\"
+",
+        );
+        let ms = [
+            morph("9", "", "名詞", "数"),
+            morph("月", "ツキ", "名詞", "一般"),
+        ];
+        let (nodes, meta) = numeral_case("9月", "クガツ", &ms, &t).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!((nodes[0].morae, nodes[0].accent), (3, 1));
+        assert_eq!(meta[0].reading, "クガツ");
+        assert_eq!(meta[0].surface, "9月");
+    }
+
+    #[test]
+    fn numeral_nodes_picks_the_right_month_for_every_number() {
+        // 1〜12 月が それぞれの漢字の月 (一月 … 十二月) の辞書語になる
+        let kanji = [
+            "一月",
+            "二月",
+            "三月",
+            "四月",
+            "五月",
+            "六月",
+            "七月",
+            "八月",
+            "九月",
+            "十月",
+            "十一月",
+            "十二月",
+        ];
+        let mut body = String::from("[words]\n");
+        for (k, r) in kanji.iter().zip(MONTH_READINGS.iter()) {
+            body.push_str(&format!("\"{k},{r},名詞\" = \"1/{}\"\n", count_mora(r)));
+        }
+        let t = table_of(&body);
+        for (i, k) in kanji.iter().enumerate() {
+            let n = (i + 1).to_string();
+            let ms = [
+                morph(&n, "", "名詞", "数"),
+                morph("月", "ツキ", "名詞", "一般"),
+            ];
+            let surface = format!("{n}月");
+            let (nodes, meta) = numeral_case(&surface, MONTH_READINGS[i], &ms, &t).unwrap();
+            assert_eq!(nodes.len(), 1, "{surface}");
+            assert_eq!(nodes[0].surface, *k, "{surface}");
+            assert_eq!(nodes[0].morae, count_mora(MONTH_READINGS[i]), "{surface}");
+            assert_eq!(meta[0].reading, MONTH_READINGS[i]);
+        }
+    }
+
+    #[test]
+    fn numeral_nodes_splits_repeated_number_and_counter_pairs() {
+        let t = table_of(
+            "[words]
+\"年,ネン,名詞\" = \"1/2\"
+\"日,ニチ,名詞\" = \"1/2\"
+",
+        );
+        let ms = [
+            morph("2026", "", "名詞", "数"),
+            morph("年", "ネン", "名詞", "接尾"),
+            morph("13", "", "名詞", "数"),
+            morph("日", "ニチ", "名詞", "接尾"),
+        ];
+        let (nodes, _) = numeral_case(
+            "2026年13日",
+            "ニセンニジュウロクネンジュウサンニチ",
+            &ms,
+            &t,
+        )
+        .unwrap();
+        // 二千二十六年 (二 千 二 十 六 + 年) と、 続く 十三日
+        assert_eq!(nodes.first().map(|n| n.surface.as_str()), Some("二"));
+        assert_eq!(nodes.iter().filter(|n| n.surface == "年").count(), 1);
+    }
+
+    #[test]
+    fn numeral_nodes_ignores_tokens_that_do_not_start_with_a_number() {
+        let t = table_of("");
+        let ms = [morph("円", "エン", "名詞", "接尾")];
+        assert!(numeral_case("円", "エン", &ms, &t).is_none());
+    }
+
+    #[test]
+    fn take_mora_keeps_small_kana_with_the_previous_mora() {
+        let chars: Vec<char> = "ヒャクエン".chars().collect();
+        let mut pos = 0;
+        assert_eq!(take_mora(&chars, &mut pos, 1), "ヒャ");
+        assert_eq!(take_mora(&chars, &mut pos, 2), "クエ");
+        assert_eq!(take_mora(&chars, &mut pos, 1), "ン");
+    }
+
+    #[test]
+    fn compound_split_joins_consecutive_tokens_and_splits_into_openjtalk_words() {
+        let t = table_of(
+            "[splits]
+\"ありがとうございました,感動詞,複合\" = \"ありがとう,アリガトウ,感動詞,*,0,2/5,*;ございました,ゴザイマシタ,感動詞,*,0,4/6,*\"
+",
+        );
+        let lex = AccentLexicon::default();
+        let toks = [
+            token("ありがとう", "ありがとう", 0..15),
+            token("ござい", "ござい", 15..24),
+            token("まし", "まし", 24..30),
+            token("た", "た", 30..33),
+        ];
+        let text = "ありがとうございました";
+        let morphs = [
+            morph("ありがとう", "アリガトウ", "感動詞", "*"),
+            morph("ござい", "ゴザイ", "助動詞", "*"),
+            morph("まし", "マシ", "助動詞", "*"),
+            morph("た", "タ", "助動詞", "*"),
+        ];
+        let (nodes, meta) = make_nodes(text, &toks, &morphs, &lex, &t);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!((nodes[0].morae, nodes[0].accent), (5, 2));
+        assert_eq!((nodes[1].morae, nodes[1].accent), (6, 4));
+        // 2 番目の部品は別の句
+        assert_eq!(nodes[1].chain_flag, Some(false));
+        assert_eq!(meta[1].reading, "ゴザイマシタ");
+        // 読みが合わなければ分けない
+        let toks2 = [
+            token("ありがとう", "ありがとう", 0..15),
+            token("ござい", "ござい", 15..24),
+            token("まし", "まし", 24..30),
+            token("た", "だ", 30..33),
+        ];
+        let (nodes2, _) = make_nodes(text, &toks2, &morphs, &lex, &t);
+        assert_eq!(nodes2.len(), 4);
+    }
+
+    #[test]
+    fn prolonged_sound_mark_joins_the_previous_word_unless_it_is_a_particle() {
+        let t = table_of("");
+        let lex = AccentLexicon::default();
+        // 「よかった」 + 「ー」 は 1 語 (ヨカッター)
+        let toks = [token("た", "た", 0..3), token("ー", "ー", 3..6)];
+        let morphs = [
+            morph("た", "タ", "助動詞", "*"),
+            morph("ー", "ー", "記号", "一般"),
+        ];
+        let (nodes, meta) = make_nodes("たー", &toks, &morphs, &lex, &t);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].morae, 2);
+        assert_eq!(meta[0].reading, "ター");
+        // 助詞の後ろは別
+        let toks = [token("に", "に", 0..3), token("ー", "ー", 3..6)];
+        let morphs = [
+            morph("に", "ニ", "助詞", "格助詞"),
+            morph("ー", "ー", "記号", "一般"),
+        ];
+        let (nodes, _) = make_nodes("にー", &toks, &morphs, &lex, &t);
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn numeral_run_joins_kanji_digits_written_one_per_token() {
+        let t = table_of(
+            "[words]
+\"年,ネン,名詞\" = \"1/2\"
+",
+        );
+        let lex = AccentLexicon::default();
+        // 三十二年 (漢数字は 1 字ずつ token)
+        let toks = [
+            token("三", "さん", 0..3),
+            token("十", "じゅう", 3..6),
+            token("二", "に", 6..9),
+            token("年", "ねん", 9..12),
+        ];
+        let morphs = [
+            morph("三", "サン", "名詞", "数"),
+            morph("十", "ジュウ", "名詞", "数"),
+            morph("二", "ニ", "名詞", "数"),
+            morph("年", "ネン", "名詞", "接尾"),
+        ];
+        let (nodes, meta) = make_nodes("三十二年", &toks, &morphs, &lex, &t);
+        // 三 + 十 は 句を分けず、 二 から新しい句 (OpenJTalk: サンジュウ | ニネン)
+        let phrases = build_phrases(&mut nodes.clone());
+        assert_eq!(phrases.len(), 2);
+        assert_eq!(phrases[0].morae, 4);
+        assert_eq!(phrases[1].morae, 3);
+        let readings: Vec<&str> = meta.iter().map(|m| m.reading.as_str()).collect();
+        assert_eq!(readings.concat(), "サンジュウニネン");
+        // 数字が 1 つだけの token は まとめない
+        let one = [token("三", "さん", 0..3)];
+        assert!(numeral_run(&one, 0, &morphs[..1], &align("三", &morphs[..1])).is_none());
+    }
+
+    #[test]
+    fn abbreviation_accent_puts_the_nucleus_on_the_last_letter() {
+        assert_eq!(abbreviation_accent("OP", "オーピー"), Some(3));
+        assert_eq!(abbreviation_accent("URL", "ユーアールエル"), Some(6));
+        assert_eq!(abbreviation_accent("AI", "エーアイ"), Some(3));
+        assert_eq!(abbreviation_accent("PTSD", "ピーティーエスディー"), Some(7));
+        // 小文字 / 混在 / 5 字以上 / 読みが文字の名前でない語は対象外
+        assert_eq!(abbreviation_accent("op", "オーピー"), None);
+        assert_eq!(abbreviation_accent("DbD", "ディービーディー"), None);
+        assert_eq!(abbreviation_accent("ABCDE", "エイビーシーディーイー"), None);
+        assert_eq!(abbreviation_accent("MAX", "マックス"), None);
+        assert_eq!(abbreviation_accent("OP", "オープン"), None);
+    }
+
+    #[test]
+    fn loanword_accent_is_the_third_mora_from_the_end() {
+        assert_eq!(loanword_accent("クロスフォリオ", 6), 4);
+        assert_eq!(loanword_accent("ゴブリンブリーチ", 8), 6);
+        assert_eq!(loanword_accent("ジオゲッサー", 6), 4);
+        // 3 拍以下 / 漢字まじり / 伸ばし棒だけは平板
+        assert_eq!(loanword_accent("ヤバイ", 3), 0);
+        assert_eq!(loanword_accent("ー", 1), 0);
+        assert_eq!(loanword_accent("ーーーー", 4), 0);
+        assert_eq!(loanword_accent("ペコ猫ーラ", 5), 0);
+    }
+
+    #[test]
+    fn conjugated_forms_are_looked_up_by_base_form_first() {
+        // たべ は 食べる (2 型) と 食ぶ (1 型) で核が違う。 原形つきの key で引く
+        let t = table_of(
+            "[words]
+\"たべ,タベ,動詞,たべる\" = \"2/2\"
+\"たべ,タベ,動詞,たぶ\" = \"1/2\"
+",
+        );
+        let lex = AccentLexicon::default();
+        let mut m = morph("たべ", "タベ", "動詞", "自立");
+        m.base_form = Some("たべる".to_string());
+        let (nodes, meta) = expand_morph(&m, &lex, &t);
+        assert_eq!((nodes[0].morae, nodes[0].accent), (2, 2));
+        assert!(!meta[0].estimated);
+        m.base_form = Some("たぶ".to_string());
+        let (nodes, _) = expand_morph(&m, &lex, &t);
+        assert_eq!(nodes[0].accent, 1);
+        // 原形が無ければ 従来どおり (表に無い → 推定の平板)
+        m.base_form = None;
+        let (nodes, meta) = expand_morph(&m, &lex, &t);
+        assert_eq!(nodes[0].accent, 0);
+        assert!(meta[0].estimated);
+    }
+
+    #[test]
+    fn alphanumeric_words_are_looked_up_in_fullwidth_form() {
+        // naist-jdic は 英字の語を全角で持つ (ＰＣ)
+        let t = table_of(
+            "[words]
+\"ＰＣ,ピーシー,名詞\" = \"3/4\"
+",
+        );
+        assert_eq!(word_get_alnum(&t, "PC", "ピーシー", "名詞"), Some((3, 4)));
+        assert_eq!(word_get_alnum(&t, "pc", "ピーシー", "名詞"), Some((3, 4)));
+        assert_eq!(word_get_alnum(&t, "PC", "ピーシー", "動詞"), None);
+        assert_eq!(fullwidth_alnum("あいう"), None);
+        assert_eq!(fullwidth_alnum("A1"), Some("Ａ１".to_string()));
     }
 
     #[test]

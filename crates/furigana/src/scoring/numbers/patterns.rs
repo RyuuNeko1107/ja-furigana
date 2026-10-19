@@ -111,6 +111,12 @@ pub(super) static SLASH_PAIR_RE: Lazy<HeadRegex> = Lazy::new(|| {
         .expect("scoring SLASH_PAIR regex build failed")
 });
 
+/// `10.14(水)` — 月.日 の直後が曜日の括弧 (ドット区切りの日付。 小数や版番号とは読まない)
+pub(super) static DOT_DATE_WEEKDAY_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new(r"([0-9]{1,2})\.([0-9]{1,2})[ \u{3000}]?[(\u{FF08}][月火水木金土日祝]")
+        .expect("scoring DOT_DATE_WEEKDAY regex build failed")
+});
+
 /// `N/M` の直後が日付の手がかり: 曜日の括弧 `(日)` / `（月・祝）`、 時刻 `20:00` / `20時`、 日付の言い方 (まで / から / 発売 …)
 pub(super) static SLASH_DATE_AFTER_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
