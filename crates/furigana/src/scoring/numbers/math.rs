@@ -117,6 +117,7 @@ fn is_op(c: char) -> bool {
             | '⊥'
             | '∥'
             | '≡'
+            | '→'
     )
 }
 
@@ -137,7 +138,10 @@ fn is_span_char(c: char) -> bool {
 /// 式を始められる字
 fn is_start_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
-        || matches!(c, '(' | '√' | '-' | '+' | '²' | '³' | '^' | '△' | '∠' | '∫')
+        || matches!(
+            c,
+            '(' | '√' | '-' | '+' | '²' | '³' | '^' | '△' | '∠' | '∫' | '|'
+        )
         || greek(c).is_some()
 }
 
@@ -158,12 +162,20 @@ enum Tok {
     Comma,
     /// f'(x) の ' (ダッシュ)
     Prime,
+    /// |x| の開き / 閉じ (絶対値)
+    BarOpen,
+    BarClose,
+    /// n! の ! (階乗)
+    Fact,
+    /// a_n / a_{n+1} の _ (添え字)
+    SubMark,
 }
 
 /// 範囲を字に切る。 英字の語・コードらしいもの (`HP` / `val` / `a==b` / `i++`) があれば None
 fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
     let geo = chars.iter().any(|c| "⊥∥≡△∠∈∉∪∩".contains(*c));
     let mut toks: Vec<Tok> = Vec::new();
+    let mut bar_open = false;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -222,6 +234,16 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
                 {
                     return None;
                 }
+                // 組合せ・順列 nCr / nPr は 1 つの変数として残す (読み上げ側が英字を読む)
+                let b = run.as_bytes();
+                if b.len() == 3
+                    && b[0].is_ascii_lowercase()
+                    && matches!(b[1], b'C' | b'P')
+                    && b[2].is_ascii_lowercase()
+                {
+                    toks.push(Tok::Var(run));
+                    continue;
+                }
                 // 幾何・集合の記号 (⊥ ∥ ≡ △ ∠ ∈ ∪ ∩) がある式では、 大文字 2〜3 字の図形・集合の名前 (AB / ABC) を許す
                 if geo
                     && (2..=3).contains(&run.len())
@@ -277,6 +299,69 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
                 i += 1;
             }
             '.' => return None,
+            '|' => {
+                toks.push(if bar_open {
+                    Tok::BarClose
+                } else {
+                    Tok::BarOpen
+                });
+                bar_open = !bar_open;
+                i += 1;
+            }
+            // ^{…} / _{…} の波括弧は括弧として読む (それ以外の { } は式にしない)
+            '{' => {
+                if !matches!(i.checked_sub(1).map(|k| chars[k]), Some('^' | '_')) {
+                    return None;
+                }
+                toks.push(Tok::Open);
+                i += 1;
+            }
+            '}' => {
+                toks.push(Tok::Close);
+                i += 1;
+            }
+            // a_1 (数) / a_n (1 字) / a_{n+1} (波括弧)
+            '_' => {
+                i += 1;
+                if chars.get(i).is_some_and(char::is_ascii_digit) {
+                    let mut s = String::new();
+                    while chars.get(i).is_some_and(char::is_ascii_digit) {
+                        s.push(chars[i]);
+                        i += 1;
+                    }
+                    toks.push(Tok::Sub(s));
+                } else if chars.get(i) == Some(&'{') {
+                    toks.push(Tok::SubMark);
+                } else if chars.get(i).is_some_and(char::is_ascii_alphabetic)
+                    && !chars.get(i + 1).is_some_and(char::is_ascii_alphabetic)
+                {
+                    toks.push(Tok::SubMark);
+                    toks.push(Tok::Var(chars[i].to_string()));
+                    i += 1;
+                } else {
+                    return None;
+                }
+            }
+            // != は ≠、 n! / (n-1)! は階乗 (数の直後の ! は 5!/3! のように式が続く時だけ。 感嘆符を除く)
+            '!' => {
+                if chars.get(i + 1) == Some(&'=') {
+                    toks.push(Tok::Op('≠'));
+                    i += 2;
+                } else {
+                    let ok = match toks.last() {
+                        Some(Tok::Var(_) | Tok::Close) => true,
+                        Some(Tok::Num(_)) => {
+                            chars.get(i + 1).is_some_and(|c| "/*×)+-".contains(*c))
+                        }
+                        _ => false,
+                    };
+                    if !ok {
+                        return None;
+                    }
+                    toks.push(Tok::Fact);
+                    i += 1;
+                }
+            }
             // f'(x) / f′(x): 変数 1 字の直後で ( か = が続く時だけ微分のダッシュ (英語の ' は式にしない)
             '\'' | '′' => {
                 let prev_var = matches!(toks.last(), Some(Tok::Var(v)) if v.len() == 1);
@@ -398,14 +483,16 @@ impl Parser<'_> {
                 };
                 (format!("ルート{r}"), false)
             }
-            Tok::Open => {
+            Tok::Open => (self.group()?, false),
+            // |x-1| = 絶対値
+            Tok::BarOpen => {
                 self.i += 1;
                 let inner = self.seq(true)?;
-                if self.toks.get(self.i) != Some(&Tok::Close) {
+                if self.toks.get(self.i) != Some(&Tok::BarClose) {
                     return None;
                 }
                 self.i += 1;
-                (format!("({inner})"), false)
+                (format!("ゼッタイチ({inner})"), false)
             }
             // ² や ^2 だけが先頭に来た (x が切れている) 場合は 「ニジョウ」 から読む
             Tok::Sup(_) | Tok::Caret => (String::new(), false),
@@ -450,7 +537,10 @@ impl Parser<'_> {
                         return None;
                     };
                     let sign = if neg { "マイナス" } else { "" };
-                    r = if r.is_empty() {
+                    r = if is_big_operator(&r) {
+                        // Σ_{k=1}^{n} → シグマ(kイコールイチ)カラ(n)マデ
+                        format!("{r}カラ{sign}{e}マデ")
+                    } else if r.is_empty() {
                         format!("{sign}{e}ジョウ")
                     } else {
                         format!("{r}ノ{sign}{e}ジョウ")
@@ -464,10 +554,38 @@ impl Parser<'_> {
                     r.push_str("ダッシュ");
                     self.i += 1;
                 }
+                Some(Tok::Fact) => {
+                    r.push_str("ノカイジョウ");
+                    self.i += 1;
+                }
+                // a_n → aサブn / a_{n+1} → aサブ(nプラスイチ)。 Σ ∫ lim の下付きは範囲 (Σ_{k=1}^{n})
+                Some(Tok::SubMark) => {
+                    self.i += 1;
+                    let Item::Atom { r: g, .. } = self.atom_no_pow()? else {
+                        return None;
+                    };
+                    r = if is_big_operator(&r) {
+                        format!("{r}{g}")
+                    } else {
+                        format!("{r}サブ{g}")
+                    };
+                }
                 _ => break,
             }
         }
         Some(Item::Atom { r, func })
+    }
+
+    /// 括弧 `( … )` を読む (後置の累乗・下付きは付けない)。 現在位置は `(`
+    /// (Σ ∫ lim は範囲を取る: [`is_big_operator`])
+    fn group(&mut self) -> Option<String> {
+        self.i += 1;
+        let inner = self.seq(true)?;
+        if self.toks.get(self.i) != Some(&Tok::Close) {
+            return None;
+        }
+        self.i += 1;
+        Some(format!("({inner})"))
     }
 
     /// 指数の項 (累乗の連鎖 x^y^z は読まない)
@@ -484,7 +602,10 @@ impl Parser<'_> {
                 self.i += 1;
                 Some(Item::Atom { r: s, func: false })
             }
-            Tok::Open => self.atom(),
+            Tok::Open => Some(Item::Atom {
+                r: self.group()?,
+                func: false,
+            }),
             _ => None,
         }
     }
@@ -494,8 +615,8 @@ impl Parser<'_> {
         let mut items: Vec<Item> = Vec::new();
         while let Some(t) = self.toks.get(self.i) {
             match t {
-                Tok::Close if in_group => break,
-                Tok::Close => return None,
+                Tok::Close | Tok::BarClose if in_group => break,
+                Tok::Close | Tok::BarClose => return None,
                 Tok::Comma => {
                     items.push(Item::Comma);
                     self.i += 1;
@@ -515,9 +636,15 @@ impl Parser<'_> {
     }
 }
 
+/// 範囲を取る演算子の読みか (Σ ∫ lim)
+fn is_big_operator(r: &str) -> bool {
+    r.starts_with("シグマ") || r.starts_with("インテグラル") || r.starts_with("リミット")
+}
+
 /// 演算子の読み
 fn op_reading(c: char) -> &'static str {
     match c {
+        '→' => "ヘ",
         '+' => "プラス",
         '-' => "マイナス",
         '×' => "カケル",
@@ -560,6 +687,28 @@ fn render(items: &[Item]) -> String {
                 while e < n && matches!(items[e], Item::Atom { .. }) {
                     e += 1;
                 }
+                // x→0 は 「x ゼロ へ」 の順に読む (「リミット x ゼロへ」)
+                if e < n
+                    && matches!(items[e], Item::Op('→'))
+                    && e + 1 < n
+                    && matches!(items[e + 1], Item::Atom { .. })
+                {
+                    let mut r_end = e + 1;
+                    while r_end < n && matches!(items[r_end], Item::Atom { .. }) {
+                        r_end += 1;
+                    }
+                    for item in items[k..e].iter().chain(&items[e + 1..r_end]) {
+                        if let Item::Atom { r, .. } = item {
+                            out.push_str(r);
+                        }
+                    }
+                    out.push('ヘ');
+                    for u in used.iter_mut().take(r_end).skip(k) {
+                        *u = true;
+                    }
+                    k = r_end;
+                    continue;
+                }
                 // run の直後が `/` で、 その次にも run があれば分数を試す
                 if e < n
                     && matches!(items[e], Item::Slash)
@@ -580,11 +729,19 @@ fn render(items: &[Item]) -> String {
                             })
                             .collect::<String>()
                     };
-                    if !chained && single(&items[k..e]) && single(&items[e + 1..d_end]) {
+                    // lim / Σ / ∫ は式全体にかかるので、 分数の外に出す (lim 1/x → リミット xブンノイチ)
+                    let lead = items[k..e]
+                        .iter()
+                        .take_while(
+                            |i| matches!(i, Item::Atom { r, func: true } if is_big_operator(r)),
+                        )
+                        .count();
+                    if !chained && single(&items[k + lead..e]) && single(&items[e + 1..d_end]) {
+                        out.push_str(&join(&items[k..k + lead]));
                         out.push_str(&format!(
                             "{}ブンノ{}",
                             join(&items[e + 1..d_end]),
-                            join(&items[k..e])
+                            join(&items[k + lead..e])
                         ));
                         for u in used.iter_mut().take(d_end).skip(k) {
                             *u = true;
@@ -718,7 +875,10 @@ fn is_math(toks: &[Tok]) -> bool {
     if !structure_ok {
         return false;
     }
-    (has_var && (eq || strong_rel || weak_rel || pow))
+    // |x-1|<2 (絶対値と不等号)
+    let abs_ineq =
+        toks.contains(&Tok::BarOpen) && toks.iter().any(|t| matches!(t, Tok::Op('<' | '>')));
+    (has_var && (eq || strong_rel || weak_rel || pow || abs_ineq))
         || sqrt
         || (!has_var && has_num && eq && (arith || pow))
 }
@@ -745,13 +905,74 @@ pub(super) fn read_math(input: &str, pos: usize) -> Option<(usize, String)> {
     // 範囲を取る (折りたたんだ字と、 各字の終端 byte)
     let mut chars: Vec<char> = Vec::new();
     let mut ends: Vec<usize> = Vec::new();
-    for (i, c) in rest.char_indices() {
+    // 状態を持つ字 (| { } _ !) は、 式の形になる時だけ受ける
+    let mut bar_open_at: Option<usize> = None;
+    let mut brace_opens: Vec<usize> = Vec::new();
+    let rest_chars: Vec<(usize, char)> = rest.char_indices().collect();
+    for (n, &(i, c)) in rest_chars.iter().enumerate() {
         let f = fold(c);
-        if !(is_span_char(f) || f == ' ') || chars.len() >= MAX_SPAN {
+        let next = rest_chars.get(n + 1).map(|&(_, c)| fold(c));
+        let prev = chars
+            .last()
+            .copied()
+            .or_else(|| input[..pos].chars().next_back().map(fold));
+        let operand_end = |p: Option<char>| {
+            p.is_some_and(|p| p.is_ascii_alphanumeric() || matches!(p, ')' | '°'))
+        };
+        let accepted = match f {
+            // |x-1| (絶対値): 開きは前が英数字でなく後ろが式の頭、 閉じは前が英数字・閉じ括弧
+            '|' if bar_open_at.is_none() => {
+                !operand_end(prev)
+                    && next
+                        .is_some_and(|x| x.is_ascii_alphanumeric() || matches!(x, '(' | '-' | '√'))
+            }
+            '|' => operand_end(prev),
+            // ^{…} と _{…} の波括弧だけ
+            '{' => matches!(chars.last(), Some('^' | '_')),
+            '}' => !brace_opens.is_empty(),
+            // a_1 / a_n / a_{n}
+            '_' => {
+                (operand_end(chars.last().copied())
+                    || chars
+                        .last()
+                        .is_some_and(|p| greek(*p).is_some() || *p == '∫'))
+                    && next.is_some_and(|x| x.is_ascii_alphanumeric() || x == '{')
+            }
+            // n! / (n-1)! / x!=y
+            '!' => operand_end(chars.last().copied()),
+            _ => is_span_char(f) || f == ' ',
+        };
+        if !accepted || chars.len() >= MAX_SPAN {
             break;
+        }
+        match f {
+            '|' => {
+                bar_open_at = if bar_open_at.is_none() {
+                    Some(chars.len())
+                } else {
+                    None
+                }
+            }
+            '{' => brace_opens.push(chars.len()),
+            '}' => {
+                brace_opens.pop();
+            }
+            _ => {}
         }
         chars.push(f);
         ends.push(pos + i + c.len_utf8());
+    }
+    // 閉じていない | { は、 その手前まで
+    if let Some(&b) = brace_opens.first() {
+        let cut = b.saturating_sub(1);
+        chars.truncate(cut);
+        ends.truncate(cut);
+    }
+    if let Some(b) = bar_open_at {
+        if b < chars.len() {
+            chars.truncate(b);
+            ends.truncate(b);
+        }
     }
     // 空白は演算子・カンマ・括弧の隣だけ許す (英単語の並びを式にしない)
     let is_glue = |c: char| is_op(c) || matches!(c, ',' | '(' | ')');
@@ -760,7 +981,12 @@ pub(super) fn read_math(input: &str, pos: usize) -> Option<(usize, String)> {
         if chars[k] == ' ' {
             let prev = chars[..k].iter().rev().find(|c| **c != ' ').copied();
             let next = chars[k + 1..].iter().find(|c| **c != ' ').copied();
-            if !(prev.is_some_and(is_glue) || next.is_some_and(is_glue)) {
+            // `sin x` のように関数名の後の空白も許す
+            let after_func = {
+                let before: String = chars[..k].iter().collect();
+                FUNCS.iter().any(|(name, _)| before.ends_with(name))
+            };
+            if !(prev.is_some_and(is_glue) || next.is_some_and(is_glue) || after_func) {
                 chars.truncate(k);
                 ends.truncate(k);
                 break;
@@ -837,7 +1063,14 @@ pub(super) fn read_math(input: &str, pos: usize) -> Option<(usize, String)> {
     }
     // 末尾の空白・記号は式に含めない (x=3, / x+ / 2^)
     while let Some(&last) = chars.last().filter(|_| !keep_tail) {
-        if last == ' ' || last == ',' || last == '.' || last == '^' || last == '√' || (is_op(last))
+        if last == ' '
+            || last == ','
+            || last == '.'
+            || last == '^'
+            || last == '√'
+            || last == '!'
+            || last == '_'
+            || (is_op(last))
         {
             chars.pop();
             ends.pop();
@@ -953,6 +1186,52 @@ mod tests {
     }
 
     #[test]
+    fn abs_factorial_combination_arrows_braces_and_big_operators() {
+        assert_eq!(
+            read("|x-1|<2").unwrap(),
+            "ゼッタイチ(xマイナスイチ)ショウナリニ"
+        );
+        assert_eq!(
+            read("nCr=n!/(r!(n-r)!)").unwrap(),
+            "nCrイコール(rノカイジョウ(nマイナスr)ノカイジョウ)ブンノnノカイジョウ"
+        );
+        assert_eq!(read("n!=24").unwrap(), "nノットイコールニジュウヨン");
+        assert_eq!(
+            read("e^{iπ}+1=0").unwrap(),
+            "eノ(iパイ)ジョウプラスイチイコールゼロ"
+        );
+        assert_eq!(
+            read("x^{n+1}=y").unwrap(),
+            "xノ(nプラスイチ)ジョウイコールy"
+        );
+        assert_eq!(read("a_1+a_n=b").unwrap(), "aイチプラスaサブnイコールb");
+        assert_eq!(
+            read("a_{n+1}=2a_n").unwrap(),
+            "aサブ(nプラスイチ)イコールニaサブn"
+        );
+        assert_eq!(
+            read("Σ_{k=1}^{n}k=n(n+1)/2").unwrap(),
+            "シグマ(kイコールイチ)カラ(n)マデkイコールn(nプラスイチ)ワルニ"
+        );
+        assert_eq!(
+            read("lim(x→0)sin x/x=1").unwrap(),
+            "リミット(xゼロヘ)サインxワルxイコールイチ"
+        );
+        assert_eq!(
+            read("lim_{x→∞}1/x=0").unwrap(),
+            "リミット(xムゲンダイヘ)xブンノイチイコールゼロ"
+        );
+        // 感嘆符・表の罫線・論理和・波括弧のコードは式にしない
+        for s in [
+            "x=3!", "a | b", "a||b", "a|b=1", "{a=1}", "wow!!", "my_var=3",
+        ] {
+            let r = read(s);
+            assert!(r.is_none() || !r.unwrap().contains("カイジョウ"), "{s}");
+        }
+        assert_eq!(read("x=3!").unwrap(), "xイコールサン");
+    }
+
+    #[test]
     fn plus_minus_double_inequality_sets_geometry_and_primes() {
         assert_eq!(read("x=±3").unwrap(), "xイコールプラスマイナスサン");
         assert_eq!(
@@ -1055,7 +1334,6 @@ mod tests {
             "w/o",
             "1.2.3",
             "(^^)",
-            "a_b=1",
             "foo=bar",
             "key=value",
         ] {
