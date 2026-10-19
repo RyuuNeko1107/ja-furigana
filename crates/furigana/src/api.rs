@@ -12,6 +12,7 @@ use crate::rules::{CompatData, RulesData};
 use crate::scoring::analyze::{AlternativeReading, AnalyzeResult, Token as AnalyzeToken};
 use crate::scoring::bracket::AccentPhrase;
 use crate::scoring::numbers::NumberCandidateProvider;
+use crate::scoring::person_names::NameHint;
 use crate::scoring::pipeline::Pipeline;
 use crate::scoring::special::normalize_alphabet;
 use crate::tts::{self, TtsOptions};
@@ -61,6 +62,19 @@ pub struct Furigana {
     estimate_accent: bool,
     /// コスト lattice engine (ADR-0011、 実験中の opt-in)
     cost_engine: bool,
+    /// compat (異体字表) の 1 文字 key の集合。 入力の正規化で 「この文字は何も起きない」 を素早く判定する
+    compat_chars: crate::fxmap::FxSet<char>,
+}
+
+/// `analyze` 系の詳しさ。
+#[derive(Debug, Clone, Copy)]
+enum Depth {
+    /// 候補・代替・理由まで
+    Full,
+    /// 採択 path + band + accent
+    Light,
+    /// 採択 path + band
+    Reading,
 }
 
 impl Furigana {
@@ -147,12 +161,25 @@ impl Furigana {
     /// と判定される。
     #[must_use]
     pub fn tokenize(&self, text: &str) -> Vec<ReadingToken> {
+        self.tokenize_with_hint(text, NameHint::Auto)
+    }
+
+    /// [`Self::tokenize`] に、 入力が人名かどうかのヒントを添える版。
+    ///
+    /// `NameHint::Name` = 入力は人名 (ユーザー名・名簿の欄など。 手がかり無しで姓 + 名の表を引く) /
+    /// `NameHint::NotName` = 人名の専用経路を使わない。 `Auto` は [`Self::tokenize`] と同じ。
+    #[must_use]
+    pub fn tokenize_with_hint(&self, text: &str, hint: NameHint) -> Vec<ReadingToken> {
         // Step 1: lookup 用に入力を正規化 (異体字→標準字 [compat]、 IVS/変異セレクタ除去、
         // NFKC)。 髙→高 / 葛󠄀→葛 / ①→1 等を解決してから形態素解析・辞書 lookup に渡す。
         // **表示 surface は原文を保つ** (lookup のみ正規化): 解析後に各 token の surface を
         // 原文へ戻すので 髙田 は {髙田|たかだ} になる (高田 に化けない)。
-        let norm = crate::kana::normalize_text_aligned(text, &self.rules.compat);
-        let tokens = self.pipeline().tokens(&norm.text);
+        let norm = crate::kana::normalize_text_aligned_with(
+            text,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
+        let tokens = self.pipeline().with_name_hint(hint).tokens(&norm.text);
         // 正規化で何も変わらない通常の日本語入力は fast path (remap 不要 = 旧挙動と同一)。
         if !norm.changed {
             return tokens
@@ -268,6 +295,31 @@ impl Furigana {
         tts::segment_for_tts(&normalized, max_segment_len)
     }
 
+    /// 起動直後・辞書の入れ替え直後の最初のリクエストが遅くならないよう、 遅延初期化を先に済ませる。
+    ///
+    /// 形態素解析器の用意 (約 20ms)、 数字・URL・メール・絵文字・顔文字・型番の正規表現のコンパイル、
+    /// 各経路の初回の確保などは最初に使われた時にまとめて起きるため、 何もしないと最初のリクエストが
+    /// 数十 ms かかる (定常は 0.2ms)。 代表的な入力を一通り解析して結果は捨てる。 出力は変わらない
+    /// (結果の cache は無い)。 サーバーは build 直後 (入れ替える前) に 1 回呼ぶ。
+    pub fn warm_up(&self) {
+        const SAMPLES: &[&str] = &[
+            "今日は良い天気ですね。ありがとうございます！！ほんとに助かりました…",
+            "水田さんと山田選手が来た、 <@123456789012> さん",
+            "2026年10月17日 3時45分に10万円と3.5kg、 1/2、 一二三四五六七八九十と百万",
+            "電話は090-1234-5678、 〒100-0001、 v2.0.1、 192.168.0.1",
+            "詳細は https://example.com/a?b=1 と foo@example.com まで &amp; &#8230;",
+            "😀草😭 (´・ω・｀) ^^ w ♪ ①②③ ㈱",
+            "Hello World API iPhone15 RTX 4070 Ti GM ABC123 xyz",
+        ];
+        for s in SAMPLES {
+            let _ = self.analyze(s);
+            let _ = self.analyze_light(s);
+            let _ = self.analyze_reading(s);
+            let _ = self.tokenize(s);
+        }
+        let _ = self.to_mora_phrases("今日は良い天気ですね");
+    }
+
     /// 動的に辞書エントリを追加 (override 用途)
     pub fn add_reading(&mut self, surface: impl Into<String>, reading: impl Into<String>) {
         self.dict.insert(surface, reading);
@@ -321,11 +373,56 @@ impl Furigana {
     /// ([`crate::scoring::postpass`] の post-pass 群)、 placeholder の 「々」 は残らない。
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
+        self.analyze_with_hint(input, NameHint::Auto)
+    }
+
+    /// [`Self::analyze`] に、 入力が人名かどうかのヒントを添える版 ([`Self::tokenize_with_hint`] と同じ)。
+    #[must_use]
+    pub fn analyze_with_hint(&self, input: &str, hint: NameHint) -> AnalyzeResult {
+        self.analyze_impl(input, hint, Depth::Full)
+    }
+
+    /// [`Self::analyze`] から debug 用の集約を省いた軽い版。
+    ///
+    /// 採択 path の token 列 (surface / reading / range / accent_phrases / `band`) は [`Self::analyze`] と同じ。
+    /// `candidates` は空で、 token の `alternatives` / `ambiguous` / `why` は埋まらない。 全 provider を path 位置で
+    /// 再走させる集約が要らない分、 約 3 割速い。 読みと accent と `band` (辞書が読みを持つ token かの手がかり) だけ
+    /// 要る呼び出し (HTTP の通常 mode、 改善 signal の集計) 向け。 迷った読みの候補が要るなら [`Self::analyze`]。
+    #[must_use]
+    pub fn analyze_light(&self, input: &str) -> AnalyzeResult {
+        self.analyze_light_with_hint(input, NameHint::Auto)
+    }
+
+    /// [`Self::analyze_light`] に、 入力が人名かどうかのヒントを添える版。
+    #[must_use]
+    pub fn analyze_light_with_hint(&self, input: &str, hint: NameHint) -> AnalyzeResult {
+        self.analyze_impl(input, hint, Depth::Light)
+    }
+
+    /// [`Self::analyze_light`] から、 accent 専用の表 / 推定の付与も省いた版 (読みと `band` だけ)。
+    ///
+    /// `ruby` / `hiragana` / `tts` のように accent を使わない出力を作る呼び出し向け。 辞書の bracket が持つ accent は
+    /// 残るが、 表引きの accent (accent 専用の表 / 推定) は付かない。 accent が要るなら [`Self::analyze_light`]
+    #[must_use]
+    pub fn analyze_reading(&self, input: &str) -> AnalyzeResult {
+        self.analyze_impl(input, NameHint::Auto, Depth::Reading)
+    }
+
+    fn analyze_impl(&self, input: &str, hint: NameHint, depth: Depth) -> AnalyzeResult {
         // Step 1: lookup 用に入力正規化 (異体字 [compat] / IVS / NFKC)。tokenize と同じ前処理。
         // 表示 surface は原文を保つため、 解析後に token surface / range を原文へ remap する
         // (`candidates` / `boundary_regions` の range は正規化テキスト座標のまま = debug 用途)。
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
-        let mut result = self.pipeline().analyze(&norm.text);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
+        let pipeline = self.pipeline().with_name_hint(hint);
+        let mut result = match depth {
+            Depth::Full => pipeline.analyze(&norm.text),
+            Depth::Light => pipeline.analyze_light(&norm.text),
+            Depth::Reading => pipeline.analyze_reading(&norm.text),
+        };
         if norm.changed {
             let remapped = norm.remap(input, result.tokens.iter().map(|t| t.surface.as_str()));
             // tokenize と同じ規約: 多文字展開の分割で空 surface になった token は直前 token に
@@ -342,6 +439,12 @@ impl Furigana {
                         last.accent_phrases.append(&mut t.accent_phrases);
                         continue;
                     }
+                }
+                // 異体字などを正規化して解析した token は、 原文に戻すと表記が正規化後と変わる。 改善 signal の集計は
+                // 「解析した表記」 と 「原文の表記」 が一致する token だけを辞書の候補に結び付けてきたので、 その
+                // 挙動を保つ (一致しない token は band 50 = 形態素解析だけで決まった扱い)
+                if t.surface != surface {
+                    t.band = 50;
                 }
                 t.surface = surface;
                 t.range = range;
@@ -365,7 +468,11 @@ impl Furigana {
     #[doc(hidden)]
     #[must_use]
     pub fn chain_missing_accents(&self, input: &str) -> Vec<(String, String, String)> {
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
         crate::chain_phrases::missing_accents(
@@ -400,7 +507,11 @@ impl Furigana {
     #[doc(hidden)]
     #[must_use]
     pub fn chain_debug_nodes(&self, input: &str) -> Vec<(String, String, String, bool)> {
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
         crate::chain_phrases::debug_nodes(
@@ -424,7 +535,11 @@ impl Furigana {
         if self.chain_table.is_empty() {
             return Vec::new();
         }
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
         crate::chain_phrases::build_chained_phrases(
@@ -458,7 +573,11 @@ impl Furigana {
         if self.chain_table.is_empty() {
             return crate::accent_symbols::to_mora_phrases_with(&self.to_accent(input), opts);
         }
-        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let norm = crate::kana::normalize_text_aligned_with(
+            input,
+            &self.rules.compat,
+            Some(&self.compat_chars),
+        );
         let analysis = self.pipeline().analyze(&norm.text);
         let morphs = self.analyzer().tokenize(&norm.text);
         let (phrases, gap) = crate::chain_phrases::build_chained_with_gap(
@@ -729,8 +848,21 @@ impl FuriganaBuilder {
             crate::tablecache::load_tables(&dirs, &self.dict_excludes)?
         };
 
+        let compat_chars: crate::fxmap::FxSet<char> = rules
+            .compat
+            .map
+            .keys()
+            .filter_map(|k| {
+                let mut cs = k.chars();
+                match (cs.next(), cs.next()) {
+                    (Some(c), None) => Some(c),
+                    _ => None,
+                }
+            })
+            .collect();
         Ok(Furigana {
             analyzer: OnceLock::new(),
+            compat_chars,
             rules,
             dict,
             number_provider,
@@ -754,16 +886,21 @@ fn load_compat_into(out: &mut CompatData, dir: &Path, excludes: &[String]) -> Re
     if !dir.exists() {
         return Ok(());
     }
-    crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, from, role| {
-        if role != Some("compat") {
-            return Ok(());
-        }
-        let parsed: CompatData = crate::loader::parse_toml(content, from)?;
-        for (variant, canonical) in parsed.map {
-            out.map.entry(variant).or_insert(canonical);
-        }
-        Ok(())
-    })
+    crate::loader::for_each_toml_in_dir_roles(
+        dir,
+        excludes,
+        |role| role == Some("compat"),
+        |content, from, role| {
+            if role != Some("compat") {
+                return Ok(());
+            }
+            let parsed: CompatData = crate::loader::parse_toml(content, from)?;
+            for (variant, canonical) in parsed.map {
+                out.map.entry(variant).or_insert(canonical);
+            }
+            Ok(())
+        },
+    )
 }
 
 /// `dir` 配下を再帰 scan し、 `role = "loanwords"` の TOML file から
@@ -780,79 +917,179 @@ fn load_loanwords_into(
         return Ok(());
     }
     // walk + schema 検証 + role 解決は `for_each_toml_in_dir` が共通担当。
-    crate::loader::for_each_toml_in_dir_excluding(dir, excludes, |content, from, role| {
-        if role != Some("loanwords") {
-            return Ok(());
-        }
-        // [entries] table を parse (= role 別 toml 構造、 jukugo と同形式)
-        #[derive(serde::Deserialize, Default)]
-        struct LoanwordsToml {
-            #[serde(default)]
-            entries: HashMap<String, String>,
-            /// 語 → くっついた数字の読み方。 `"Windows" = "english"` か、 読みを上書きする
-            /// `"No" = { style = "place", reading = "ナンバー" }`。
-            #[serde(default)]
-            digits: HashMap<String, DigitsValue>,
-            /// 英文の中でだけ使う語 (a / is / to / you …)。 単独では引かないので、 日本語の中の
-            /// `to` や `so` を壊さない。 空白区切りの英字 / 空白なしの連結 (thankyou) の部分として使う。
-            #[serde(default)]
-            sentence_words: HashMap<String, String>,
-        }
-        #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum DigitsValue {
-            Style(String),
-            Detail {
-                style: String,
-                reading: Option<String>,
-            },
-        }
-        let parsed: LoanwordsToml = crate::loader::parse_toml(content, from)?;
-        for (surface, reading) in parsed.entries {
-            out.insert(normalize_alphabet(&surface), reading);
-        }
-        for (word, reading) in parsed.sentence_words {
-            out.insert(
-                format!(
-                    "{}{}",
-                    crate::scoring::special::SENTENCE_KEY_PREFIX,
-                    normalize_alphabet(&word)
-                ),
-                reading,
-            );
-        }
-        for (surface, value) in parsed.digits {
-            let (style, reading) = match value {
-                DigitsValue::Style(s) => (s, None),
-                DigitsValue::Detail { style, reading } => (style, reading),
-            };
-            if crate::scoring::digit_reading::DigitStyle::parse(&style).is_none() {
-                return Err(crate::FuriganaError::Validation(format!(
-                    "{from}: [digits] '{surface}' の読み方 '{style}' は未知 \
-                     (place / each / each_en / english / english10 / pair / pair_en)"
-                )));
+    crate::loader::for_each_toml_in_dir_roles(
+        dir,
+        excludes,
+        |role| role == Some("loanwords"),
+        |content, from, role| {
+            if role != Some("loanwords") {
+                return Ok(());
             }
-            // 「読み方」 と (あれば) 「語 + 数字の時だけ使う読み」 を 1 文字列に畳む。
-            let encoded = match reading {
-                Some(r) => format!("{style}{}{r}", crate::scoring::special::DIGITS_SEP),
-                None => style,
-            };
-            out.insert(
-                format!(
-                    "{}{}",
-                    crate::scoring::special::DIGITS_KEY_PREFIX,
-                    normalize_alphabet(&surface)
-                ),
-                encoded,
-            );
-        }
-        Ok(())
-    })
+            // [entries] table を parse (= role 別 toml 構造、 jukugo と同形式)
+            #[derive(serde::Deserialize, Default)]
+            struct LoanwordsToml {
+                #[serde(default)]
+                entries: HashMap<String, String>,
+                /// 語 → くっついた数字の読み方。 `"Windows" = "english"` か、 読みを上書きする
+                /// `"No" = { style = "place", reading = "ナンバー" }`。
+                #[serde(default)]
+                digits: HashMap<String, DigitsValue>,
+                /// 英文の中でだけ使う語 (a / is / to / you …)。 単独では引かないので、 日本語の中の
+                /// `to` や `so` を壊さない。 空白区切りの英字 / 空白なしの連結 (thankyou) の部分として使う。
+                #[serde(default)]
+                sentence_words: HashMap<String, String>,
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(untagged)]
+            enum DigitsValue {
+                Style(String),
+                Detail {
+                    style: String,
+                    reading: Option<String>,
+                },
+            }
+            let parsed: LoanwordsToml = crate::loader::parse_toml(content, from)?;
+            for (surface, reading) in parsed.entries {
+                out.insert(normalize_alphabet(&surface), reading);
+            }
+            for (word, reading) in parsed.sentence_words {
+                out.insert(
+                    format!(
+                        "{}{}",
+                        crate::scoring::special::SENTENCE_KEY_PREFIX,
+                        normalize_alphabet(&word)
+                    ),
+                    reading,
+                );
+            }
+            for (surface, value) in parsed.digits {
+                let (style, reading) = match value {
+                    DigitsValue::Style(s) => (s, None),
+                    DigitsValue::Detail { style, reading } => (style, reading),
+                };
+                if crate::scoring::digit_reading::DigitStyle::parse(&style).is_none() {
+                    return Err(crate::FuriganaError::Validation(format!(
+                        "{from}: [digits] '{surface}' の読み方 '{style}' は未知 \
+                     (place / each / each_en / english / english10 / pair / pair_en)"
+                    )));
+                }
+                // 「読み方」 と (あれば) 「語 + 数字の時だけ使う読み」 を 1 文字列に畳む。
+                let encoded = match reading {
+                    Some(r) => format!("{style}{}{r}", crate::scoring::special::DIGITS_SEP),
+                    None => style,
+                };
+                out.insert(
+                    format!(
+                        "{}{}",
+                        crate::scoring::special::DIGITS_KEY_PREFIX,
+                        normalize_alphabet(&surface)
+                    ),
+                    encoded,
+                );
+            }
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analyze_light_matches_analyze_on_tokens() {
+        let f = Furigana::minimal().unwrap();
+        for text in [
+            "私は学生です",
+            "今日は2時から",
+            "ありがとう",
+            "水田さんが来た",
+            "髙田です",
+            "草",
+        ] {
+            let full = f.analyze(text);
+            let light = f.analyze_light(text);
+            assert_eq!(full.tokens.len(), light.tokens.len(), "{text}");
+            for (a, b) in full.tokens.iter().zip(&light.tokens) {
+                assert_eq!(a.surface, b.surface, "{text}");
+                assert_eq!(a.reading, b.reading, "{text}");
+                assert_eq!(a.range, b.range, "{text}");
+                assert_eq!(a.accent_phrases, b.accent_phrases, "{text}");
+                assert_eq!(a.band, b.band, "{text}");
+            }
+            assert!(light.candidates.is_empty(), "{text}");
+            assert!(light
+                .tokens
+                .iter()
+                .all(|t| t.alternatives.is_empty() && !t.ambiguous && t.why.is_none()));
+            assert_eq!(full.path_indices, light.path_indices, "{text}");
+        }
+    }
+
+    #[test]
+    fn token_band_tells_dictionary_entries_from_fallbacks() {
+        let mut f = Furigana::minimal().unwrap();
+        f.add_reading("灰桜", "ハイザクラ");
+        let r = f.analyze_light("灰桜");
+        assert_eq!(r.tokens.len(), 1);
+        assert_eq!(r.tokens[0].band, 1000, "辞書の見出しは band 1000");
+    }
+
+    #[test]
+    fn token_band_keeps_the_signal_meaning_for_normalized_surfaces() {
+        let dir = std::env::temp_dir().join(format!("band_compat_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("compat.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"compat\"
+
+[map]
+\"髙\" = \"高\"
+",
+        )
+        .unwrap();
+        let mut f = Furigana::builder().rules_dir(&dir).build().unwrap();
+        f.add_reading("高田", "タカダ");
+        // 辞書の見出しがそのまま当たる表記は 1000、 異体字を正規化して当たった表記は原文に戻すので 50
+        // (改善 signal の集計は、 解析した表記と原文の表記が一致する token だけを辞書の候補に結び付けてきた)
+        assert_eq!(f.analyze_light("高田").tokens[0].band, 1000);
+        let variant = f.analyze_light("髙田");
+        assert_eq!(variant.tokens[0].surface, "髙田");
+        assert_eq!(variant.tokens[0].band, 50);
+        assert_eq!(f.analyze("髙田").tokens[0].band, 50, "analyze も同じ");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn analyze_reading_matches_analyze_light_except_table_accents() {
+        let f = Furigana::minimal().unwrap();
+        for text in [
+            "私は学生です",
+            "今日は2時から",
+            "ありがとう",
+            "水田さんが来た",
+        ] {
+            let light = f.analyze_light(text);
+            let reading = f.analyze_reading(text);
+            assert_eq!(light.tokens.len(), reading.tokens.len(), "{text}");
+            for (a, b) in light.tokens.iter().zip(&reading.tokens) {
+                assert_eq!(a.surface, b.surface, "{text}");
+                assert_eq!(a.reading, b.reading, "{text}");
+                assert_eq!(a.range, b.range, "{text}");
+                assert_eq!(a.band, b.band, "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn warm_up_does_not_change_output() {
+        let f = Furigana::minimal().unwrap();
+        let before = f.to_hiragana("今日は2時から水田さんが来た");
+        f.warm_up();
+        assert_eq!(f.to_hiragana("今日は2時から水田さんが来た"), before);
+    }
 
     #[test]
     fn accent_from_analysis_equals_to_accent() {
@@ -1610,6 +1847,62 @@ role = \"works\"
         assert_ne!(ex.to_ruby("天音"), "{天音|あまね}");
         assert_eq!(ex.to_ruby("灰桜"), "{灰桜|はいざくら}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn person_name_tables_and_name_hint_through_public_api() {
+        let dir = std::env::temp_dir().join(format!(
+            "furigana_names_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("names")).unwrap();
+        std::fs::write(
+            dir.join("entries.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"水田\" = \"スイデン\"
+\"選手\" = \"センシュ\"
+",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("names/sei.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"name_sei\"
+
+[entries]
+\"水田\" = \"みずた\"
+",
+        )
+        .unwrap();
+        let f = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+        // 手がかり (選手) があれば人名の読み、 無ければ辞書の既定 (田んぼの水田)
+        assert_eq!(f.to_hiragana("水田選手"), "みずたせんしゅ");
+        assert_eq!(f.to_hiragana("広い水田"), "ひろいすいでん");
+        // ヒント: Name は手がかり無しで人名、 NotName は専用経路を止める
+        let name = f.tokenize_with_hint("水田", NameHint::Name);
+        assert_eq!(name[0].reading.as_deref(), Some("ミズタ"));
+        let not = f.tokenize_with_hint("水田選手", NameHint::NotName);
+        assert_eq!(not[0].reading.as_deref(), Some("スイデン"));
+        // analyze には why と、 採用しなかった読みが付く
+        let a = f.analyze_with_hint("水田選手", NameHint::Auto);
+        assert!(a.tokens[0]
+            .why
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("name:"));
+        assert!(a.tokens[0]
+            .alternatives
+            .iter()
+            .any(|x| x.reading == "スイデン"));
     }
 
     #[test]

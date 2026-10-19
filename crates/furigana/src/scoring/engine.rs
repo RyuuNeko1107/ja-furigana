@@ -125,7 +125,18 @@ pub fn solve_path<'a>(
     if let Solver::Cost { analyzer, noun_ids } = ctx.solver {
         return crate::scoring::lattice::solve_path_cost(ctx, providers, analyzer, noun_ids);
     }
+    solve_path_raw(ctx, providers)
+        .into_iter()
+        .map(|c| c.into_candidate(ctx.input))
+        .collect()
+}
 
+/// [`solve_path`] の band engine 本体で、 採択 path を [`RawCandidate`] のまま返す
+/// (公開型 [`Candidate`] への変換で文字列を確保せずに済む)。 cost solver (`Solver::Cost`) は扱わない。
+pub(crate) fn solve_path_raw<'a>(
+    ctx: &ScoringContext<'a>,
+    providers: &[&'a dyn CandidateProvider],
+) -> Vec<RawCandidate<'a>> {
     let n = ctx.input.len();
     if n == 0 {
         return Vec::new();
@@ -216,14 +227,14 @@ pub fn solve_path<'a>(
     }
 
     // parent backtrack で path 復元
-    let mut path: Vec<Candidate> = Vec::new();
+    let mut path: Vec<RawCandidate<'a>> = Vec::new();
     let mut pos = n;
     while pos > 0 {
         let Some((prev_pos, cand)) = parent[pos].take() else {
             // 矛盾: dp[pos] あるが parent なし → 空 Vec で諦める
             return Vec::new();
         };
-        path.push(cand.into_candidate(ctx.input));
+        path.push(cand);
         pos = prev_pos;
     }
     path.reverse();

@@ -110,6 +110,9 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
     furigana_inner
         .preload()
         .map_err(|e| anyhow!("形態素解析器の初期化に失敗: {e}"))?;
+    // 数字・URL・絵文字などの正規表現のコンパイルや各経路の初回の確保も先に済ませる
+    // (最初に使われた機能のリクエストだけ数 ms 遅くなるのを防ぐ)
+    furigana_inner.warm_up();
     let furigana: Arc<Furigana> = Arc::new(furigana_inner);
 
     let bind = args.bind.unwrap_or_else(|| cfg.server.bind.clone());

@@ -14,8 +14,10 @@
 //! - **lib は collect しない** (OSS ローカル完結方針)、 caller 任意で persist
 
 use crate::scoring::bracket::{parse_bracket_notation, strip_intonation_markers, AccentPhrase};
-use crate::scoring::candidate::{Candidate, CandidateProvider, RawCandidate, ScoringContext};
-use crate::scoring::engine::solve_path;
+use crate::scoring::candidate::{
+    Candidate, CandidateProvider, RawCandidate, ScoringContext, Solver,
+};
+use crate::scoring::engine::{solve_path, solve_path_raw};
 use serde::Serialize;
 use std::ops::Range;
 
@@ -49,6 +51,14 @@ pub struct Token {
     /// 代替読み候補 (採択されなかった候補、weight 降順)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub alternatives: Vec<AlternativeReading>,
+    /// 採用した読みの理由 (`analyze` の debug 経路だけが埋める)。 例: `match: next_eq=から` / `default`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// 採用した候補の band (辞書の見出し = 1000 / 数字 = 950 / 単漢字の既定 = 100 / 形態素解析のみ = 50 など)。
+    /// 値が低い token は 「辞書が読みを持っていない」 手がかりになる (改善 signal の集計用)。
+    /// post-pass で組み直した token は元の token の値を引き継ぐ。 JSON には出さない
+    #[serde(skip)]
+    pub band: u16,
     /// 人名 token flag (crate 内部、 accent 推定用。 ADR-0007)。
     /// 由来: Lindera 固有名詞/人名 candidate、 または NameBoundaryPass の人名補正。
     #[serde(skip)]
@@ -56,6 +66,28 @@ pub struct Token {
 }
 
 impl Token {
+    /// 採択 path の [`RawCandidate`] から [`Token`] を作る (公開型 [`Candidate`] を経由しないので、
+    /// surface / reading の文字列確保が 1 回ずつで済む)。 [`Self::from_candidate`] と同じ結果になる
+    pub(crate) fn from_raw(c: RawCandidate<'_>, input: &str) -> Self {
+        let (reading, accent_phrases) = if c.reading.contains(['[', ']']) {
+            let parsed = parse_bracket_notation(&c.reading);
+            (parsed.reading, parsed.accent_phrases)
+        } else {
+            (c.reading.into_owned(), Vec::new())
+        };
+        Self {
+            surface: input.get(c.range.clone()).unwrap_or_default().to_string(),
+            reading,
+            range: c.range,
+            accent_phrases,
+            ambiguous: false,
+            alternatives: Vec::new(),
+            is_name: c.is_name,
+            why: None,
+            band: c.score.band,
+        }
+    }
+
     /// [`Candidate`] から [`Token`] へ変換 (score を捨てる)。
     #[must_use]
     pub fn from_candidate(c: &Candidate) -> Self {
@@ -68,6 +100,8 @@ impl Token {
             ambiguous: false,
             alternatives: Vec::new(),
             is_name: c.is_name,
+            why: None,
+            band: c.score.band,
         }
     }
 }
@@ -108,10 +142,50 @@ pub fn analyze_tokens<'a>(
     ctx: &ScoringContext<'a>,
     providers: &[&'a dyn CandidateProvider],
 ) -> Vec<Token> {
-    solve_path(ctx, providers)
-        .iter()
-        .map(Token::from_candidate)
+    path_tokens(ctx, providers)
+}
+
+/// 採択 path の token 列。 band engine は [`RawCandidate`] から直接作る (cost solver だけ従来の経路)
+fn path_tokens<'a>(
+    ctx: &ScoringContext<'a>,
+    providers: &[&'a dyn CandidateProvider],
+) -> Vec<Token> {
+    if matches!(ctx.solver, Solver::Cost { .. }) {
+        return solve_path(ctx, providers)
+            .iter()
+            .map(Token::from_candidate)
+            .collect();
+    }
+    solve_path_raw(ctx, providers)
+        .into_iter()
+        .map(|c| Token::from_raw(c, ctx.input))
         .collect()
+}
+
+/// [`analyze`] から debug 用の集約 (`candidates` / `alternatives`) を省いた版。
+///
+/// 採択 path の token 列 (各 token の `band` を含む)・`path_indices`・`boundary_regions` は [`analyze`] と同じで、
+/// `candidates` は空、 token の `alternatives` / `ambiguous` は埋めない。 `candidates` の集約は全 provider を
+/// path 位置で再走させるので、 読みと band だけ要る呼び出し (HTTP の通常 mode、 改善 signal の集計) には重い。
+#[must_use]
+pub fn analyze_light<'a>(
+    ctx: &ScoringContext<'a>,
+    providers: &[&'a dyn CandidateProvider],
+) -> AnalyzeResult {
+    let tokens: Vec<Token> = path_tokens(ctx, providers);
+    let path_indices: Vec<usize> = tokens.iter().map(|t| t.range.start).collect();
+    let boundary_regions: Vec<Range<usize>> = ctx
+        .boundary
+        .regions
+        .iter()
+        .map(|r| r.range.clone())
+        .collect();
+    AnalyzeResult {
+        tokens,
+        candidates: Vec::new(),
+        path_indices,
+        boundary_regions,
+    }
 }
 
 /// `input` を `providers` で analyze、 [`AnalyzeResult`] を返す。

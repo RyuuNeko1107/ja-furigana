@@ -204,6 +204,47 @@ pub struct MatchCondition {
     pub input_contains_any: Vec<String>,
 }
 
+impl MatchCondition {
+    /// 条件を人が読める短い文字列にする (例: `next_eq=から` / `prev_eq_any=[段, 階段]`)。
+    /// 条件が空なら空文字列。 `analyze` の `why` と、 採用しなかった読みの `sense` に使う。
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        let one = |k: &str, v: &Option<String>, parts: &mut Vec<String>| {
+            if let Some(v) = v {
+                parts.push(format!("{k}={v}"));
+            }
+        };
+        let many = |k: &str, v: &[String], parts: &mut Vec<String>| {
+            if !v.is_empty() {
+                parts.push(format!("{k}=[{}]", v.join(", ")));
+            }
+        };
+        one("prev_eq", &self.prev_eq, &mut parts);
+        many("prev_eq_any", &self.prev_eq_any, &mut parts);
+        one("next_eq", &self.next_eq, &mut parts);
+        many("next_eq_any", &self.next_eq_any, &mut parts);
+        many("prev_ends_any", &self.prev_ends_any, &mut parts);
+        one("next_starts", &self.next_starts, &mut parts);
+        many("next_starts_any", &self.next_starts_any, &mut parts);
+        many("next2_starts_any", &self.next2_starts_any, &mut parts);
+        if let Some(c) = &self.prev_char_type {
+            parts.push(format!("prev_char_type={c:?}"));
+        }
+        if let Some(c) = &self.next_char_type {
+            parts.push(format!("next_char_type={c:?}"));
+        }
+        if self.prev_month {
+            parts.push("prev_month".to_string());
+        }
+        if self.next_digit {
+            parts.push("next_digit".to_string());
+        }
+        many("input_contains_any", &self.input_contains_any, &mut parts);
+        parts.join(" & ")
+    }
+}
+
 /// 代替読み候補 (ADR-0004)。同形異音語の曖昧解決用。
 ///
 /// ## 例
