@@ -15,6 +15,7 @@
 //!
 //! 1 つの式を 1 候補 (band [`BAND_SPECIAL`]) にするので、 path は式を 1 edge で覆える。
 
+use crate::numbers::helpers::sokuonize_last;
 use crate::numbers::number_to_katakana;
 
 /// 式として読む最大の長さ (文字数)。 これを超える英数字の連なりは式にしない
@@ -128,6 +129,13 @@ fn is_op(c: char) -> bool {
             | ':'
             | '⊂'
             | '⊆'
+            | '¬'
+            | '∧'
+            | '∨'
+            | '⇔'
+            | '⇒'
+            | '∀'
+            | '∃'
     )
 }
 
@@ -163,7 +171,7 @@ fn is_start_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
             c,
-            '(' | '√' | '-' | '+' | '²' | '³' | '^' | '△' | '∠' | '∫' | '|'
+            '(' | '√' | '-' | '+' | '²' | '³' | '^' | '△' | '∠' | '∫' | '|' | '¬' | '∀' | '∃'
         )
         || greek(c).is_some()
 }
@@ -187,6 +195,8 @@ enum Tok {
     Comma,
     /// f'(x) の ' (ダッシュ)
     Prime,
+    /// 20% の %
+    Pct,
     /// |x| の開き / 閉じ (絶対値)
     BarOpen,
     BarClose,
@@ -252,6 +262,15 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
                     i += 1;
                 }
                 let run: String = chars[start..i].iter().collect();
+                // 5P3 / 5C3 (数 P 数) は順列・組合せ
+                if (run == "P" || run == "C")
+                    && start > 0
+                    && chars[start - 1].is_ascii_digit()
+                    && chars.get(i).is_some_and(char::is_ascii_digit)
+                {
+                    toks.push(Tok::Var(run));
+                    continue;
+                }
                 // 大文字の直後に数が付く形 (H2 / O2 / C60 / A4) は化学式・型番・判型なので式にしない
                 if run.len() == 1
                     && run.chars().all(|c| c.is_ascii_uppercase())
@@ -264,6 +283,9 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
                 if start > 0
                     && chars[start - 1].is_ascii_digit()
                     && !matches!(toks.last(), Some(Tok::Sub(_)))
+                    && !(matches!(toks.last(), Some(Tok::Num(_)))
+                        && toks.len() >= 2
+                        && toks[toks.len() - 2] == Tok::Caret)
                     && UNIT_RUNS.contains(&run.as_str())
                 {
                     return None;
@@ -387,6 +409,14 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
                     return None;
                 }
             }
+            // 20%=1/5: 数の直後の % (後ろに英数字が続く 50%OFF は除く)
+            '%' => {
+                if !matches!(toks.last(), Some(Tok::Num(_))) {
+                    return None;
+                }
+                toks.push(Tok::Pct);
+                i += 1;
+            }
             // != は ≠、 n! / (n-1)! は階乗 (数の直後の ! は 5!/3! のように式が続く時だけ。 感嘆符を除く)
             '!' => {
                 // `5!=120` (数の階乗 = 数) は階乗。 `n!=0` のような英字の後は コードの != (≠)
@@ -417,8 +447,9 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
             }
             // f'(x) / f′(x): 変数 1 字の直後で ( か = が続く時だけ微分のダッシュ (英語の ' は式にしない)
             '\'' | '′' => {
-                let prev_var = matches!(toks.last(), Some(Tok::Var(v)) if v.len() == 1);
-                if !prev_var || !matches!(chars.get(i + 1), Some('(' | '=')) {
+                let prev_ok = matches!(toks.last(), Some(Tok::Var(v)) if v.len() == 1)
+                    || matches!(toks.last(), Some(Tok::Close));
+                if !prev_ok || chars.get(i + 1).is_some_and(|c| c.is_alphabetic()) {
                     return None;
                 }
                 toks.push(Tok::Prime);
@@ -498,6 +529,17 @@ fn split_letters(run: &str, toks: &mut Vec<Tok>) -> Option<()> {
         if let Some((name, kata)) = FUNCS.iter().find(|(n, _)| rest.starts_with(n)) {
             toks.push(Tok::Func(kata));
             rest = &rest[name.len()..];
+            continue;
+        }
+        // abcosC のように、 1〜2 字の変数の後に関数名が続く連なり
+        if let Some(k) = (1..=2).find(|&k| {
+            rest.len() > k
+                && rest[..k].chars().all(|c| c.is_ascii_lowercase())
+                && !WORDS.contains(&&rest[..k])
+                && FUNCS.iter().any(|(n, _)| rest[k..].starts_with(n))
+        }) {
+            toks.push(Tok::Var(rest[..k].to_string()));
+            rest = &rest[k..];
             continue;
         }
         let n = rest.chars().count();
@@ -655,6 +697,11 @@ impl Parser<'_> {
                     r.push_str("ダッシュ");
                     self.i += 1;
                 }
+                // 20% → ニジュッパーセント (6% → ロッパーセント、 63% → ロクジュウサンパーセント)
+                Some(Tok::Pct) => {
+                    r = format!("{}パーセント", sokuonize_last(&r));
+                    self.i += 1;
+                }
                 Some(Tok::Fact) => {
                     r.push_str("ノカイジョウ");
                     self.i += 1;
@@ -753,6 +800,13 @@ fn is_big_operator(r: &str) -> bool {
 fn op_reading(c: char) -> &'static str {
     match c {
         '⊂' | '⊆' => "ブブンシュウゴウ",
+        '¬' => "ノット",
+        '∧' => "カツ",
+        '∨' => "マタハ",
+        '⇔' => "ドウチ",
+        '⇒' => "ナラバ",
+        '∀' => "スベテノ",
+        '∃' => "ソンザイスル",
         '→' => "ヘ",
         ':' => "タイ",
         '+' => "プラス",
@@ -934,6 +988,10 @@ fn is_math(toks: &[Tok]) -> bool {
                     | '≡'
                     | '⊂'
                     | '⊆'
+                    | '∧'
+                    | '∨'
+                    | '⇔'
+                    | '⇒'
             )
         )
     });
@@ -941,7 +999,7 @@ fn is_math(toks: &[Tok]) -> bool {
     // (`i<10` / `I<3` / 矢印・顔文字を除く)
     let single = |t: &Tok| matches!(t, Tok::Var(v) if v.len() == 1);
     let operand = |t: &Tok| matches!(t, Tok::Num(_) | Tok::Var(_));
-    let weak_rel = toks
+    let weak_count = toks
         .iter()
         .enumerate()
         .filter(|(i, t)| {
@@ -951,15 +1009,14 @@ fn is_math(toks: &[Tok]) -> bool {
                 && ((single(&toks[i - 1]) && operand(&toks[i + 1]))
                     || (single(&toks[i + 1]) && operand(&toks[i - 1])))
         })
-        .count()
-        >= 2;
+        .count();
     let pow = toks.iter().enumerate().any(|(i, t)| match t {
         Tok::Sup(_) => true,
         Tok::Caret => {
             i > 0
                 && matches!(
                     toks[i - 1],
-                    Tok::Num(_) | Tok::Var(_) | Tok::Greek(_) | Tok::Close
+                    Tok::Num(_) | Tok::Var(_) | Tok::Greek(_) | Tok::Func(_) | Tok::Close
                 )
                 && matches!(
                     toks.get(i + 1),
@@ -972,9 +1029,14 @@ fn is_math(toks: &[Tok]) -> bool {
     let arith = toks
         .iter()
         .any(|t| matches!(t, Tok::Op('+' | '-' | '×' | '÷' | '/')));
+    // 不等号が 1 つでも、 +-×÷ を含む式 (2x-3>5) なら不等式
+    let lt_gt = toks.iter().any(|t| matches!(t, Tok::Op('<' | '>')));
+    let weak_rel = weak_count >= 2 || (lt_gt && toks.iter().any(single) && arith);
     // 構文がおかしい (記号どうしの並び) ものは式にしない
     let ops_ok = toks.windows(2).all(|w| match (&w[0], &w[1]) {
-        (Tok::Op(a), Tok::Op(b)) => matches!(b, '-' | '+' | '±') && !matches!(a, '-' | '+'),
+        (Tok::Op(a), Tok::Op(b)) => {
+            matches!(b, '-' | '+' | '±' | '¬' | '∀' | '∃') && !matches!(a, '-' | '+')
+        }
         (Tok::Caret, Tok::Caret) => false,
         _ => true,
     });
@@ -990,7 +1052,7 @@ fn is_math(toks: &[Tok]) -> bool {
         } else {
             matches!(
                 toks[i - 1],
-                Tok::Num(_) | Tok::Var(_) | Tok::Greek(_) | Tok::Close | Tok::Sub(_)
+                Tok::Num(_) | Tok::Var(_) | Tok::Greek(_) | Tok::Func(_) | Tok::Close | Tok::Sub(_)
             ) && matches!(
                 next,
                 Some(Tok::Num(_) | Tok::Var(_) | Tok::Op('-') | Tok::Open)
@@ -1043,12 +1105,25 @@ fn is_math(toks: &[Tok]) -> bool {
         toks,
         [Tok::Var(v), Tok::Op('-'), Tok::Num(_) | Tok::Var(_)] if v.len() == 1 && "nmkijxyz".contains(v.as_str())
     );
-    (has_var && (eq || strong_rel || weak_rel || pow || abs_ineq || idx_minus))
+    // ∫x dx / Σk のように、 積分・総和に変数が続く
+    let bigop_var = toks.iter().any(|t| matches!(t, Tok::BigOp("インテグラル")))
+        && toks.iter().any(|t| matches!(t, Tok::Var(_)));
+    (has_var && (eq || strong_rel || weak_rel || pow || abs_ineq || idx_minus || bigop_var))
         || sqrt
         || (!has_var
             && has_num
             && (eq || strong_rel)
             && (arith || pow || toks.contains(&Tok::Fact)))
+}
+
+/// 末尾が 「+...」 「,…」 のような、 演算子・カンマの後の省略記号か
+fn ends_with_ellipsis_after_separator(chars: &[char]) -> bool {
+    let n = chars.len();
+    let sep = |c: char| is_op(c) || c == ',';
+    if n >= 2 && matches!(chars[n - 1], '…' | '⋯') {
+        return sep(chars[n - 2]);
+    }
+    n >= 4 && chars[n - 3..] == ['.', '.', '.'] && sep(chars[n - 4])
 }
 
 /// `pos` から始まる数式を読む。 数式でなければ None。 戻りは (終端の byte 位置、 片仮名の読み)
@@ -1071,7 +1146,7 @@ pub(super) fn read_math(input: &str, pos: usize) -> Option<(usize, String)> {
         // 1000 の前の `=`) 日本語に付いた記号なので、 ここから始める。 それ以外 (英数字・括弧がある連なり、
         // `--v=0` のような `-`) は式の途中・顔文字・コマンドの一部なので始めない
         if is_span_char(p) && p != ' ' {
-            let dangling_relation = matches!(p, '=' | '≒' | '≠' | '≦' | '≧' | '<' | '>')
+            let dangling_relation = matches!(p, '=' | '≒' | '≠' | '≦' | '≧')
                 && input[..pos]
                     .chars()
                     .rev()
@@ -1121,6 +1196,19 @@ pub(super) fn read_math(input: &str, pos: usize) -> Option<(usize, String)> {
             }
             // n! / (n-1)! / x!=y
             '!' => operand_end(chars.last().copied()),
+            // 20%=1/5 の % (数の直後で、 後ろに英数字が続かない時。 50%OFF は除く)
+            '%' => {
+                // (後ろが ` や " などの記号だと、 形態素解析の記号の塊の途中で式が終わるので % を含めない)
+                chars.last().is_some_and(char::is_ascii_digit)
+                    && next.is_none_or(|x| {
+                        x == ' '
+                            || matches!(
+                                x,
+                                ')' | ',' | '=' | '+' | '-' | '*' | '/' | '×' | '÷' | '<' | '>'
+                            )
+                            || ('\u{3000}'..='\u{9FFF}').contains(&x)
+                    })
+            }
             _ => is_span_char(f) || f == ' ',
         };
         if !accepted || chars.len() >= MAX_SPAN {
@@ -1167,7 +1255,10 @@ pub(super) fn read_math(input: &str, pos: usize) -> Option<(usize, String)> {
                 let before: String = chars[..k].iter().collect();
                 FUNCS.iter().any(|(name, _)| before.ends_with(name))
             };
-            if !(prev.is_some_and(is_glue) || next.is_some_and(is_glue) || after_func) {
+            // ∫ や Σ で始まる式は、 被積分関数・被和関数との間の空白も許す (∫_0^1 x dx)
+            let big_start = matches!(chars.first(), Some('∫' | 'Σ'));
+            if !(prev.is_some_and(is_glue) || next.is_some_and(is_glue) || after_func || big_start)
+            {
                 chars.truncate(k);
                 ends.truncate(k);
                 break;
@@ -1244,6 +1335,10 @@ pub(super) fn read_math(input: &str, pos: usize) -> Option<(usize, String)> {
     }
     // 末尾の空白・記号は式に含めない (x=3, / x+ / 2^)
     while let Some(&last) = chars.last().filter(|_| !keep_tail) {
+        // 1+x+x²/2!+... / 2,3,5,... のように演算子・カンマの後の省略記号は式に残す
+        if ends_with_ellipsis_after_separator(&chars) {
+            break;
+        }
         if last == ' '
             || last == ','
             || last == '.'
@@ -1449,6 +1544,40 @@ mod tests {
             "イチプラスニプラスサンプラステンテンテンプラスnイコールn(nプラスイチ)ワルニ"
         );
         assert_eq!(read("n-1").unwrap(), "nマイナスイチ");
+        assert_eq!(read("2x-3>5").unwrap(), "ニxマイナスサンダイナリゴ");
+        assert_eq!(
+            read("V=πr²h").unwrap(),
+            "VイコールパイrノニジョウH".replace('H', "h")
+        );
+        assert_eq!(
+            read("cos2θ=1-2sin²θ").unwrap(),
+            "コサインニシータイコールイチマイナスニサインノニジョウシータ"
+        );
+        assert_eq!(
+            read("c²=a²+b²-2abcosC").unwrap(),
+            "cノニジョウイコールaノニジョウプラスbノニジョウマイナスニabコサインC"
+        );
+        assert_eq!(read("5P3=60").unwrap(), "ゴPサンイコールロクジュウ");
+        assert_eq!(
+            read("(x^n)'=nx^{n-1}").unwrap(),
+            "(xノnジョウ)ダッシュイコールnxノ(nマイナスイチ)ジョウ"
+        );
+        assert_eq!(
+            read("∫f g' dx=fg-∫f' g dx").unwrap(),
+            "インテグラルfgダッシュdxイコールfgマイナスインテグラルfダッシュgdx"
+        );
+        assert_eq!(
+            read("∫_0^1 x dx=1/2").unwrap(),
+            "インテグラルゼロカライチマデxdxイコールニブンノイチ"
+        );
+        assert_eq!(
+            read("e^x=1+x+x²/2!+...").unwrap(),
+            "eノxジョウイコールイチプラスxプラスニノカイジョウブンノxノニジョウプラステンテンテン"
+        );
+        assert_eq!(
+            read("¬(A∧B)=¬A∨¬B").unwrap(),
+            "ノット(AカツB)イコールノットAマタハノットB"
+        );
         assert_eq!(read("B-52"), None);
         assert_eq!(
             read("BMI=70/1.75^2").unwrap(),
@@ -1499,9 +1628,18 @@ mod tests {
         let (end, r) = read_math(s, 0).unwrap();
         assert_eq!(&s[..end], "9×7=");
         assert_eq!(r, "キュウカケルナナイコール");
-        // % の前も同じ。 √ の直後の数 (√57話) は式にしない
-        let s = "x=70%";
+        // % は式に含めて 「ナナジュッパーセント」 と読む (50%OFF のように英数字が続く時は % の手前まで)。
+        // √ の直後の数 (√57話) は式にしない
+        assert_eq!(read("x=70%").unwrap(), "xイコールナナジュッパーセント");
+        assert_eq!(
+            read("20%=1/5").unwrap(),
+            "ニジュッパーセントイコールゴブンノイチ"
+        );
+        let s = "x=50%OFF";
         assert_eq!(&s[..read_math(s, 0).unwrap().0], "x=");
+        // ` が続く % は含めない (形態素解析の記号の塊の途中で式が終わってしまうため)
+        let s = "`x = 50%` と";
+        assert_eq!(&s[..read_math(s, 1).unwrap().0], "`x =");
         assert_eq!(read_math("√57話", 0), None);
         // 後ろが助数詞でなければ (ひらがなの助詞 / 英数字 / 文末) 数も読む
         assert_eq!(read("a+b=61").unwrap(), "aプラスbイコールロクジュウイチ");
@@ -1546,6 +1684,9 @@ mod tests {
             // 顔文字・英単語・不等号が 1 つだけのコード
             "(=-ω-)",
             r"(\/)O=O(\/)",
+            // 顔文字 (o∀o) (Σd)
+            "(o∀o)",
+            "Σd(≧▽≦)",
             // CLI のフラグ・単位つきの数
             "--v=0",
             "--min=2 --max=10",
@@ -1587,6 +1728,8 @@ mod tests {
     fn does_not_start_in_the_middle_of_a_word_or_expression() {
         assert_eq!(read_math("abx=3", 1), None);
         assert_eq!(read_math("x=3+y", 2), None);
+        // HTML のタグ (<p>1 / 20) の中から始めない
+        assert_eq!(read_math("<p>1 / 20 ページ", 1), None);
         // URL のクエリ (?p=1 / &x=3) の途中からは始めない
         assert_eq!(read_math("a.com?p=348424", 7), None);
         assert_eq!(read_math("a.com?q=1&x=3", 11), None);
