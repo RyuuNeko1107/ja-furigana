@@ -53,6 +53,7 @@ pub mod model_number;
 pub mod names;
 pub mod numbers;
 pub mod odoriji;
+pub mod paren_reading;
 pub mod person_names;
 pub mod phonojoin;
 pub mod pipeline;
