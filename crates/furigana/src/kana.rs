@@ -431,6 +431,26 @@ fn superscript_digit(ch: char) -> Option<char> {
     }
 }
 
+/// 下付き数字 ₀〜₉
+fn is_subscript_digit(c: char) -> bool {
+    matches!(c, '\u{2080}'..='\u{2089}')
+}
+
+/// 下付き数字の直前が 「添え字を付ける底」 か: 前に英字が続かない小文字 1 字 (a₁ / x₂)、 または log / ln
+fn subscript_base_ok(prefix: &str) -> bool {
+    for func in ["log", "ln"] {
+        if let Some(rest) = prefix.strip_suffix(func) {
+            return !rest
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphabetic());
+        }
+    }
+    let mut it = prefix.chars().rev();
+    matches!(it.next(), Some(c) if c.is_ascii_lowercase())
+        && !it.next().is_some_and(|c| c.is_ascii_alphabetic())
+}
+
 /// 1 文字を NFKC → compat 置換 → NFC した断片を返す。
 ///
 /// [`normalize_text_aligned`] が unit ごとに呼ぶ。 NFKC は **1 文字単位** で適用する
@@ -618,8 +638,29 @@ pub(crate) fn normalize_text_aligned_with(
 fn normalize_text_aligned_slow(s: &str, compat: &CompatData) -> NormalizedText {
     let mut text = String::new();
     let mut units: Vec<NormUnit> = Vec::new();
+    // 数式 (log₂8=3 / a₁+a₂=b) の下付き数字は NFKC で数になって添え字だと分からなくなるので、 そのまま残す
+    // (式の記号がある行の、 小文字 1 字 / log / ln の直後だけ。 H₂O や CO₂ は従来どおり)
+    let math_line = s.chars().any(is_subscript_digit)
+        && s.contains([
+            '=', '＝', '<', '>', '≦', '≧', '≠', '≒', '≈', '≤', '≥', '√', '^', '²', '³',
+        ]);
+    let mut in_subscript = false;
     for (orig_off, ch) in s.char_indices() {
         let orig_end = orig_off + ch.len_utf8();
+        if math_line
+            && is_subscript_digit(ch)
+            && (in_subscript || subscript_base_ok(&s[..orig_off]))
+        {
+            let norm_start = text.len();
+            text.push(ch);
+            units.push(NormUnit {
+                norm_start,
+                orig: orig_off..orig_end,
+            });
+            in_subscript = s[orig_end..].chars().next().is_some_and(is_subscript_digit);
+            continue;
+        }
+        in_subscript = false;
         // 半角の濁点・半濁点 (ﾋﾞ → ビ): 1 文字ずつの NFKC だと結合記号が別に残って 「ひ゛」 になるので、 直前の半角カナと合成する
         if matches!(ch, '\u{FF9E}' | '\u{FF9F}')
             && s[..orig_off]
@@ -975,6 +1016,12 @@ mod tests {
         // 底が切れた ² (「²-5x+b=0」) は、 後ろが演算子なら指数のまま残す。 注記の ² は従来どおり数字
         assert_eq!(normalize_text("²-5x+b=0", &c), "^2-5x+b=0");
         assert_eq!(normalize_text("注²。", &c), "注2。");
+        // 数式の下付き数字は、 式の記号がある行の 小文字 1 字 / log の直後だけ残す (H₂O / CO₂ は数になる)
+        assert_eq!(normalize_text("log₂8=3", &c), "log₂8=3");
+        assert_eq!(normalize_text("a₁+a₂=b₁₀", &c), "a₁+a₂=b₁₀");
+        assert_eq!(normalize_text("H₂O", &c), "H2O");
+        assert_eq!(normalize_text("CO₂ = x", &c), "CO2 = x");
+        assert_eq!(normalize_text("x₁を使う", &c), "x1を使う");
     }
 
     #[test]

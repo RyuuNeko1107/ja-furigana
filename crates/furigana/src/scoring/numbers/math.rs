@@ -195,6 +195,13 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
                     i += 1;
                 }
                 let run: String = chars[start..i].iter().collect();
+                // 大文字の直後に数が付く形 (H2 / O2 / C60 / A4) は化学式・型番・判型なので式にしない
+                if run.len() == 1
+                    && run.chars().all(|c| c.is_ascii_uppercase())
+                    && chars.get(i).is_some_and(char::is_ascii_digit)
+                {
+                    return None;
+                }
                 // 数に直接付く単位 (54.5kg / 100W / 3t) は式にしない (単位は従来の読み方に任せる)
                 if start > 0
                     && chars[start - 1].is_ascii_digit()
@@ -933,6 +940,9 @@ mod tests {
     fn words_and_code_are_not_math() {
         for s in [
             "HP=100",
+            // 化学式・型番 (大文字の直後に数)
+            "2H2+O2=2H2O",
+            "Z8=Z9",
             // CSS の詳細度・16 進数・番号
             "0-1-0 + 0-0-1 = 0-1-1",
             "0x000601 = 1536",
