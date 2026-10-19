@@ -893,11 +893,14 @@ fn render(items: &[Item]) -> String {
                             })
                             .collect::<String>()
                     };
-                    // lim / Σ / ∫ は式全体にかかるので、 分数の外に出す (lim 1/x → リミット xブンノイチ)
+                    // lim / ∫ は式全体にかかるので (Σx/n は (Σx)/n なので外に出さず ワル)、 分数の外に出す (lim 1/x → リミット xブンノイチ)
                     let lead = items[k..e]
                         .iter()
                         .take_while(
-                            |i| matches!(i, Item::Atom { r, func: true, .. } if is_big_operator(r)),
+                            |i| {
+                                matches!(i, Item::Atom { r, func: true, .. }
+                                    if is_big_operator(r) && !r.starts_with("シグマ"))
+                            },
                         )
                         .count();
                     // 数 / 数 + 項 (4/3πr³ / 1/2at²) は 先頭の数だけを分母にする: (4/3)πr³
@@ -1388,6 +1391,12 @@ mod tests {
             assert!(end <= s.len());
             r
         })
+    }
+
+    #[test]
+    fn sigma_sum_over_n_is_a_division_of_the_sum() {
+        // Σx/n は (Σx)/n。 Σ だけを分数の外に出して n分のx にはしない
+        assert_eq!(read("μ=Σx/n").unwrap(), "ミューイコールシグマxワルn");
     }
 
     #[test]

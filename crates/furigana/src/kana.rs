@@ -775,6 +775,22 @@ fn normalize_text_aligned_slow(s: &str, compat: &CompatData) -> NormalizedText {
                 });
                 continue;
             }
+            // 身長² / 半径³: 漢字・カタカナの直後の ² ³ は 「の2乗」 「の3乗」
+            if matches!(ch, '\u{B2}' | '\u{B3}')
+                && s[..orig_off].chars().next_back().is_some_and(|c| {
+                    (('\u{4E00}'..='\u{9FFF}').contains(&c) && !matches!(c, '注' | '註'))
+                        || ('ァ'..='ヶ').contains(&c)
+                })
+            {
+                text.push('の');
+                text.push(d);
+                text.push('乗');
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
             // 底が切れた ² ³ (「²-5x+b=0」 = x² の x が無い式) は、 後ろが演算子なら指数として残す (数 2 にしない)
             if matches!(ch, '\u{B2}' | '\u{B3}')
                 && s[orig_end..].chars().next().is_some_and(|c| {
@@ -1065,6 +1081,9 @@ mod tests {
         assert_eq!(normalize_text("x²+y³", &c), "x^2+y^3");
         assert_eq!(normalize_text("(a+b)²", &c), "(a+b)^2");
         assert_eq!(normalize_text("注釈¹", &c), "注釈1");
+        // 漢字の直後の ² ³ は 「の2乗」 (身長²)。 脚注の 注² は数字
+        assert_eq!(normalize_text("身長²", &c), "身長の2乗");
+        assert_eq!(normalize_text("注²", &c), "注2");
         // 底が切れた ² (「²-5x+b=0」) は、 後ろが演算子なら指数のまま残す。 注記の ² は従来どおり数字
         assert_eq!(normalize_text("²-5x+b=0", &c), "^2-5x+b=0");
         assert_eq!(normalize_text("注²。", &c), "注2。");
