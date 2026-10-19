@@ -49,6 +49,16 @@ fn surface_has_halfwidth_katakana(surface: &str) -> bool {
         .any(|c| matches!(c, '\u{FF66}'..='\u{FF9F}'))
 }
 
+/// 数式か (`x²-5x+b=0` / `a≦b`)。 英字を含んでも読みはひらがなにする (文の中で 「イコール」 だけ片仮名にならないように)
+fn surface_is_formula(surface: &str) -> bool {
+    surface.chars().any(|c| {
+        matches!(
+            c,
+            '=' | '＝' | '^' | '²' | '³' | '√' | '≦' | '≧' | '≠' | '≒' | '≈' | '≤' | '≥'
+        )
+    })
+}
+
 /// surface に **ASCII / 全角 alphabet** が含まれるかを判定。
 ///
 /// hiragana mode で 「数字 / 記号 のみ」 vs 「alphabet 含み」 を区別する用途:
@@ -90,7 +100,7 @@ pub fn tokens_to_hiragana(tokens: &[ReadingToken]) -> String {
                 // 全 kana surface は user 入力 (= 「こんにちは」 等) → 表記そのまま維持
                 // 助詞 は→わ 等の音韻変換は TTS engine (VOICEVOX 等) に任せる
                 out.push_str(&t.surface);
-            } else if surface_has_alphabet(&t.surface) {
+            } else if surface_has_alphabet(&t.surface) && !surface_is_formula(&t.surface) {
                 // alphabet loanword phonetic → カタカナに統一
                 // (例: 「Kubernetes」+「クバネティス」、「C++」+「シープラスプラス」)
                 out.push_str(&kana::hira_to_kata(reading));

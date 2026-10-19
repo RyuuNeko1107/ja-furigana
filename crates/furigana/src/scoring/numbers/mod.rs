@@ -46,6 +46,7 @@
 //! - 踊り字 「々」 → [`crate::scoring::odoriji::OdorijiProvider`]
 //! - jukugo super-set check は **不要** (Smart engine DP が band 1000 dict entry を自然に優先)
 //!
+mod math;
 mod patterns;
 
 #[cfg(test)]
@@ -1614,6 +1615,13 @@ impl NumberCandidateProvider {
         }
     }
 
+    /// 数式 (`x²-5x+b=0` / `y=1/x` / `√2`)。 変数・数に `=` / 不等号 / 累乗 / `√` が付く範囲を 1 候補で読む
+    fn try_math(&self, input: &str, pos: usize, out: &mut Vec<RawCandidate<'_>>) {
+        if let Some((end, reading)) = math::read_math(input, pos) {
+            out.push(self.make_hit(input, pos, end - pos, reading));
+        }
+    }
+
     /// 電話番号 (`03-1234-5678` / `090 1234 5678` / `0120-123-456` / `+81-90-1234-5678` / `+1 555-123-4567` /
     /// `09012345678`)。 桁を 1 つずつ読み、 区切りの位置は間 (空白) にする。 数 (さんぜん…) としては読まない。
     /// 国内は 10〜11 桁、 国際 (`+` から) は 8〜15 桁 (E.164)
@@ -2143,6 +2151,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_currency_prefix(input, pos, rest, first_char, out);
         self.try_slash_unit(input, pos, rest, first_char, out);
         self.try_model(input, pos, first_char, out);
+        self.try_math(input, pos, out);
 
         // ─── 先頭文字 dispatch (hot path 最適化) ─────────────────────────────
         // 数値系正規表現は全て **数字系の先頭文字** を要求する (NUM_PAT = 任意符号 +

@@ -2447,3 +2447,28 @@ fn slash_pair_with_three_digit_denominator_is_a_fraction() {
     );
     assert!(reading_at("1000/1", 0, "1000/1").is_none());
 }
+
+// ─── 数式 (math.rs) ──────────────────────────────────────────────────────
+
+#[test]
+fn math_expression_becomes_one_candidate_that_covers_the_equation() {
+    let p = provider();
+    let input = "x^2-5x+b=0の式";
+    let cands = p.candidates_vec(&ctx(input), 0);
+    let c = find(&cands, "x^2-5x+b=0").expect("数式の候補");
+    assert_eq!(c.reading, "xノニジョウマイナスゴxプラスbイコールゼロ");
+    assert_eq!(c.score.band, BAND_SPECIAL);
+}
+
+#[test]
+fn math_expression_leaves_a_counted_number_and_url_queries_alone() {
+    let p = provider();
+    // `=61人` の 61 は助数詞つきの数として読むので、 式は `=` までにする
+    let cands = p.candidates_vec(&ctx("a+b=61人"), 0);
+    let c = find(&cands, "a+b=").expect("数式の候補");
+    assert_eq!(c.reading, "aプラスbイコール");
+    // URL のクエリは式にしない (?p=348424)
+    let input = "a.com?p=348424";
+    let cands = p.candidates_vec(&ctx(input), input.find('p').unwrap());
+    assert!(cands.iter().all(|c| c.surface != "p=348424"));
+}

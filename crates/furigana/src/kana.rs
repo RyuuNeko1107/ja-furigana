@@ -682,6 +682,33 @@ fn normalize_text_aligned_slow(s: &str, compat: &CompatData) -> NormalizedText {
                 });
                 continue;
             }
+            // 底が切れた ² ³ (「²-5x+b=0」 = x² の x が無い式) は、 後ろが演算子なら指数として残す (数 2 にしない)
+            if matches!(ch, '\u{B2}' | '\u{B3}')
+                && s[orig_end..].chars().next().is_some_and(|c| {
+                    matches!(
+                        c,
+                        '+' | '-'
+                            | '='
+                            | '*'
+                            | '/'
+                            | ')'
+                            | '×'
+                            | '÷'
+                            | '\u{2212}'
+                            | '＋'
+                            | '－'
+                            | '＝'
+                    )
+                })
+            {
+                text.push('^');
+                text.push(d);
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
         }
         normalize_char_piece_into(ch, compat, &mut text);
         units.push(NormUnit {
@@ -945,6 +972,9 @@ mod tests {
         assert_eq!(normalize_text("x²+y³", &c), "x^2+y^3");
         assert_eq!(normalize_text("(a+b)²", &c), "(a+b)^2");
         assert_eq!(normalize_text("注釈¹", &c), "注釈1");
+        // 底が切れた ² (「²-5x+b=0」) は、 後ろが演算子なら指数のまま残す。 注記の ² は従来どおり数字
+        assert_eq!(normalize_text("²-5x+b=0", &c), "^2-5x+b=0");
+        assert_eq!(normalize_text("注²。", &c), "注2。");
     }
 
     #[test]
