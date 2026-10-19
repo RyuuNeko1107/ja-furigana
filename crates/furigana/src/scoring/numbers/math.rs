@@ -1111,7 +1111,20 @@ fn is_math(toks: &[Tok]) -> bool {
     // ∫x dx / Σk のように、 積分・総和に変数が続く
     let bigop_var = toks.iter().any(|t| matches!(t, Tok::BigOp("インテグラル")))
         && toks.iter().any(|t| matches!(t, Tok::Var(_)));
-    (has_var && (eq || strong_rel || weak_rel || pow || abs_ineq || idx_minus || bigop_var))
+    // p<0.05 (検定の有意水準): 変数 1 字と小数の間の不等号
+    let p_value = matches!(
+        toks,
+        [Tok::Var(v), Tok::Op('<' | '>'), Tok::Num(n)] if v.len() == 1 && n.contains('.')
+    );
+    (has_var
+        && (eq
+            || strong_rel
+            || weak_rel
+            || p_value
+            || pow
+            || abs_ineq
+            || idx_minus
+            || bigop_var))
         || sqrt
         || (!has_var
             && has_num
@@ -1391,6 +1404,12 @@ mod tests {
             assert!(end <= s.len());
             r
         })
+    }
+
+    #[test]
+    fn p_value_threshold_is_read() {
+        assert_eq!(read("p<0.05").unwrap(), "pショウナリゼロテンゼロゴ");
+        assert!(read("i<10").is_none());
     }
 
     #[test]
