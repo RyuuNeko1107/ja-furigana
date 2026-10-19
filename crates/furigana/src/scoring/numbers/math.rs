@@ -262,6 +262,15 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
         match c {
             ' ' => i += 1,
             '0'..='9' => {
+                // 変数の直後にくっついた数字 (mc2 / x2 / a1) は添え字つきの名前で、 べき乗でも掛け算でもない。 式にしない
+                // (関数名の直後 sin2θ / cos2θ と、 順列・組合せ 5P3 / 5C3 は従来どおり)
+                if i > 0
+                    && chars[i - 1].is_ascii_alphabetic()
+                    && !matches!(chars[i - 1], 'P' | 'C')
+                    && matches!(toks.last(), Some(Tok::Var(_)))
+                {
+                    return None;
+                }
                 let mut s = String::new();
                 let mut grouped = false;
                 while i < chars.len() {
@@ -1459,6 +1468,16 @@ mod tests {
     fn p_value_threshold_is_read() {
         assert_eq!(read("p<0.05").unwrap(), "pショウナリゼロテンゼロゴ");
         assert!(read("i<10").is_none());
+    }
+
+    #[test]
+    fn digits_glued_to_a_variable_are_a_name_not_math() {
+        // E=mc2 の mc2 / x2 / a1 は添え字つきの名前。 数として読むと mcに になる
+        assert!(read("E=mc2").is_none());
+        assert!(read("y=x2+1").is_none());
+        // 関数名の直後 (cos2θ) や、 数が先 (2x) は従来どおり式
+        assert!(read("cos2θ=1-2sin²θ").is_some());
+        assert!(read("2x-3>5").is_some());
     }
 
     #[test]
