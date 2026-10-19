@@ -167,6 +167,44 @@ fn is_span_char(c: char) -> bool {
 }
 
 /// 式を始められる字
+/// 式の根拠になりうる字か (前判定用。 `is_math` が要求する 等号・不等号・関係記号・累乗・√・∫・絶対値・引き算のどれか)
+fn is_trigger_char(c: char) -> bool {
+    matches!(
+        c,
+        '=' | '<'
+            | '>'
+            | '≦'
+            | '≧'
+            | '≠'
+            | '≒'
+            | '≈'
+            | '≤'
+            | '≥'
+            | '∈'
+            | '∉'
+            | '∪'
+            | '∩'
+            | '⊥'
+            | '∥'
+            | '≡'
+            | '⊂'
+            | '⊆'
+            | '∧'
+            | '∨'
+            | '^'
+            | '√'
+            | '²'
+            | '³'
+            | '∫'
+            | '|'
+            | '-'
+            | '\u{207B}'
+            | '\u{2070}'
+            | '\u{00B9}'
+            | '\u{2074}'..='\u{2079}'
+    )
+}
+
 fn is_start_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || matches!(
@@ -991,8 +1029,6 @@ fn is_math(toks: &[Tok]) -> bool {
                     | '⊆'
                     | '∧'
                     | '∨'
-                    | '⇔'
-                    | '⇒'
             )
         )
     });
@@ -1033,6 +1069,10 @@ fn is_math(toks: &[Tok]) -> bool {
     // 不等号が 1 つでも、 +-×÷ を含む式 (2x-3>5) なら不等式
     let lt_gt = toks.iter().any(|t| matches!(t, Tok::Op('<' | '>')));
     let weak_rel = weak_count >= 2 || (lt_gt && toks.iter().any(single) && arith);
+    // → は極限 (lim(x→0)) のときだけ数式。 A→B / q→r / 手順の矢印は式にしない (読み上げは従来どおり)
+    let arrow_ok =
+        !toks.contains(&Tok::Op('→')) || toks.iter().any(|t| matches!(t, Tok::Func("リミット")));
+    // ⇔ ⇒ は単独では式にしない (A⇔B = 交換 / L⇔R = バンド名)。 = などと一緒の式の中でだけ読む
     // 構文がおかしい (記号どうしの並び) ものは式にしない
     let ops_ok = toks.windows(2).all(|w| match (&w[0], &w[1]) {
         (Tok::Op(a), Tok::Op(b)) => {
@@ -1089,6 +1129,7 @@ fn is_math(toks: &[Tok]) -> bool {
     });
     // 先頭が演算子だけ・末尾が演算子は取り除いてあるが念のため
     let structure_ok = !matches!(toks.first(), Some(Tok::Op('=' | '/' | '×' | '÷')))
+        && arrow_ok
         && ops_ok
         && caret_ok
         && !kaomoji
@@ -1165,13 +1206,30 @@ pub(super) fn read_math(input: &str, pos: usize) -> Option<(usize, String)> {
             }
         }
     }
+    // 前判定: 式になるには、 範囲の中に 「式の根拠になる記号」 (= 不等号 ^ √ ² ∫ | - …) が要る。 無ければ範囲を取らずに戻る
+    // (数式の無い大半の行で、 英数字の位置ごとに残りの全文字を集め直すのを避ける)
+    let mut has_trigger = false;
+    for c in rest.chars().take(MAX_SPAN) {
+        let f = fold(c);
+        if is_trigger_char(f) {
+            has_trigger = true;
+            break;
+        }
+        // 状況によって式に含める字 (! % | { } _) と空白も通す
+        if !(is_span_char(f) || matches!(f, ' ' | '!' | '%' | '|' | '{' | '}' | '_')) {
+            break;
+        }
+    }
+    if !has_trigger {
+        return None;
+    }
     // 範囲を取る (折りたたんだ字と、 各字の終端 byte)
     let mut chars: Vec<char> = Vec::new();
     let mut ends: Vec<usize> = Vec::new();
     // 状態を持つ字 (| { } _ !) は、 式の形になる時だけ受ける
     let mut bar_open_at: Option<usize> = None;
     let mut brace_opens: Vec<usize> = Vec::new();
-    let rest_chars: Vec<(usize, char)> = rest.char_indices().collect();
+    let rest_chars: Vec<(usize, char)> = rest.char_indices().take(MAX_SPAN + 4).collect();
     for (n, &(i, c)) in rest_chars.iter().enumerate() {
         let f = fold(c);
         let next = rest_chars.get(n + 1).map(|&(_, c)| fold(c));
@@ -1401,6 +1459,17 @@ mod tests {
     fn p_value_threshold_is_read() {
         assert_eq!(read("p<0.05").unwrap(), "pショウナリゼロテンゼロゴ");
         assert!(read("i<10").is_none());
+    }
+
+    #[test]
+    fn swap_marks_and_plain_arrows_are_not_math() {
+        // A⇔B = 交換 (トレード募集) / L⇔R = バンド名 / 手順の矢印 → は式にしない
+        assert!(read("A⇔B").is_none());
+        assert!(read("L⇔R").is_none());
+        assert!(read("(q→r)∧(q→p)").is_none());
+        assert!(read("A→B").is_none());
+        // 極限の → は従来どおり
+        assert!(read("lim(x→0)sin x/x=1").is_some());
     }
 
     #[test]
