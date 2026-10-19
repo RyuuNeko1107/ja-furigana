@@ -438,6 +438,10 @@ fn is_subscript_digit(c: char) -> bool {
 
 /// 下付き数字の直前が 「添え字を付ける底」 か: 前に英字が続かない小文字 1 字 (a₁ / x₂)、 または log / ln
 fn subscript_base_ok(prefix: &str) -> bool {
+    // ∫₀¹ / Σ₁ の範囲
+    if prefix.ends_with(['∫', 'Σ']) {
+        return true;
+    }
     for func in ["log", "ln"] {
         if let Some(rest) = prefix.strip_suffix(func) {
             return !rest
@@ -708,8 +712,56 @@ fn normalize_text_aligned_slow(s: &str, compat: &CompatData) -> NormalizedText {
         {
             text.push('・');
         }
+        // 10⁻³ / x⁻¹: 上付きのマイナスと、 それに続く上付き数字は 「^-3」 にして累乗として読む
+        if ch == '\u{207B}'
+            && s[orig_end..]
+                .chars()
+                .next()
+                .is_some_and(|c| superscript_digit(c).is_some())
+            && s[..orig_off]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, ')' | '）'))
+        {
+            text.push_str("^-");
+            units.push(NormUnit {
+                norm_start: text.len() - 2,
+                orig: orig_off..orig_end,
+            });
+            continue;
+        }
         // 上付き数字 (10² / x³) は 「^2」 にして累乗として読む (直前が数字・英字・閉じ括弧の時だけ。 注記の ¹ は除く)
         if let Some(d) = superscript_digit(ch) {
+            // ∫₀¹ の ¹ (下付き数字の直後の上付き数字) は上端: 「^1」
+            if math_line
+                && s[..orig_off]
+                    .chars()
+                    .next_back()
+                    .is_some_and(is_subscript_digit)
+            {
+                let norm_start = text.len();
+                text.push('^');
+                text.push(d);
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
+            // ⁻ や上付き数字の直後の上付き数字 (10⁻³ の ³ / x¹⁰ の ⁰) は、 数字だけ続ける
+            if s[..orig_off]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c == '\u{207B}' || superscript_digit(c).is_some())
+            {
+                let norm_start = text.len();
+                text.push(d);
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
             if s[..orig_off]
                 .chars()
                 .next_back()
@@ -1016,6 +1068,10 @@ mod tests {
         // 底が切れた ² (「²-5x+b=0」) は、 後ろが演算子なら指数のまま残す。 注記の ² は従来どおり数字
         assert_eq!(normalize_text("²-5x+b=0", &c), "^2-5x+b=0");
         assert_eq!(normalize_text("注²。", &c), "注2。");
+        // 上付きのマイナス・複数桁の指数
+        assert_eq!(normalize_text("10⁻³=0.001", &c), "10^-3=0.001");
+        assert_eq!(normalize_text("x⁻¹", &c), "x^-1");
+        assert_eq!(normalize_text("x¹⁰", &c), "x^10");
         // 数式の下付き数字は、 式の記号がある行の 小文字 1 字 / log の直後だけ残す (H₂O / CO₂ は数になる)
         assert_eq!(normalize_text("log₂8=3", &c), "log₂8=3");
         assert_eq!(normalize_text("a₁+a₂=b₁₀", &c), "a₁+a₂=b₁₀");
