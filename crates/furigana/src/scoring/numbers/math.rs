@@ -110,6 +110,13 @@ fn is_op(c: char) -> bool {
             | '≈'
             | '≤'
             | '≥'
+            | '∈'
+            | '∉'
+            | '∪'
+            | '∩'
+            | '⊥'
+            | '∥'
+            | '≡'
     )
 }
 
@@ -117,7 +124,10 @@ fn is_op(c: char) -> bool {
 fn is_span_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
         || is_op(c)
-        || matches!(c, '(' | ')' | '^' | ',' | '.' | '√' | '°')
+        || matches!(
+            c,
+            '(' | ')' | '^' | ',' | '.' | '√' | '°' | '△' | '∠' | '∫' | '∞' | '\'' | '′'
+        )
         || sup_digit(c).is_some()
         || sub_digit(c).is_some()
         || c == '⁻'
@@ -127,7 +137,7 @@ fn is_span_char(c: char) -> bool {
 /// 式を始められる字
 fn is_start_char(c: char) -> bool {
     c.is_ascii_alphanumeric()
-        || matches!(c, '(' | '√' | '-' | '+' | '²' | '³' | '^')
+        || matches!(c, '(' | '√' | '-' | '+' | '²' | '³' | '^' | '△' | '∠' | '∫')
         || greek(c).is_some()
 }
 
@@ -146,10 +156,13 @@ enum Tok {
     Sqrt,
     Deg,
     Comma,
+    /// f'(x) の ' (ダッシュ)
+    Prime,
 }
 
 /// 範囲を字に切る。 英字の語・コードらしいもの (`HP` / `val` / `a==b` / `i++`) があれば None
 fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
+    let geo = chars.iter().any(|c| "⊥∥≡△∠∈∉∪∩".contains(*c));
     let mut toks: Vec<Tok> = Vec::new();
     let mut i = 0;
     while i < chars.len() {
@@ -209,6 +222,14 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
                 {
                     return None;
                 }
+                // 幾何・集合の記号 (⊥ ∥ ≡ △ ∠ ∈ ∪ ∩) がある式では、 大文字 2〜3 字の図形・集合の名前 (AB / ABC) を許す
+                if geo
+                    && (2..=3).contains(&run.len())
+                    && run.chars().all(|c| c.is_ascii_uppercase())
+                {
+                    toks.push(Tok::Var(run));
+                    continue;
+                }
                 split_letters(&run, &mut toks)?;
             }
             '²' | '³' | '¹' | '⁰' | '⁴'..='⁹' | '⁻' => {
@@ -256,6 +277,24 @@ fn tokenize(chars: &[char]) -> Option<Vec<Tok>> {
                 i += 1;
             }
             '.' => return None,
+            // f'(x) / f′(x): 変数 1 字の直後で ( か = が続く時だけ微分のダッシュ (英語の ' は式にしない)
+            '\'' | '′' => {
+                let prev_var = matches!(toks.last(), Some(Tok::Var(v)) if v.len() == 1);
+                if !prev_var || !matches!(chars.get(i + 1), Some('(' | '=')) {
+                    return None;
+                }
+                toks.push(Tok::Prime);
+                i += 1;
+            }
+            '△' | '∠' | '∫' | '∞' => {
+                toks.push(Tok::Greek(match c {
+                    '△' => "サンカク",
+                    '∠' => "カク",
+                    '∫' => "インテグラル",
+                    _ => "ムゲンダイ",
+                }));
+                i += 1;
+            }
             c if greek(c).is_some() => {
                 toks.push(Tok::Greek(greek(c)?));
                 i += 1;
@@ -421,6 +460,10 @@ impl Parser<'_> {
                     r.push('ド');
                     self.i += 1;
                 }
+                Some(Tok::Prime) => {
+                    r.push_str("ダッシュ");
+                    self.i += 1;
+                }
                 _ => break,
             }
         }
@@ -487,6 +530,13 @@ fn op_reading(c: char) -> &'static str {
         '<' => "ショウナリ",
         '>' => "ダイナリ",
         '±' => "プラスマイナス",
+        '∈' => "ゾクスル",
+        '∉' => "ゾクサナイ",
+        '∪' => "カップ",
+        '∩' => "キャップ",
+        '⊥' => "スイチョク",
+        '∥' => "ヘイコウ",
+        '≡' => "ゴウドウ",
         _ => "",
     }
 }
@@ -578,10 +628,16 @@ fn is_math(toks: &[Tok]) -> bool {
         return false;
     }
     let eq = toks.contains(&Tok::Op('='));
-    let strong_rel = toks
-        .iter()
-        .any(|t| matches!(t, Tok::Op('≦' | '≧' | '≠' | '≒')));
-    // < > は、 `x>0 , y<0` のように 2 つ以上並ぶ時だけ不等号にする (`i<10` / `I<3` / 矢印・顔文字を除く)
+    let strong_rel = toks.iter().any(|t| {
+        matches!(
+            t,
+            Tok::Op('≦' | '≧' | '≠' | '≒' | '∈' | '∉' | '∪' | '∩' | '⊥' | '∥' | '≡')
+        )
+    });
+    // < > は、 `x>0 , y<0` や `-3<x<5` のように変数 1 字に接する不等号が 2 つ以上ある時だけ不等号にする
+    // (`i<10` / `I<3` / 矢印・顔文字を除く)
+    let single = |t: &Tok| matches!(t, Tok::Var(v) if v.len() == 1);
+    let operand = |t: &Tok| matches!(t, Tok::Num(_) | Tok::Var(_));
     let weak_rel = toks
         .iter()
         .enumerate()
@@ -589,8 +645,8 @@ fn is_math(toks: &[Tok]) -> bool {
             matches!(t, Tok::Op('<' | '>'))
                 && *i > 0
                 && i + 1 < toks.len()
-                && matches!(toks[i - 1], Tok::Var(ref v) if v.len() == 1)
-                && matches!(toks[i + 1], Tok::Num(_) | Tok::Var(_))
+                && ((single(&toks[i - 1]) && operand(&toks[i + 1]))
+                    || (single(&toks[i + 1]) && operand(&toks[i - 1])))
         })
         .count()
         >= 2;
@@ -612,7 +668,7 @@ fn is_math(toks: &[Tok]) -> bool {
         .any(|t| matches!(t, Tok::Op('+' | '-' | '×' | '÷' | '/')));
     // 構文がおかしい (記号どうしの並び) ものは式にしない
     let ops_ok = toks.windows(2).all(|w| match (&w[0], &w[1]) {
-        (Tok::Op(a), Tok::Op(b)) => matches!(b, '-' | '+') && !matches!(a, '-' | '+'),
+        (Tok::Op(a), Tok::Op(b)) => matches!(b, '-' | '+' | '±') && !matches!(a, '-' | '+'),
         (Tok::Caret, Tok::Caret) => false,
         _ => true,
     });
@@ -894,6 +950,27 @@ mod tests {
         assert_eq!(read("x>=3").unwrap(), "xダイナリイコールサン");
         assert_eq!(read("x>0 , y<0").unwrap(), "xダイナリゼロ,yショウナリゼロ");
         assert_eq!(read("x≠0").unwrap(), "xノットイコールゼロ");
+    }
+
+    #[test]
+    fn plus_minus_double_inequality_sets_geometry_and_primes() {
+        assert_eq!(read("x=±3").unwrap(), "xイコールプラスマイナスサン");
+        assert_eq!(
+            read("-3<x<5").unwrap(),
+            "マイナスサンショウナリxショウナリゴ"
+        );
+        assert_eq!(read("A∪B").unwrap(), "AカップB");
+        assert_eq!(read("x∈R").unwrap(), "xゾクスルR");
+        assert_eq!(read("△ABC≡△DEF").unwrap(), "サンカクABCゴウドウサンカクDEF");
+        assert_eq!(read("AB⊥CD").unwrap(), "ABスイチョクCD");
+        assert_eq!(read("∠A=90°").unwrap(), "カクAイコールキュウジュウド");
+        assert_eq!(read("f'(x)=2x").unwrap(), "fダッシュ(x)イコールニx");
+        assert_eq!(read("f′(x)=2x").unwrap(), "fダッシュ(x)イコールニx");
+        // 英語の ' や、 変数でない語の後の ' は式にしない
+        assert_eq!(read("it's x=3"), None);
+        assert_eq!(read("don't=1"), None);
+        // 図形の名前 (大文字 2〜3 字) は図形・集合の記号がある式だけ
+        assert_eq!(read("AB=CD"), None);
     }
 
     #[test]
