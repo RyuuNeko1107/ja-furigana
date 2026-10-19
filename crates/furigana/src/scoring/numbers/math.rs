@@ -896,12 +896,10 @@ fn render(items: &[Item]) -> String {
                     // lim / ∫ は式全体にかかるので (Σx/n は (Σx)/n なので外に出さず ワル)、 分数の外に出す (lim 1/x → リミット xブンノイチ)
                     let lead = items[k..e]
                         .iter()
-                        .take_while(
-                            |i| {
-                                matches!(i, Item::Atom { r, func: true, .. }
+                        .take_while(|i| {
+                            matches!(i, Item::Atom { r, func: true, .. }
                                     if is_big_operator(r) && !r.starts_with("シグマ"))
-                            },
-                        )
+                        })
                         .count();
                     // 数 / 数 + 項 (4/3πr³ / 1/2at²) は 先頭の数だけを分母にする: (4/3)πr³
                     let left_num = matches!(&items[k + lead..e], [Item::Atom { num: true, .. }]);
@@ -1117,14 +1115,7 @@ fn is_math(toks: &[Tok]) -> bool {
         [Tok::Var(v), Tok::Op('<' | '>'), Tok::Num(n)] if v.len() == 1 && n.contains('.')
     );
     (has_var
-        && (eq
-            || strong_rel
-            || weak_rel
-            || p_value
-            || pow
-            || abs_ineq
-            || idx_minus
-            || bigop_var))
+        && (eq || strong_rel || weak_rel || p_value || pow || abs_ineq || idx_minus || bigop_var))
         || sqrt
         || (!has_var
             && has_num
