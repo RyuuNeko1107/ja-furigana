@@ -377,6 +377,25 @@ impl Furigana {
         )
     }
 
+    /// 診断用: 各ノードの (表記, 読み, 品詞, 拍数, 語単体の核, 推定か)。 句の連結の前の値。 公開 API ではない
+    #[doc(hidden)]
+    #[must_use]
+    pub fn chain_debug_nodes_detail(
+        &self,
+        input: &str,
+    ) -> Vec<(String, String, String, usize, usize, bool)> {
+        let norm = crate::kana::normalize_text_aligned(input, &self.rules.compat);
+        let analysis = self.pipeline().analyze(&norm.text);
+        let morphs = self.analyzer().tokenize(&norm.text);
+        crate::chain_phrases::debug_nodes_detail(
+            &norm.text,
+            &analysis.tokens,
+            &morphs,
+            &self.accent_lexicon,
+            &self.chain_table,
+        )
+    }
+
     /// 診断用: 各ノードの (表記, 読み, 品詞, 前の語にくっついたか)。 公開 API ではない
     #[doc(hidden)]
     #[must_use]
