@@ -361,6 +361,73 @@ impl Dict {
         Ok(merged)
     }
 
+    /// バイナリキャッシュへ書く ([`crate::tablecache`])。 索引 (`rich_index` など) は読み込み後に作り直すので含めない
+    pub(crate) fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        w.u64(self.unihan.len() as u64);
+        for (k, v) in &self.unihan {
+            w.str(k);
+            w.str(v);
+        }
+        w.u64(self.rich.len() as u64);
+        for (k, e) in &self.rich {
+            w.str(k);
+            e.write_to(w);
+        }
+        w.u64(self.kanji.len() as u64);
+        for b in &self.kanji {
+            b.write_to(w);
+        }
+        for map in [&self.name_sei, &self.name_mei] {
+            w.u64(map.len() as u64);
+            for (k, v) in map {
+                w.str(k);
+                w.str(v);
+            }
+        }
+    }
+
+    /// バイナリキャッシュから読む。 壊れていれば `None`
+    pub(crate) fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        let n = r.len(8)?;
+        let mut unihan: FxMap<String, String> = FxMap::default();
+        unihan.reserve(n);
+        for _ in 0..n {
+            let k = r.str()?.to_string();
+            unihan.insert(k, r.str()?.to_string());
+        }
+        let n = r.len(5)?;
+        let mut rich: FxMap<Arc<str>, Entry> = FxMap::default();
+        rich.reserve(n);
+        for _ in 0..n {
+            let k: Arc<str> = Arc::from(r.str()?);
+            rich.insert(k, Entry::read_from(r)?);
+        }
+        let n = r.len(8)?;
+        let mut kanji = Vec::with_capacity(n);
+        for _ in 0..n {
+            kanji.push(KanjiBlock::read_from(r)?);
+        }
+        let mut names: [HashMap<String, String>; 2] = [HashMap::new(), HashMap::new()];
+        for map in &mut names {
+            let n = r.len(8)?;
+            map.reserve(n);
+            for _ in 0..n {
+                let k = r.str()?.to_string();
+                map.insert(k, r.str()?.to_string());
+            }
+        }
+        let [name_sei, name_mei] = names;
+        Some(Self {
+            unihan,
+            rich,
+            kanji,
+            rich_index: OnceLock::new(),
+            kanji_index: OnceLock::new(),
+            name_sei,
+            name_mei,
+        })
+    }
+
     /// 人名表 (`[entries]` の `"表記" = "読み"` 行) を行単位で取り込む。 読みはカタカナにそろえる。
     /// 10 万件規模なので serde で全体を展開しない。 同じ表記は先勝ち (表は多数派の読み順に並べる)。
     fn load_name_table(&mut self, content: &str, sei: bool) {

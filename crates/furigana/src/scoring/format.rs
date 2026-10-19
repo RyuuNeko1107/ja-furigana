@@ -339,6 +339,219 @@ impl KanjiBlock {
     }
 }
 
+// ─── バイナリキャッシュ ([`crate::tablecache`]) ─────────────────────────────────
+
+fn write_opt_str(w: &mut crate::tablecache::Writer, v: &Option<String>) {
+    match v {
+        Some(s) => {
+            w.u8(1);
+            w.str(s);
+        }
+        None => w.u8(0),
+    }
+}
+
+fn read_opt_str(r: &mut crate::tablecache::Reader) -> Option<Option<String>> {
+    match r.u8()? {
+        0 => Some(None),
+        1 => Some(Some(r.str()?.to_string())),
+        _ => None,
+    }
+}
+
+fn write_strs(w: &mut crate::tablecache::Writer, v: &[String]) {
+    w.u32(u32::try_from(v.len()).unwrap_or(u32::MAX));
+    for s in v {
+        w.str(s);
+    }
+}
+
+fn read_strs(r: &mut crate::tablecache::Reader) -> Option<Vec<String>> {
+    let n = r.u32()? as usize;
+    // 1 件は最低 4 byte (長さ) 使うので、 残りバイト数を超える件数は壊れている
+    r.check_items(n, 4)?;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        out.push(r.str()?.to_string());
+    }
+    Some(out)
+}
+
+fn write_char_type(w: &mut crate::tablecache::Writer, v: Option<CharType>) {
+    w.u8(match v {
+        None => 0,
+        Some(CharType::Kanji) => 1,
+        Some(CharType::Hiragana) => 2,
+        Some(CharType::Katakana) => 3,
+        Some(CharType::Alphanumeric) => 4,
+        Some(CharType::Symbol) => 5,
+    });
+}
+
+fn read_char_type(r: &mut crate::tablecache::Reader) -> Option<Option<CharType>> {
+    Some(match r.u8()? {
+        0 => None,
+        1 => Some(CharType::Kanji),
+        2 => Some(CharType::Hiragana),
+        3 => Some(CharType::Katakana),
+        4 => Some(CharType::Alphanumeric),
+        5 => Some(CharType::Symbol),
+        _ => return None,
+    })
+}
+
+impl MatchCondition {
+    pub(crate) fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        write_opt_str(w, &self.prev_eq);
+        write_strs(w, &self.prev_eq_any);
+        write_opt_str(w, &self.next_eq);
+        write_strs(w, &self.next_eq_any);
+        write_strs(w, &self.prev_ends_any);
+        write_opt_str(w, &self.next_starts);
+        write_strs(w, &self.next_starts_any);
+        write_strs(w, &self.next2_starts_any);
+        write_char_type(w, self.prev_char_type);
+        write_char_type(w, self.next_char_type);
+        w.u8(u8::from(self.prev_month) | (u8::from(self.next_digit) << 1));
+        write_strs(w, &self.input_contains_any);
+    }
+
+    pub(crate) fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        let prev_eq = read_opt_str(r)?;
+        let prev_eq_any = read_strs(r)?;
+        let next_eq = read_opt_str(r)?;
+        let next_eq_any = read_strs(r)?;
+        let prev_ends_any = read_strs(r)?;
+        let next_starts = read_opt_str(r)?;
+        let next_starts_any = read_strs(r)?;
+        let next2_starts_any = read_strs(r)?;
+        let prev_char_type = read_char_type(r)?;
+        let next_char_type = read_char_type(r)?;
+        let flags = r.u8()?;
+        let input_contains_any = read_strs(r)?;
+        Some(Self {
+            prev_eq,
+            prev_eq_any,
+            next_eq,
+            next_eq_any,
+            prev_ends_any,
+            next_starts,
+            next_starts_any,
+            next2_starts_any,
+            prev_char_type,
+            next_char_type,
+            prev_month: flags & 1 != 0,
+            next_digit: flags & 2 != 0,
+            input_contains_any,
+        })
+    }
+}
+
+impl MatchBlock {
+    fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        w.str(&self.reading);
+        self.condition.write_to(w);
+    }
+
+    fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        Some(Self {
+            reading: r.str()?.to_string(),
+            condition: MatchCondition::read_from(r)?,
+        })
+    }
+}
+
+impl Alternative {
+    fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        w.str(&self.reading);
+        write_opt_str(w, &self.sense);
+        w.u8(self.weight);
+        self.condition.write_to(w);
+    }
+
+    fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        Some(Self {
+            reading: r.str()?.to_string(),
+            sense: read_opt_str(r)?,
+            weight: r.u8()?,
+            condition: MatchCondition::read_from(r)?,
+        })
+    }
+}
+
+fn write_matches(w: &mut crate::tablecache::Writer, v: &[MatchBlock]) {
+    w.u32(u32::try_from(v.len()).unwrap_or(u32::MAX));
+    for m in v {
+        m.write_to(w);
+    }
+}
+
+fn read_matches(r: &mut crate::tablecache::Reader) -> Option<Vec<MatchBlock>> {
+    let n = r.u32()? as usize;
+    r.check_items(n, 8)?;
+    (0..n).map(|_| MatchBlock::read_from(r)).collect()
+}
+
+fn write_alts(w: &mut crate::tablecache::Writer, v: &[Alternative]) {
+    w.u32(u32::try_from(v.len()).unwrap_or(u32::MAX));
+    for a in v {
+        a.write_to(w);
+    }
+}
+
+fn read_alts(r: &mut crate::tablecache::Reader) -> Option<Vec<Alternative>> {
+    let n = r.u32()? as usize;
+    r.check_items(n, 8)?;
+    (0..n).map(|_| Alternative::read_from(r)).collect()
+}
+
+impl Entry {
+    pub(crate) fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        match self {
+            Entry::Simple(s) => {
+                w.u8(0);
+                w.str(s);
+            }
+            Entry::Detailed(d) => {
+                w.u8(1);
+                w.str(&d.reading);
+                write_matches(w, &d.matches);
+                write_alts(w, &d.alt);
+            }
+        }
+    }
+
+    pub(crate) fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        match r.u8()? {
+            0 => Some(Entry::Simple(r.str()?.into())),
+            1 => Some(Entry::Detailed(Box::new(EntryDetail {
+                reading: r.str()?.to_string(),
+                matches: read_matches(r)?,
+                alt: read_alts(r)?,
+            }))),
+            _ => None,
+        }
+    }
+}
+
+impl KanjiBlock {
+    pub(crate) fn write_to(&self, w: &mut crate::tablecache::Writer) {
+        w.str(&self.char);
+        w.str(&self.default);
+        write_matches(w, &self.matches);
+        write_alts(w, &self.alt);
+    }
+
+    pub(crate) fn read_from(r: &mut crate::tablecache::Reader) -> Option<Self> {
+        Some(Self {
+            char: r.str()?.to_string(),
+            default: r.str()?.to_string(),
+            matches: read_matches(r)?,
+            alt: read_alts(r)?,
+        })
+    }
+}
+
 /// `[entries]` block 全体 (= surface → Entry の HashMap)
 ///
 /// TOML 上の `[entries]` table を deserialize する。

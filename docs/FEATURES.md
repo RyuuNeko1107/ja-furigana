@@ -114,7 +114,7 @@ tts では英数字にはさまれた `.` `?` は文の区切りにしない (`e
 
 - **辞書の穴の抽出**: `extract_dict_gap_candidates` で辞書にない漢字 token を context つきで取り出す (lib は telemetry を持たない)
 - **hot reload**: 辞書を差し替えても再起動不要 (サーバー)
-- **起動の高速化** (0.6.1〜): アクセント表・連結表を `.furigana-cache/*.fgtb` にバイナリで保存し、 次回から読む (起動 約 530 → 約 220 ms)。 元ファイルの大きさ・更新時刻・内容で古さを判定する。 `furigana dict build-cache` で事前に作れる。 環境変数 `FURIGANA_NO_TABLE_CACHE=1` で無効
+- **起動の高速化** (0.6.1〜): アクセント表・連結表を `.furigana-cache/*.fgtb` にバイナリで保存し、 次回から読む (起動 約 530 → 約 220 ms)。 元ファイルの大きさ・更新時刻・内容で古さを判定する。 `furigana dict build-cache` で事前に作れる。 本体の辞書 (熟語・単漢字・人名の表) も同じ仕組みで `dict-*.fgtb` に保存する (`Furigana::build` 154 → 63 ms)。 **TOML が正で、 キャッシュは派生物** (配布せず、 使う環境で作る。 TOML を直せば次の起動で作り直される)。 環境変数 `FURIGANA_NO_TABLE_CACHE=1` で無効
 - **並列バッチ**: `furigana lookup --batch -j N` で行を並列に処理する
 - **性能**: 1 万行/秒以上。 辞書は先頭 2 文字で区間を絞って引く
 - **品質ゲート**: 回帰 corpus (約 1.2 万 case)、 mutation test、 diff coverage、 license / security audit を CI で必須化
