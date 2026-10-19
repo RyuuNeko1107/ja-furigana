@@ -2472,3 +2472,16 @@ fn math_expression_leaves_a_counted_number_and_url_queries_alone() {
     let cands = p.candidates_vec(&ctx(input), input.find('p').unwrap());
     assert!(cands.iter().all(|c| c.surface != "p=348424"));
 }
+
+#[test]
+fn kanji_decimal_after_bun_no_reads_as_decimal_without_unit() {
+    // 十分の七・五 (法令の割合) は 「分の」 の直後だけ、 単位が無くても小数。 ふつうの 七・五 の並びは小数にしない
+    let p = provider();
+    let s = "十分の七・五";
+    let c = p.candidates_vec(&ctx(s), "十分の".len());
+    assert_eq!(
+        find(&c, "七・五").expect("decimal after 分の").reading,
+        "ナナテンゴ"
+    );
+    assert!(find(&p.candidates_vec(&ctx("七・五を"), 0), "七・五").is_none());
+}

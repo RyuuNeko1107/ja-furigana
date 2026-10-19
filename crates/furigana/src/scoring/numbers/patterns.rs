@@ -79,6 +79,13 @@ pub(super) static KANJI_DECIMAL_SHORT_RE: Lazy<HeadRegex> = Lazy::new(|| {
         .expect("scoring KANJI_DECIMAL_SHORT regex build failed")
 });
 
+/// 「十分の七・五」 「百分の二・五」 のように 「〜分の」 の直後に来る 1 桁・1 桁の漢数字の小数 (法令の割合)。
+/// 単位が無くても小数 (七・五 = ナナテンゴ ではなく シチテンゴ は読み側の数詞の読み)。 呼び出し側で 「分の」 の直後だけに限る
+pub(super) static KANJI_DECIMAL_AFTER_BUN_RE: Lazy<HeadRegex> = Lazy::new(|| {
+    HeadRegex::new("^([〇一二三四五六七八九])・([〇一二三四五六七八九])")
+        .expect("scoring KANJI_DECIMAL_AFTER_BUN regex build failed")
+});
+
 /// 1 桁・1 桁の漢数字の小数で、 直後に単位が付く形 (二・五％ / 一・八倍 / 〇・七ポイント / 一・五万円)。
 /// 列挙 (一・二・三) と区別するため、 直後の単位を必須にする (単位は数の一部ではないので取らない側の group 3)
 pub(super) static KANJI_DECIMAL_UNIT_RE: Lazy<HeadRegex> = Lazy::new(|| {

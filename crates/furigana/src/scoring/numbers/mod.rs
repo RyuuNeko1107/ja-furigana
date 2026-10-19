@@ -65,10 +65,10 @@ use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, HeadRegex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE,
-    DOT_DATE_WEEKDAY_RE, FRACTION_RE, KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE,
-    KANJI_DECIMAL_UNIT_RE, PHONE_RE, POSTAL_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
-    SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE, SLASH_PAIR_RE,
-    SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
+    DOT_DATE_WEEKDAY_RE, FRACTION_RE, KANJI_DECIMAL_AFTER_BUN_RE, KANJI_DECIMAL_RE,
+    KANJI_DECIMAL_SHORT_RE, KANJI_DECIMAL_UNIT_RE, PHONE_RE, POSTAL_RE, RATIO_RE,
+    SLASH_DATE_AFTER_RE, SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE,
+    SLASH_PAIR_RE, SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
     SLASH_SENTENCE_FRACTION_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
     YMD_RE, YM_RE,
 };
@@ -1171,6 +1171,14 @@ impl NumberCandidateProvider {
                 // 小数部 1 桁 (三八・四％) は 整数部が位取り 2 桁の時だけ。 一・二 / 三・四 は並列の列挙
                 at_start(&KANJI_DECIMAL_SHORT_RE, rest)
                     .filter(|c| two_digit_positional(c.get(1).unwrap().as_str(), false))
+            })
+            .or_else(|| {
+                // 十分の七・五 / 百分の二・五: 「〜分の」 の直後は単位が無くても小数 (法令の割合)
+                if input[..pos].ends_with("分の") {
+                    at_start(&KANJI_DECIMAL_AFTER_BUN_RE, rest)
+                } else {
+                    None
+                }
             })
             .or_else(|| {
                 // 1 桁・1 桁でも、 直後に単位 (％ / 倍 / 万円 …) が付けば小数 (二・五％ / 一・八倍)。
