@@ -20,7 +20,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// キャッシュ形式の版。 形式を変えたら上げる (古いキャッシュは key が変わって使われなくなる)
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2; // 2: 助詞の 複合 は部品が 1 つでも分割表に入れる (0.6.7)
 const MAGIC: &[u8; 4] = b"FGTB";
 const CACHE_DIR: &str = ".furigana-cache";
 

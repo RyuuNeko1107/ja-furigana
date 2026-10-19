@@ -324,7 +324,8 @@ impl ChainTable {
                         .split(';')
                         .filter_map(|p| self.parse_part(p))
                         .collect();
-                    if parts.len() >= 2 {
+                    // 部品が 2 つ以上の語 (助詞連語 / 複数部品の語)、 または 助詞の 「複合」 (IPADIC が 2 語にする 1 語。 てて)
+                    if parts.len() >= 2 || (parts.len() == 1 && b == "助詞" && c == "複合") {
                         self.splits.push((
                             crate::keyhash::hash_parts(&[a, b, c]),
                             parts.into_boxed_slice(),
@@ -733,8 +734,14 @@ fn parts_to_nodes(parts: &[SplitPart]) -> (Vec<Node>, Vec<NodeMeta>) {
     (nodes, meta)
 }
 
-/// 複数部品の語の分割表のキー (表記,品詞1,複合)。 品詞は IPADIC と naist-jdic で食い違う (どう = 副詞 / 感動詞) ので全部試す
-const COMPOUND_POS: [(&str, &str); 3] = [("感動詞", "複合"), ("副詞", "複合"), ("接続詞", "複合")];
+/// 複数部品の語の分割表のキー (表記,品詞1,複合)。 品詞は IPADIC と naist-jdic で食い違う (どう = 副詞 / 感動詞) ので全部試す。
+/// 助詞は 「てて」 のように IPADIC が 2 語 (て + て) にする naist-jdic の 1 語
+const COMPOUND_POS: [(&str, &str); 4] = [
+    ("感動詞", "複合"),
+    ("副詞", "複合"),
+    ("接続詞", "複合"),
+    ("助詞", "複合"),
+];
 
 /// `tokens[start..]` の先頭から数 token の表記をつないだものが分割表 (複数部品の語) にあれば (token 数, 部品)。
 /// 部品の読みを連結すると token の読みの連結と一致する時だけ
@@ -764,6 +771,31 @@ fn compound_split<'a>(
         }
     }
     None
+}
+
+/// 助詞の形態素 2 つ (て + て) の表記をつないだものが分割表 (キー = 表記,助詞,複合) にあれば その部品。
+/// 部品の読みが 2 つの形態素の読みの連結と一致する時だけ
+fn particle_pair_split<'a>(
+    first: &MorphToken,
+    second: Option<&MorphToken>,
+    table: &'a ChainTable,
+) -> Option<&'a [SplitPart]> {
+    let second = second?;
+    // 1 つ目は 助詞 か、 「てる」 の 動詞・非自立 (IPADIC は してて を し + て(動詞) + て(助詞) にする)
+    if !matches!(first.pos.as_deref(), Some("助詞" | "動詞"))
+        || second.pos.as_deref() != Some("助詞")
+    {
+        return None;
+    }
+    let surface = format!("{}{}", first.surface, second.surface);
+    let reading = crate::kana::hira_to_kata(&format!(
+        "{}{}",
+        first.reading.as_deref().unwrap_or(""),
+        second.reading.as_deref().unwrap_or("")
+    ));
+    let parts = table.split_get(crate::keyhash::hash_parts(&[&surface, "助詞", "複合"]))?;
+    let joined: String = parts.iter().map(|p| &*p.reading).collect();
+    (joined == reading).then_some(parts)
 }
 
 /// 形態素 1 つを ノードにする (分割表にあれば OpenJTalk の複数語に分けて)。
@@ -1270,10 +1302,22 @@ fn make_nodes(
             && crate::kana::hira_to_kata(&morph_reading) == tok_reading
         {
             // 形態素ごとのノードに展開
-            for &i in &idx {
-                let (ns, ms) = expand_morph(&morphs[i], lexicon, table);
+            let mut k = 0;
+            while k < idx.len() {
+                // IPADIC が 2 語 (て + て) にする naist-jdic の 1 語の助詞 (してて の てて) は つないで 1 ノード
+                if let Some(parts) =
+                    particle_pair_split(&morphs[idx[k]], idx.get(k + 1).map(|&j| &morphs[j]), table)
+                {
+                    let (ns, ms) = parts_to_nodes(parts);
+                    nodes.extend(ns);
+                    meta.extend(ms);
+                    k += 2;
+                    continue;
+                }
+                let (ns, ms) = expand_morph(&morphs[idx[k]], lexicon, table);
                 nodes.extend(ns);
                 meta.extend(ms);
+                k += 1;
             }
             continue;
         }
@@ -2211,6 +2255,62 @@ ids = [
         ];
         let (nodes2, _) = make_nodes(text, &toks2, &morphs, &lex, &t);
         assert_eq!(nodes2.len(), 4);
+    }
+
+    #[test]
+    fn te_te_after_a_verb_becomes_one_openjtalk_particle() {
+        // IPADIC は してて を し + て (動詞・非自立 = てる) + て (助詞) にするが、 naist-jdic の てて は 1 語の助詞
+        let t = table_of(
+            "[splits]
+\"てて,助詞,複合\" = \"てて,テテ,助詞,接続助詞,0,0/2,動詞%F2/形容詞%F1/名詞%F5\"
+",
+        );
+        // 部品が 1 つでも 助詞の 「複合」 は読む
+        assert_eq!(
+            t.split_get(crate::keyhash::hash_parts(&["てて", "助詞", "複合"]))
+                .map(<[_]>::len),
+            Some(1)
+        );
+        let lex = AccentLexicon::default();
+        let toks = [token("してて", "してて", 0..9)];
+        let morphs = [
+            morph("し", "シ", "動詞", "自立"),
+            morph("て", "テ", "動詞", "非自立"),
+            morph("て", "テ", "助詞", "接続助詞"),
+        ];
+        let (nodes, meta) = make_nodes("してて", &toks, &morphs, &lex, &t);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(meta[0].surface, "し");
+        assert_eq!(
+            (meta[1].surface.as_str(), meta[1].reading.as_str()),
+            ("てて", "テテ")
+        );
+        assert_eq!(nodes[1].morae, 2);
+        // 1 つ目が名詞なら つなげない (読みと品詞が違う)
+        let morphs2 = [
+            morph("し", "シ", "動詞", "自立"),
+            morph("て", "テ", "名詞", "一般"),
+            morph("て", "テ", "助詞", "接続助詞"),
+        ];
+        let (nodes2, _) = make_nodes("してて", &toks, &morphs2, &lex, &t);
+        assert_eq!(nodes2.len(), 3);
+        // 助詞 + 助詞 (て + て) もつなぐ
+        let morphs3 = [
+            morph("し", "シ", "動詞", "自立"),
+            morph("て", "テ", "助詞", "接続助詞"),
+            morph("て", "テ", "助詞", "接続助詞"),
+        ];
+        let (nodes3, _) = make_nodes("してて", &toks, &morphs3, &lex, &t);
+        assert_eq!(nodes3.len(), 2);
+        // 読みが合わなければ つなげない
+        let morphs4 = [
+            morph("し", "シ", "動詞", "自立"),
+            morph("て", "テ", "動詞", "非自立"),
+            morph("て", "デ", "助詞", "接続助詞"),
+        ];
+        let toks4 = [token("してて", "してで", 0..9)];
+        let (nodes4, _) = make_nodes("してて", &toks4, &morphs4, &lex, &t);
+        assert_eq!(nodes4.len(), 3);
     }
 
     #[test]
