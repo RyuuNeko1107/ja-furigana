@@ -46,6 +46,7 @@
 //! - 踊り字 「々」 → [`crate::scoring::odoriji::OdorijiProvider`]
 //! - jukugo super-set check は **不要** (Smart engine DP が band 1000 dict entry を自然に優先)
 //!
+mod math;
 mod patterns;
 
 #[cfg(test)]
@@ -64,10 +65,10 @@ use crate::scoring::model_number::CompiledModels;
 use patterns::{
     at_start, build_counter_regexes, build_grouped_kanji_counter_regex, build_scale_regex,
     build_si_unit_regex, HeadRegex, DATE_KANJI_FULL_RE, DATE_KANJI_MD_RE, DIGIT_RE,
-    DOT_DATE_WEEKDAY_RE, FRACTION_RE, KANJI_DECIMAL_RE, KANJI_DECIMAL_SHORT_RE,
-    KANJI_DECIMAL_UNIT_RE, PHONE_RE, POSTAL_RE, RATIO_RE, SLASH_DATE_AFTER_RE,
-    SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE, SLASH_PAIR_RE,
-    SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
+    DOT_DATE_WEEKDAY_RE, FRACTION_RE, KANJI_DECIMAL_AFTER_BUN_RE, KANJI_DECIMAL_RE,
+    KANJI_DECIMAL_SHORT_RE, KANJI_DECIMAL_UNIT_RE, PHONE_RE, POSTAL_RE, RATIO_RE,
+    SLASH_DATE_AFTER_RE, SLASH_DATE_BEFORE_RE, SLASH_FRACTION_AFTER_RE, SLASH_FRACTION_BEFORE_RE,
+    SLASH_PAIR_RE, SLASH_RANGE_AFTER_RE, SLASH_RANGE_BEFORE_RE, SLASH_SENTENCE_DATE_RE,
     SLASH_SENTENCE_FRACTION_RE, TIME_COLON_RE, TIME_JP_FULL_RE, TIME_JP_KANJI_RE, VERSION_RE,
     YMD_RE, YM_RE,
 };
@@ -1172,6 +1173,14 @@ impl NumberCandidateProvider {
                     .filter(|c| two_digit_positional(c.get(1).unwrap().as_str(), false))
             })
             .or_else(|| {
+                // 十分の七・五 / 百分の二・五: 「〜分の」 の直後は単位が無くても小数 (法令の割合)
+                if input[..pos].ends_with("分の") {
+                    at_start(&KANJI_DECIMAL_AFTER_BUN_RE, rest)
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
                 // 1 桁・1 桁でも、 直後に単位 (％ / 倍 / 万円 …) が付けば小数 (二・五％ / 一・八倍)。
                 // 三・四 のように 1 つ違いで上がる並びは 並列・範囲 (3 と 4) の可能性が高いので除く (〇・一 は小数)
                 at_start(&KANJI_DECIMAL_UNIT_RE, rest).filter(|c| {
@@ -1610,6 +1619,13 @@ impl NumberCandidateProvider {
             return;
         }
         if let Some((end, reading)) = self.models.match_at(input, pos) {
+            out.push(self.make_hit(input, pos, end - pos, reading));
+        }
+    }
+
+    /// 数式 (`x²-5x+b=0` / `y=1/x` / `√2`)。 変数・数に `=` / 不等号 / 累乗 / `√` が付く範囲を 1 候補で読む
+    fn try_math(&self, input: &str, pos: usize, out: &mut Vec<RawCandidate<'_>>) {
+        if let Some((end, reading)) = math::read_math(input, pos) {
             out.push(self.make_hit(input, pos, end - pos, reading));
         }
     }
@@ -2143,6 +2159,7 @@ impl CandidateProvider for NumberCandidateProvider {
         self.try_currency_prefix(input, pos, rest, first_char, out);
         self.try_slash_unit(input, pos, rest, first_char, out);
         self.try_model(input, pos, first_char, out);
+        self.try_math(input, pos, out);
 
         // ─── 先頭文字 dispatch (hot path 最適化) ─────────────────────────────
         // 数値系正規表現は全て **数字系の先頭文字** を要求する (NUM_PAT = 任意符号 +

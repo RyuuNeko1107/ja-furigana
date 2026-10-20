@@ -22,6 +22,9 @@ use crate::scoring::postpass::ReadingPostPass;
 // 様 / 君 / 殿 は王子様・神様・諸君のような一般語と衝突するので手がかりにしない (実コメント A/B で確認)。
 const HONORIFICS: &[&str] = &["さん", "ちゃん", "くん", "氏"];
 
+/// 名の表にあるが、 実コメントでは一般語の誤認ばかりだった語 (新人さん / 初代大統領 / 勝利投手)
+const COMMON_WORD_GIVEN: &[&str] = &["新人", "初代", "勝利"];
+
 /// 肩書き・職名。 人名の直後に来る語 (単独の語としても読みが決まっているもの)。
 const TITLES: &[&str] = &[
     "選手",
@@ -148,6 +151,21 @@ fn cue_score(surface: &str) -> u8 {
         }
     }
     0
+}
+
+/// 肩書き (医師 / 記者 / 弁護士 …) の直後に、 隣り合って 会・団・連・協・組・学・院・所 で始まる token が続く時は、
+/// 医師会 / 記者会見 / 弁護士会 / 選手会 / 議員連盟 のような別の複合語で、 肩書きではない (日野市医師会 の 市 を名にしない)。
+fn title_continues_into_compound(tokens: &[Token], c: usize) -> bool {
+    let cue = &tokens[c];
+    if !cue.surface.chars().next().is_some_and(is_kanji_char) {
+        return false;
+    }
+    tokens.get(c + 1).is_some_and(|next| {
+        next.range.start == cue.range.end
+            && next.surface.chars().next().is_some_and(|ch| {
+                matches!(ch, '会' | '団' | '連' | '協' | '組' | '学' | '院' | '所')
+            })
+    })
 }
 
 /// 手がかり語 (敬称と肩書き) の先頭の字
@@ -447,7 +465,11 @@ impl ReadingPostPass for PersonNamePass<'_> {
                     all_kanji(&tokens[c - 1].surface)
                         && (c == tokens.len() || !all_kanji(&tokens[c].surface))
                 }
-                _ => c < tokens.len() && cue_score(&tokens[c].surface) > 0,
+                _ => {
+                    c < tokens.len()
+                        && cue_score(&tokens[c].surface) > 0
+                        && !title_continues_into_compound(tokens, c)
+                }
             };
             if !is_cue {
                 c += 1;
@@ -493,6 +515,16 @@ impl ReadingPostPass for PersonNamePass<'_> {
                 && c - s == 1
                 && tokens[s].surface.chars().count() >= 3
                 && self.hint != NameHint::Name
+            {
+                c += 1;
+                continue;
+            }
+            // 名 (後ろ) が、 実コメントで姓 + 名 と誤認された一般語 (今日新人さん / ドイツ国初代大統領 / 尚勝利投手) なら、
+            // 割り直さない (新人さん = あらと にしない)。 一般語全般を除くと 風花 / 蘭子 のような本当の名前を巻き込むので、 実測した語だけ
+            if self.hint != NameHint::Name
+                && p.mei
+                    .as_ref()
+                    .is_some_and(|(m, _)| COMMON_WORD_GIVEN.contains(&m.as_str()))
             {
                 c += 1;
                 continue;
@@ -683,6 +715,35 @@ mod tests {
         PersonNamePass::new(&d).apply(&mut t);
         let after: Vec<String> = t.iter().map(|x| x.reading.clone()).collect();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn common_word_given_name_is_not_a_name() {
+        let mut d = dict();
+        d.insert_name(true, "今日", "きょう");
+        d.insert_name(false, "新人", "あらと");
+        // 今日 + 新人 + さん: 新人 は一般語なので あらと にしない
+        let mut t = vec![
+            token("今日", "キョウ", 0..6),
+            token("新人", "シンジン", 6..12),
+            token("さん", "サン", 12..18),
+        ];
+        PersonNamePass::new(&d).apply(&mut t);
+        assert_eq!(t[1].reading, "シンジン");
+    }
+
+    #[test]
+    fn title_followed_by_a_group_noun_is_not_a_cue() {
+        let d = dict();
+        // 日野市医師会: 医師 + 会 は医師会で、 市 を名 (いち) にしない
+        let mut t = vec![
+            token("日野", "ヒノ", 0..6),
+            token("市", "シ", 6..9),
+            token("医師", "イシ", 9..15),
+            token("会", "カイ", 15..18),
+        ];
+        PersonNamePass::new(&d).apply(&mut t);
+        assert_eq!(t[1].reading, "シ");
     }
 
     #[test]

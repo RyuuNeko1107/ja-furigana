@@ -51,7 +51,7 @@
 
 use crate::analyzer::Analyzer;
 use crate::scoring::candidate::{
-    CandidateProvider, RawCandidate, Score, ScoringContext, BAND_KANJI,
+    CandidateProvider, RawCandidate, Score, ScoringContext, BAND_KANJI, BAND_LINDERA_UNIHAN,
 };
 use crate::scoring::matcher::HIT_WEIGHT_BROAD;
 
@@ -105,6 +105,8 @@ struct EdgeKind {
     is_name: bool,
     /// 漢字 1 字だけの動詞 token (= Lindera が語幹だけ切り出した形)
     verb_stem: bool,
+    /// 記号だけの token の 2 文字目以降から足した edge (数 + 助数詞が token の途中で終わった時の継続用)
+    symbol_suffix: bool,
 }
 
 /// 1 字動詞語幹として扱わない字。
@@ -211,6 +213,7 @@ impl LinderaFallbackProvider {
                     && !input[..byte_pos].chars().next_back().is_some_and(|c| {
                         is_real_cjk_ideograph(c) || matches!(c, 'お' | 'ご' | '御')
                     }),
+                symbol_suffix: false,
             };
             // 代名詞 (これ帰り / それ使い) の後ろでも複合語の連濁は起きない (2026-09-27)
             let this_is_boundary = tok.is_particle
@@ -322,6 +325,23 @@ impl LinderaFallbackProvider {
                 continue;
             };
             if surface.chars().count() < 2 {
+                continue;
+            }
+            // % で始まる記号だけの token (「%→」 「%)」 「%/」) は、 2 文字目以降から始まる edge も足す。 Lindera が記号を 1 つにまとめると、
+            // 数 + 助数詞の候補 (「55%」) が token の途中で終わり、 次に繋ぐ edge が無くて採択できない (55%→60% の % が読まれない)
+            if surface.starts_with(['%', '％']) && surface.chars().all(is_split_symbol) {
+                for (offset, _) in surface.char_indices().skip(1) {
+                    let sub_start = start + offset;
+                    edges.push((
+                        sub_start,
+                        end,
+                        input[sub_start..end].to_string(),
+                        EdgeKind {
+                            symbol_suffix: true,
+                            ..EdgeKind::default()
+                        },
+                    ));
+                }
                 continue;
             }
             // token 末尾の **かな連続部分** を求める (「守りの」 → 「りの」、 「すげぇ」 → 全体)。
@@ -472,6 +492,10 @@ impl CandidateProvider for LinderaFallbackProvider {
                     // literal hit (= 送り仮名 literal 等、 2) なら dict が勝つ。
                     // default しか当たらない単漢字 (寝 = シン) には Lindera が勝つ。
                     Score::new(BAND_KANJI, length, HIT_WEIGHT_BROAD)
+                } else if kind.symbol_suffix {
+                    // 記号の途中から足した edge: 同点の経路 (55%→ を 55 + %→ と読むか 55% + → と読むか) では、
+                    // 数 + 助数詞が % まで読める側を選ぶ。 band は Lindera と同じで、 同点の時だけ効く
+                    Score::new(BAND_LINDERA_UNIHAN, length, HIT_WEIGHT_BROAD)
                 } else if char_count >= 2 && surface.chars().all(is_real_cjk_ideograph) {
                     Score::lindera_compound(length)
                 } else {
@@ -503,6 +527,11 @@ fn is_okurigana_form_voiced_after_noun_excluded(surface: &str) -> bool {
 }
 
 /// 閉じ括弧・閉じ引用符 (この直後は直前の語句の続きになりやすい)
+/// 記号だけの token を途中で切ってよい字か (英数・かな・漢字・空白・制御文字以外)
+fn is_split_symbol(c: char) -> bool {
+    !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control()
+}
+
 fn is_closing_symbol(c: char) -> bool {
     matches!(
         c,
@@ -593,6 +622,24 @@ mod tests {
 
     fn analyzer() -> Analyzer {
         Analyzer::new().expect("Analyzer init")
+    }
+
+    #[test]
+    fn percent_led_symbol_token_gets_suffix_edges() {
+        // 55%→60%: Lindera は 「%→」 を 1 token にする。 「55%」 の直後 (→ の位置) から始まる edge が無いと
+        // 数 + 助数詞の候補が token の途中で終わって採択できない
+        let input = "55%→60%";
+        let a = analyzer();
+        let p = LinderaFallbackProvider::new(&a, input);
+        let mut out = Vec::new();
+        p.candidates_at(&ctx(input), "55%".len(), &mut out);
+        assert!(out.iter().any(|c| c.range == ("55%".len().."55%→".len())));
+        // % で始まらない記号の塊 (顔文字 / 絵文字の続き) は割らない
+        let input = "(✨)";
+        let p = LinderaFallbackProvider::new(&a, input);
+        let mut out = Vec::new();
+        p.candidates_at(&ctx(input), "(".len(), &mut out);
+        assert!(out.iter().all(|c| c.range.end != "(✨".len()));
     }
 
     /// Lindera edge のうち surface が一致するものの読み。

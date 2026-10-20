@@ -431,6 +431,30 @@ fn superscript_digit(ch: char) -> Option<char> {
     }
 }
 
+/// 下付き数字 ₀〜₉
+fn is_subscript_digit(c: char) -> bool {
+    matches!(c, '\u{2080}'..='\u{2089}')
+}
+
+/// 下付き数字の直前が 「添え字を付ける底」 か: 前に英字が続かない小文字 1 字 (a₁ / x₂)、 または log / ln
+fn subscript_base_ok(prefix: &str) -> bool {
+    // ∫₀¹ / Σ₁ の範囲
+    if prefix.ends_with(['∫', 'Σ']) {
+        return true;
+    }
+    for func in ["log", "ln"] {
+        if let Some(rest) = prefix.strip_suffix(func) {
+            return !rest
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphabetic());
+        }
+    }
+    let mut it = prefix.chars().rev();
+    matches!(it.next(), Some(c) if c.is_ascii_lowercase())
+        && !it.next().is_some_and(|c| c.is_ascii_alphabetic())
+}
+
 /// 1 文字を NFKC → compat 置換 → NFC した断片を返す。
 ///
 /// [`normalize_text_aligned`] が unit ごとに呼ぶ。 NFKC は **1 文字単位** で適用する
@@ -618,8 +642,29 @@ pub(crate) fn normalize_text_aligned_with(
 fn normalize_text_aligned_slow(s: &str, compat: &CompatData) -> NormalizedText {
     let mut text = String::new();
     let mut units: Vec<NormUnit> = Vec::new();
+    // 数式 (log₂8=3 / a₁+a₂=b) の下付き数字は NFKC で数になって添え字だと分からなくなるので、 そのまま残す
+    // (式の記号がある行の、 小文字 1 字 / log / ln の直後だけ。 H₂O や CO₂ は従来どおり)
+    let math_line = s.chars().any(is_subscript_digit)
+        && s.contains([
+            '=', '＝', '<', '>', '≦', '≧', '≠', '≒', '≈', '≤', '≥', '√', '^', '²', '³',
+        ]);
+    let mut in_subscript = false;
     for (orig_off, ch) in s.char_indices() {
         let orig_end = orig_off + ch.len_utf8();
+        if math_line
+            && is_subscript_digit(ch)
+            && (in_subscript || subscript_base_ok(&s[..orig_off]))
+        {
+            let norm_start = text.len();
+            text.push(ch);
+            units.push(NormUnit {
+                norm_start,
+                orig: orig_off..orig_end,
+            });
+            in_subscript = s[orig_end..].chars().next().is_some_and(is_subscript_digit);
+            continue;
+        }
+        in_subscript = false;
         // 半角の濁点・半濁点 (ﾋﾞ → ビ): 1 文字ずつの NFKC だと結合記号が別に残って 「ひ゛」 になるので、 直前の半角カナと合成する
         if matches!(ch, '\u{FF9E}' | '\u{FF9F}')
             && s[..orig_off]
@@ -667,12 +712,103 @@ fn normalize_text_aligned_slow(s: &str, compat: &CompatData) -> NormalizedText {
         {
             text.push('・');
         }
+        // 10⁻³ / x⁻¹: 上付きのマイナスと、 それに続く上付き数字は 「^-3」 にして累乗として読む
+        if ch == '\u{207B}'
+            && s[orig_end..]
+                .chars()
+                .next()
+                .is_some_and(|c| superscript_digit(c).is_some())
+            && s[..orig_off]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, ')' | '）'))
+        {
+            text.push_str("^-");
+            units.push(NormUnit {
+                norm_start: text.len() - 2,
+                orig: orig_off..orig_end,
+            });
+            continue;
+        }
         // 上付き数字 (10² / x³) は 「^2」 にして累乗として読む (直前が数字・英字・閉じ括弧の時だけ。 注記の ¹ は除く)
         if let Some(d) = superscript_digit(ch) {
+            // ∫₀¹ の ¹ (下付き数字の直後の上付き数字) は上端: 「^1」
+            if math_line
+                && s[..orig_off]
+                    .chars()
+                    .next_back()
+                    .is_some_and(is_subscript_digit)
+            {
+                let norm_start = text.len();
+                text.push('^');
+                text.push(d);
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
+            // ⁻ や上付き数字の直後の上付き数字 (10⁻³ の ³ / x¹⁰ の ⁰) は、 数字だけ続ける
+            if s[..orig_off]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c == '\u{207B}' || superscript_digit(c).is_some())
+            {
+                let norm_start = text.len();
+                text.push(d);
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
             if s[..orig_off]
                 .chars()
                 .next_back()
                 .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, ')' | '）'))
+            {
+                text.push('^');
+                text.push(d);
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
+            // 身長² / 半径³: 漢字・カタカナの直後の ² ³ は 「の2乗」 「の3乗」
+            if matches!(ch, '\u{B2}' | '\u{B3}')
+                && s[..orig_off].chars().next_back().is_some_and(|c| {
+                    (('\u{4E00}'..='\u{9FFF}').contains(&c) && !matches!(c, '注' | '註'))
+                        || ('ァ'..='ヶ').contains(&c)
+                })
+            {
+                text.push('の');
+                text.push(d);
+                text.push('乗');
+                units.push(NormUnit {
+                    norm_start,
+                    orig: orig_off..orig_end,
+                });
+                continue;
+            }
+            // 底が切れた ² ³ (「²-5x+b=0」 = x² の x が無い式) は、 後ろが演算子なら指数として残す (数 2 にしない)
+            if matches!(ch, '\u{B2}' | '\u{B3}')
+                && s[orig_end..].chars().next().is_some_and(|c| {
+                    matches!(
+                        c,
+                        '+' | '-'
+                            | '='
+                            | '*'
+                            | '/'
+                            | ')'
+                            | '×'
+                            | '÷'
+                            | '\u{2212}'
+                            | '＋'
+                            | '－'
+                            | '＝'
+                    )
+                })
             {
                 text.push('^');
                 text.push(d);
@@ -945,6 +1081,22 @@ mod tests {
         assert_eq!(normalize_text("x²+y³", &c), "x^2+y^3");
         assert_eq!(normalize_text("(a+b)²", &c), "(a+b)^2");
         assert_eq!(normalize_text("注釈¹", &c), "注釈1");
+        // 漢字の直後の ² ³ は 「の2乗」 (身長²)。 脚注の 注² は数字
+        assert_eq!(normalize_text("身長²", &c), "身長の2乗");
+        assert_eq!(normalize_text("注²", &c), "注2");
+        // 底が切れた ² (「²-5x+b=0」) は、 後ろが演算子なら指数のまま残す。 注記の ² は従来どおり数字
+        assert_eq!(normalize_text("²-5x+b=0", &c), "^2-5x+b=0");
+        assert_eq!(normalize_text("注²。", &c), "注2。");
+        // 上付きのマイナス・複数桁の指数
+        assert_eq!(normalize_text("10⁻³=0.001", &c), "10^-3=0.001");
+        assert_eq!(normalize_text("x⁻¹", &c), "x^-1");
+        assert_eq!(normalize_text("x¹⁰", &c), "x^10");
+        // 数式の下付き数字は、 式の記号がある行の 小文字 1 字 / log の直後だけ残す (H₂O / CO₂ は数になる)
+        assert_eq!(normalize_text("log₂8=3", &c), "log₂8=3");
+        assert_eq!(normalize_text("a₁+a₂=b₁₀", &c), "a₁+a₂=b₁₀");
+        assert_eq!(normalize_text("H₂O", &c), "H2O");
+        assert_eq!(normalize_text("CO₂ = x", &c), "CO2 = x");
+        assert_eq!(normalize_text("x₁を使う", &c), "x1を使う");
     }
 
     #[test]
