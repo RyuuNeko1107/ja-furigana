@@ -27,6 +27,10 @@
   `text` と `result` を丸ごと出していた。 先頭 60 字の抜粋 (+全体の字数) に切り詰め、 Debug 形式で出す。
   入力に改行を入れると偽のログ行が作れた件 (トークン一覧の DEBUG ログ含む) もこれで止まる。
   なお DEBUG ログ (`RUST_LOG=debug`) には、 抜粋とトークン一覧として入力の内容がいまも出る。
+- **Dockerfile**: 非 root (`distroless/cc-debian12:nonroot`、 uid 65532) で実行する。 ベース画像を digest で固定
+  (更新は Dependabot の docker)。 `cargo build` を `--locked` にし、 配布する `furigana` bin だけを build する。
+  **bind mount で `/data` を渡している場合は、 ホスト側を uid 65532 が書ける権限にする** (名前付き volume は自動で合う)。
+
 ### Added
 
 - **`[rate_limit].trust_proxy_headers`** (既定 `false`): レート制限の key に `X-Forwarded-For` / `X-Real-IP` / `Forwarded` を使う。
@@ -37,6 +41,9 @@
 
 - `[server].cors_origins` の説明を実装に合わせた (空 = 全オリジン許可。 `docs/CONFIG.md` は元から正しく、 `config.rs` のコメントだけが
   「same-origin only」と食い違っていた)。 起動ログに CORS とレート制限の key を出す。
+- **Docker イメージが起動しなかった**: build 段が `rust:1.89-slim` (Debian 13、 glibc 2.41)、 実行段が
+  `distroless/cc-debian12` (glibc 2.36) で、 公開済みの `ghcr.io/…/furigana:latest` も
+  `GLIBC_2.38 not found` で起動しない (実機で確認)。 build 段を `rust:1.89-slim-bookworm` に揃えた。
 
 ## [0.6.7] - 2026-10-20
 
