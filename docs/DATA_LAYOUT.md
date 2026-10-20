@@ -86,6 +86,7 @@ GitHub Releases から `ja-furigana-dict` の tarball を取得 + SHA-256 検証
 ```sh
 furigana dict pull                           # 最新 release
 furigana dict pull --version v2026.05.07     # version pin
+furigana dict pull --allow-unverified        # SHA-256 sidecar が無い release を、 検証なしで取る (既定は中止)
 ```
 
 サーバ運用 (alpha.5+) では、 これを **起動時に自動実行** する `--auto-pull` フラグや、
@@ -96,10 +97,14 @@ furigana dict pull --version v2026.05.07     # version pin
 
 1. `--version` 指定 or GitHub API `/releases/latest` で tag 解決 (tag 文字列は strict format validate で reject 防御)
 2. `furigana-dict-{tag}.tar.gz` をダウンロード (50 MB 上限)
-3. `furigana-dict-{tag}.tar.gz.sha256` (sidecar) を取得して **SHA-256 検証**
-4. `<data_dir>/data/` 配下の旧配布ファイルを削除 (**`user/` と `overrides.toml` は保持**)
-5. tarball 展開 (200 MB 総 cap / 1 entry 10 MB / 50,000 entries / Regular file + Directory のみ許可) +
-   path rebase: archive 内の `core/X` / `rules/X` を `data/X` に flat 化
+3. `furigana-dict-{tag}.tar.gz.sha256` (sidecar) を取得して **SHA-256 検証**。 sidecar が取れなければ **中止** する
+   (`--allow-unverified` を付けた時だけ検証なしで続行)。 sidecar は tarball と同じ配布元から取るので、 検知できるのは破損であって
+   改ざんではない点に注意
+4. 一時ディレクトリ (`<data_dir>/.data-new-*`) へ tarball を展開 (200 MB 総 cap / 1 entry 10 MB (PAX 拡張で宣言したサイズも含む) /
+   50,000 entries / Regular file + Directory のみ許可) + path rebase: archive 内の `core/X` / `rules/X` を `X` に flat 化。
+   archive 内の `user/` と `overrides.toml` は **無視する** (配布物でユーザーのデータを上書きさせない)
+5. 旧辞書の **`user/` と `overrides.toml` を引き継ぎ**、 `<data_dir>/data/` と rename で入れ替える。 途中で失敗しても旧辞書は残る
+   (`<data_dir>/.furigana-dict.lock` で、 同時に 2 つの pull が走らないよう排他)
 
 archive 側 (`ja-furigana-dict` repo) は `core/` `rules/` の 2 階層で PR レビュー上の分類のために維持されている。 配布物だけ flat に変換される。
 
@@ -114,8 +119,9 @@ rules/<...>.toml                       →   data/<...>.toml         (rules/ pre
 `_genre.toml` のような sub-section description ファイルは lib では silent skip + release tar
 から `--exclude='_genre.toml'` で除外されるため、 利用者の `data/` 配下には届かない。
 
-path traversal 防御として、 archive entry の展開先が `<data_dir>/data/` 配下に
-収まることを canonicalize で確認している。
+path traversal 防御として、 archive entry の path は **ディレクトリを作る前に** 構成要素を検査する
+(`..` / 絶対パス / ドライブ名 / `:` を含む名前は拒否)。 展開先は新規の一時ディレクトリ (symlink は作られない) なので、
+`<data_dir>/data/` の外には何も書かれない。
 
 ## REPL からの操作
 
