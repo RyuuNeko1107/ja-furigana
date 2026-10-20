@@ -22,6 +22,9 @@ use crate::scoring::postpass::ReadingPostPass;
 // 様 / 君 / 殿 は王子様・神様・諸君のような一般語と衝突するので手がかりにしない (実コメント A/B で確認)。
 const HONORIFICS: &[&str] = &["さん", "ちゃん", "くん", "氏"];
 
+/// 名の表にあるが、 実コメントでは一般語の誤認ばかりだった語 (新人さん / 初代大統領 / 勝利投手)
+const COMMON_WORD_GIVEN: &[&str] = &["新人", "初代", "勝利"];
+
 /// 肩書き・職名。 人名の直後に来る語 (単独の語としても読みが決まっているもの)。
 const TITLES: &[&str] = &[
     "選手",
@@ -516,6 +519,16 @@ impl ReadingPostPass for PersonNamePass<'_> {
                 c += 1;
                 continue;
             }
+            // 名 (後ろ) が、 実コメントで姓 + 名 と誤認された一般語 (今日新人さん / ドイツ国初代大統領 / 尚勝利投手) なら、
+            // 割り直さない (新人さん = あらと にしない)。 一般語全般を除くと 風花 / 蘭子 のような本当の名前を巻き込むので、 実測した語だけ
+            if self.hint != NameHint::Name
+                && p.mei
+                    .as_ref()
+                    .is_some_and(|(m, _)| COMMON_WORD_GIVEN.contains(&m.as_str()))
+            {
+                c += 1;
+                continue;
+            }
             let old: String = tokens[s..c]
                 .iter()
                 .map(|t| hira_to_kata(&t.reading))
@@ -702,6 +715,21 @@ mod tests {
         PersonNamePass::new(&d).apply(&mut t);
         let after: Vec<String> = t.iter().map(|x| x.reading.clone()).collect();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn common_word_given_name_is_not_a_name() {
+        let mut d = dict();
+        d.insert_name(true, "今日", "きょう");
+        d.insert_name(false, "新人", "あらと");
+        // 今日 + 新人 + さん: 新人 は一般語なので あらと にしない
+        let mut t = vec![
+            token("今日", "キョウ", 0..6),
+            token("新人", "シンジン", 6..12),
+            token("さん", "サン", 12..18),
+        ];
+        PersonNamePass::new(&d).apply(&mut t);
+        assert_eq!(t[1].reading, "シンジン");
     }
 
     #[test]
