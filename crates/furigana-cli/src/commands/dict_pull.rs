@@ -8,7 +8,9 @@
 //! 2. tarball + sha256 sidecar を download
 //! 3. SHA-256 検証 (sidecar が取れなければ中止。 `--allow-unverified` で明示的に省ける)
 //! 4. 一時ディレクトリへ展開: `core/X` / `rules/X` を `X` に prefix 剥がして flat 配置
-//! 5. `user/` と `overrides.toml` を引き継ぎ、 `<data_dir>/data/` と rename で入れ替え
+//! 5. **展開した新辞書を実際に build して検証する** (rules / 辞書が読めること、 件数が少なすぎないこと)。
+//!    読めない辞書は入れ替えず、 稼働中の辞書をそのまま残す ([`DictRejected`])
+//! 6. `user/` と `overrides.toml` を引き継ぎ、 `<data_dir>/data/` と rename で入れ替え
 //!    (途中で失敗しても旧辞書はそのまま残る。 同時に 2 つ走らないよう lock file で排他)
 //!
 //! tarball の中身は furigana-dict repo そのままの 2 階層 (`core/...` `rules/...`)、
@@ -40,6 +42,29 @@ const MAX_ENTRY_COUNT: usize = 50_000;
 const MAX_SIDECAR_BYTES: usize = 4 * 1024;
 /// GitHub API の応答 (`releases/latest`) の上限
 const MAX_API_BYTES: usize = 1024 * 1024;
+
+/// 展開した新辞書の件数の下限。 空に近い tarball (中身が欠けた配布物) を入れ替えないための安全弁。
+/// 実際の配布物は 10 万件を超える
+const MIN_DICT_ENTRIES: usize = 10_000;
+
+/// 取得した辞書の **中身が使えない** (rules / 辞書が読めない・件数が少なすぎる)。
+///
+/// 同じ tag を何度取得しても同じ結果になるので、 呼び出し側 (serve の自動更新) は同じ tag を
+/// 再試行しない。 ネットワークの失敗など、 やり直せば直る失敗とは区別する。
+#[derive(Debug)]
+pub struct DictRejected(pub String);
+
+impl std::fmt::Display for DictRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "取得した辞書は使えないため入れ替えませんでした (稼働中の辞書はそのまま): {}",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for DictRejected {}
 
 /// pull の挙動を変えるオプション
 #[derive(Clone, Copy, Debug, Default)]
@@ -99,7 +124,17 @@ pub fn run_with(paths: &Paths, version: Option<&str>, opts: PullOptions) -> Resu
     }
 
     println!("展開中...");
-    extract_to(&tarball, paths).context("tar.gz 展開失敗")?;
+    extract_validated(&tarball, paths, |stage| {
+        validate_staged(stage, MIN_DICT_ENTRIES)
+    })
+    .map_err(|e| {
+        // 中身が使えない失敗はそのまま返す (呼び出し側が型で見分ける)
+        if e.downcast_ref::<DictRejected>().is_some() {
+            e
+        } else {
+            e.context("tar.gz 展開失敗")
+        }
+    })?;
 
     println!(
         "完了: {tag} を {} に配置しました",
@@ -263,6 +298,12 @@ fn sha256_hex(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// テスト用の薄い入口: 検査なしで展開する (入れ替えの挙動の検証用)。
+#[cfg(test)]
+fn extract_to(tarball: &[u8], paths: &Paths) -> Result<()> {
+    extract_validated(tarball, paths, |_| Ok(()))
+}
+
 /// tar.gz バイト列を `<data_dir>/data/` 配下に flat 展開する。
 ///
 /// furigana-dict repo の archive は `core/...` `rules/...` で 2 階層に分かれて
@@ -283,7 +324,14 @@ fn sha256_hex(data: &[u8]) -> String {
 /// 展開の途中で失敗 (壊れた archive / 上限超過 / ディスク満杯 / kill) しても、 稼働中の辞書は
 /// そのまま残る。 archive 内の `user/` と `overrides.toml` は無視する (ユーザーのデータを
 /// 配布物で上書きさせない)。 同時に 2 つの pull が走らないよう `<data_dir>/.furigana-dict.lock` で排他する。
-fn extract_to(tarball: &[u8], paths: &Paths) -> Result<()> {
+///
+/// 入れ替えの前に、 展開した新辞書を `validate` で検査する (build できるか・件数が少なすぎないか)。
+/// 通らなければ入れ替えずに中止する。
+fn extract_validated(
+    tarball: &[u8],
+    paths: &Paths,
+    validate: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
     let data_root: PathBuf = paths.data_root();
     let user_dir: PathBuf = paths.dict_user_dir();
     let overrides: PathBuf = paths.overrides_file();
@@ -310,6 +358,9 @@ fn extract_to(tarball: &[u8], paths: &Paths) -> Result<()> {
             .strip_prefix(&data_root)
             .unwrap_or(Path::new("overrides.toml"));
         extract_into(tarball, &stage, user_rel, overrides_rel)?;
+        // 配布物そのものを検査する (ユーザーの `user/` や overrides の不備は、 この pull のせいにしない)。
+        // 入れ替えの前なので、 ここで失敗すれば稼働中の辞書は一切触られない
+        validate(&stage)?;
         // 旧辞書のユーザーデータを (コピーで) 引き継ぐ。 元は入れ替えが済むまで触らない
         if user_dir.is_dir() {
             copy_dir_all(&user_dir, &stage.join(user_rel))?;
@@ -341,6 +392,28 @@ fn extract_to(tarball: &[u8], paths: &Paths) -> Result<()> {
     } else {
         fs::rename(&stage, &data_root)
             .with_context(|| format!("辞書の配置失敗: {}", data_root.display()))?;
+    }
+    Ok(())
+}
+
+/// 展開した新辞書を実際に build して、 使えるかを確かめる。
+///
+/// 配布物 (`stage`) だけを読む: ユーザーの `user/` や overrides の不備は、 この pull のせいにしない
+/// (それらはまだ引き継いでいない)。 次のどれかなら [`DictRejected`] を返す。
+/// - rules / 辞書が読めない (壊れた TOML・schema 違反など。 build が失敗する)
+/// - 辞書の件数が `min_entries` に満たない (中身が欠けた配布物)
+fn validate_staged(stage: &Path, min_entries: usize) -> Result<()> {
+    let reject = |why: String| anyhow::Error::new(DictRejected(why));
+    let f = furigana::Furigana::builder()
+        .rules_dir(stage)
+        .core_dict_dir(stage)
+        .build()
+        .map_err(|e| reject(format!("build できません: {e}")))?;
+    let n = f.dict_size();
+    if n < min_entries {
+        return Err(reject(format!(
+            "辞書の件数が少なすぎます ({n} 件、 下限 {min_entries} 件)"
+        )));
     }
     Ok(())
 }
@@ -1036,5 +1109,123 @@ mod tests {
             .filter(|n| n.starts_with(".data-new-") || n.starts_with(".data-old-"))
             .collect();
         assert!(left.is_empty(), "一時ディレクトリが残っている: {left:?}");
+    }
+
+    // ─── 入れ替え前の検証 (REPORT-035) ──────────────────────────────────────
+
+    fn is_rejected(e: &anyhow::Error) -> bool {
+        e.downcast_ref::<DictRejected>().is_some()
+    }
+
+    #[test]
+    fn validate_staged_accepts_a_readable_dictionary_and_checks_the_size() {
+        let p = temp_paths("validate_ok");
+        let stage = p.data_dir.join("stage");
+        fs::create_dir_all(stage.join("jukugo")).unwrap();
+        fs::write(
+            stage.join("jukugo/a.toml"),
+            "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"灰桜\" = \"ハイザクラ\"
+",
+        )
+        .unwrap();
+        validate_staged(&stage, 1).unwrap();
+        // 件数が下限に満たなければ却下
+        let err = validate_staged(&stage, 10).unwrap_err();
+        assert!(is_rejected(&err), "{err:#}");
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn validate_staged_rejects_an_unreadable_dictionary() {
+        let p = temp_paths("validate_bad");
+        let stage = p.data_dir.join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        // rules として読めない (schema_version が無い)
+        fs::write(
+            stage.join("days.toml"),
+            "[entries]
+1 = \"ついたち\"
+",
+        )
+        .unwrap();
+        let err = validate_staged(&stage, 0).unwrap_err();
+        assert!(is_rejected(&err), "{err:#}");
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn rejected_dictionary_leaves_the_running_one_untouched() {
+        let p = temp_paths("reject_keeps_old");
+        // 稼働中の辞書 + ユーザーのデータ
+        fs::create_dir_all(p.data_root()).unwrap();
+        fs::write(p.data_root().join("old.toml"), b"running").unwrap();
+        fs::create_dir_all(p.dict_user_dir()).unwrap();
+        fs::write(
+            p.dict_user_dir().join("mine.toml"),
+            b"[entries]
+",
+        )
+        .unwrap();
+
+        let tb = build_targz(&[Tar::File(
+            "core/jukugo/new.toml",
+            b"[entries]
+",
+        )]);
+        let mut seen = None;
+        let res = extract_validated(&tb, &p, |stage| {
+            // 検査には展開した配布物が渡る。 user/ はまだ引き継いでいない
+            seen = Some((
+                stage.join("jukugo/new.toml").exists(),
+                stage.join("user").exists(),
+            ));
+            Err(anyhow::Error::new(DictRejected("テスト".into())))
+        });
+        let err = res.unwrap_err();
+        assert!(is_rejected(&err), "{err:#}");
+        assert_eq!(seen, Some((true, false)));
+        // 旧辞書もユーザーのデータも無傷で、 一時ディレクトリも残らない
+        assert_eq!(
+            fs::read(p.data_root().join("old.toml")).unwrap(),
+            b"running"
+        );
+        assert!(p.dict_user_dir().join("mine.toml").exists());
+        assert!(!p.data_root().join("jukugo/new.toml").exists());
+        let parent = p.data_root().parent().unwrap().to_path_buf();
+        let leftovers: Vec<_> = fs::read_dir(&parent)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(".data-new") || n.starts_with(".data-old"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn accepted_dictionary_is_swapped_in() {
+        let p = temp_paths("validate_swap");
+        fs::create_dir_all(p.data_root()).unwrap();
+        fs::write(p.data_root().join("old.toml"), b"running").unwrap();
+        let tb = build_targz(&[Tar::File(
+            "core/jukugo/new.toml",
+            "[meta]
+schema_version = \"2\"
+role = \"jukugo\"
+
+[entries]
+\"灰桜\" = \"ハイザクラ\"
+"
+            .as_bytes(),
+        )]);
+        extract_validated(&tb, &p, |stage| validate_staged(stage, 1)).unwrap();
+        assert!(p.data_root().join("jukugo/new.toml").exists());
+        assert!(!p.data_root().join("old.toml").exists());
+        fs::remove_dir_all(&p.data_dir).ok();
     }
 }

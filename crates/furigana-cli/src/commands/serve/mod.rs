@@ -360,6 +360,9 @@ fn spawn_auto_update(state: AppState, cfg: crate::config::AutoUpdateConfig) {
         } else {
             Some(cfg.pin.clone())
         };
+        // 中身が使えないと判った tag (build できない・件数が少なすぎる)。 同じ tag は何度取得しても
+        // 同じ結果になるので、 別の tag が出るまで再取得しない (毎回 数十 MB を取り直さない)
+        let mut rejected: Option<String> = None;
 
         loop {
             ticker.tick().await;
@@ -376,8 +379,10 @@ fn spawn_auto_update(state: AppState, cfg: crate::config::AutoUpdateConfig) {
                 cfg.pin.clone()
             };
 
-            if last_applied.as_deref() == Some(target_tag.as_str()) {
-                tracing::debug!("auto_update: 既に {} 反映済、skip", target_tag);
+            if let Some(why) =
+                skip_reason(&target_tag, last_applied.as_deref(), rejected.as_deref())
+            {
+                tracing::debug!("auto_update: {} を skip ({why})", target_tag);
                 continue;
             }
 
@@ -408,7 +413,15 @@ fn spawn_auto_update(state: AppState, cfg: crate::config::AutoUpdateConfig) {
                     }
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!("auto_update: dict pull 失敗: {e}");
+                    if e.downcast_ref::<crate::commands::dict_pull::DictRejected>()
+                        .is_some()
+                    {
+                        // 稼働中の辞書はそのまま。 この tag は次の tag が出るまで試さない
+                        tracing::error!("auto_update: {target_tag} は使えない辞書でした: {e:#}");
+                        rejected = Some(target_tag);
+                    } else {
+                        tracing::warn!("auto_update: dict pull 失敗: {e}");
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("auto_update: spawn_blocking join error: {e}");
@@ -416,6 +429,21 @@ fn spawn_auto_update(state: AppState, cfg: crate::config::AutoUpdateConfig) {
             }
         }
     });
+}
+
+/// 自動更新でこの tag を取得しない理由 (取得するなら `None`)。
+fn skip_reason(
+    target: &str,
+    last_applied: Option<&str>,
+    rejected: Option<&str>,
+) -> Option<&'static str> {
+    if last_applied == Some(target) {
+        Some("反映済み")
+    } else if rejected == Some(target) {
+        Some("使えない辞書と判定済み")
+    } else {
+        None
+    }
 }
 
 /// シンプルな期間 parser: `"30m" / "1h" / "6h" / "1d" / "3600"` 等を受ける
@@ -556,5 +584,20 @@ mod tests {
             auto_update_interval("213503982334602d"),
             Duration::from_secs(86400)
         );
+    }
+
+    #[test]
+    fn auto_update_skips_applied_and_rejected_tags_but_not_new_ones() {
+        // 反映済みは取らない
+        assert_eq!(skip_reason("v1", Some("v1"), None), Some("反映済み"));
+        // 使えないと判った tag は、 次の tag が出るまで取り直さない
+        assert_eq!(
+            skip_reason("v2", Some("v1"), Some("v2")),
+            Some("使えない辞書と判定済み")
+        );
+        // 別の tag が出れば取る (却下は前の tag のぶんだけ)
+        assert_eq!(skip_reason("v3", Some("v1"), Some("v2")), None);
+        // 初回 (何も反映していない) は取る
+        assert_eq!(skip_reason("v1", None, None), None);
     }
 }
