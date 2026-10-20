@@ -307,13 +307,7 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
 /// admin_tokens 設定不要 (内部呼び出しで HTTP 経由しない)。失敗時は warn を出し
 /// 既存辞書で稼働を継続。
 fn spawn_auto_update(state: AppState, cfg: crate::config::AutoUpdateConfig) {
-    let interval = parse_duration(&cfg.interval).unwrap_or_else(|| {
-        tracing::warn!(
-            "auto_update.interval='{}' を解釈できませんでした (例: 1h / 30m / 1d)。 24h にフォールバック。",
-            cfg.interval
-        );
-        std::time::Duration::from_secs(24 * 3600)
-    });
+    let interval = auto_update_interval(&cfg.interval);
     tracing::info!(
         "auto_update: 有効 (interval={:?}, pin={})",
         interval,
@@ -411,11 +405,37 @@ fn parse_duration(s: &str) -> Option<std::time::Duration> {
     } else {
         (s, 1) // 純粋な数字なら秒
     };
+    // 掛け算が溢れる値 (release では黙って巻き戻る) は解釈できない扱いにする
     num_part
         .trim()
         .parse::<u64>()
         .ok()
-        .map(|n| std::time::Duration::from_secs(n * mult))
+        .and_then(|n| n.checked_mul(mult))
+        .map(std::time::Duration::from_secs)
+}
+
+/// `auto_update.interval` の下限。 0 秒は `tokio::time::interval` が panic して更新が止まり、
+/// 極端に短いと GitHub API (未認証は 60 回/時) を使い切って失敗を繰り返す。
+const MIN_AUTO_UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// 設定文字列から polling 間隔を決める。 解釈できなければ 24h、 下限未満なら下限に丸める。
+fn auto_update_interval(raw: &str) -> std::time::Duration {
+    match parse_duration(raw) {
+        None => {
+            tracing::warn!(
+                "auto_update.interval='{raw}' を解釈できませんでした (例: 1h / 30m / 1d)。 24h にフォールバック。"
+            );
+            std::time::Duration::from_secs(24 * 3600)
+        }
+        Some(d) if d < MIN_AUTO_UPDATE_INTERVAL => {
+            tracing::warn!(
+                "auto_update.interval='{raw}' は短すぎます。 下限の {:?} に丸めます。",
+                MIN_AUTO_UPDATE_INTERVAL
+            );
+            MIN_AUTO_UPDATE_INTERVAL
+        }
+        Some(d) => d,
+    }
 }
 
 /// SIGHUP を listen して `do_reload` を呼ぶバックグラウンドタスクを起動。
@@ -476,5 +496,35 @@ mod tests {
         assert_eq!(parse_duration(""), None);
         assert_eq!(parse_duration("abc"), None);
         assert_eq!(parse_duration("1.5h"), None); // 非整数
+    }
+
+    #[test]
+    fn parse_duration_rejects_overflow() {
+        // 掛け算が u64 を溢れる値は、 巻き戻らずに None
+        assert_eq!(parse_duration("213503982334602d"), None);
+        assert_eq!(parse_duration("18446744073709551615h"), None);
+        assert_eq!(parse_duration("18446744073709551615m"), None);
+        // 溢れない最大 (単位なし = 秒) はそのまま
+        assert_eq!(
+            parse_duration("18446744073709551615"),
+            Some(Duration::from_secs(u64::MAX))
+        );
+    }
+
+    #[test]
+    fn auto_update_interval_has_floor_and_default() {
+        // 0 / 極端に短い → 下限 (0 のままだと tokio::time::interval が panic する)
+        assert_eq!(auto_update_interval("0"), MIN_AUTO_UPDATE_INTERVAL);
+        assert_eq!(auto_update_interval("1s"), MIN_AUTO_UPDATE_INTERVAL);
+        assert_eq!(auto_update_interval("299"), MIN_AUTO_UPDATE_INTERVAL);
+        // 下限ちょうど以上はそのまま
+        assert_eq!(auto_update_interval("5m"), Duration::from_secs(300));
+        assert_eq!(auto_update_interval("6h"), Duration::from_secs(6 * 3600));
+        // 解釈できない / 溢れる → 24h
+        assert_eq!(auto_update_interval("abc"), Duration::from_secs(86400));
+        assert_eq!(
+            auto_update_interval("213503982334602d"),
+            Duration::from_secs(86400)
+        );
     }
 }

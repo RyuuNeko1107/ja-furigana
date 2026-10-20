@@ -121,10 +121,9 @@ fn resolve_latest_tag(client: &reqwest::blocking::Client) -> Result<String> {
         .send()?;
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().unwrap_or_default();
         bail!(
             "GitHub API {status}: {url}\n  body: {}",
-            body.chars().take(300).collect::<String>()
+            error_body_head(resp)
         );
     }
     let body = read_limited(resp, MAX_API_BYTES, &url)?;
@@ -163,6 +162,14 @@ fn download_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u
     }
     // Content-Length が無い (chunked) / 嘘の場合でも、 上限を超えた時点で読むのをやめる
     read_limited(resp, MAX_DOWNLOAD_BYTES, url)
+}
+
+/// エラー応答の本文の先頭 300 字 (診断表示用)。 `resp.text()` は全量を溜めるので、
+/// 先頭 2 KiB だけ読んでやめる。 読めなくても診断が欠けるだけで、 失敗扱いは変えない。
+fn error_body_head(reader: impl Read) -> String {
+    let mut buf = Vec::new();
+    let _ = reader.take(2048).read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).chars().take(300).collect()
 }
 
 /// `reader` を最大 `limit` bytes まで読む。 超えたら (全部は読まずに) 中止。
@@ -848,6 +855,15 @@ mod tests {
         assert!(format!("{err:#}").contains("上限"));
         // 無限に続く読み手でも、 上限 + 1 で止まる (全部は読まない)
         assert!(read_limited(std::io::repeat(0u8), 1024, "t").is_err());
+    }
+
+    #[test]
+    fn error_body_head_reads_only_a_prefix() {
+        // 無限に続く本文でも返ってくる (全量を溜めない)。 表示は 300 字まで
+        let head = error_body_head(std::io::repeat(b'x'));
+        assert_eq!(head.chars().count(), 300);
+        // 壊れた UTF-8 でも落ちない
+        assert!(!error_body_head(&[0xffu8, 0xfe, b'a'][..]).is_empty());
     }
 
     /// PAX 拡張ヘッダ (`size=`) で実サイズを宣言し、 ustar ヘッダの size は 0 にした entry。
