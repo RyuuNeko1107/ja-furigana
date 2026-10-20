@@ -150,6 +150,21 @@ fn cue_score(surface: &str) -> u8 {
     0
 }
 
+/// 肩書き (医師 / 記者 / 弁護士 …) の直後に、 隣り合って 会・団・連・協・組・学・院・所 で始まる token が続く時は、
+/// 医師会 / 記者会見 / 弁護士会 / 選手会 / 議員連盟 のような別の複合語で、 肩書きではない (日野市医師会 の 市 を名にしない)。
+fn title_continues_into_compound(tokens: &[Token], c: usize) -> bool {
+    let cue = &tokens[c];
+    if !cue.surface.chars().next().is_some_and(is_kanji_char) {
+        return false;
+    }
+    tokens.get(c + 1).is_some_and(|next| {
+        next.range.start == cue.range.end
+            && next.surface.chars().next().is_some_and(|ch| {
+                matches!(ch, '会' | '団' | '連' | '協' | '組' | '学' | '院' | '所')
+            })
+    })
+}
+
 /// 手がかり語 (敬称と肩書き) の先頭の字
 static CUE_FIRST_CHARS: once_cell::sync::Lazy<crate::fxmap::FxSet<char>> =
     once_cell::sync::Lazy::new(|| {
@@ -447,7 +462,11 @@ impl ReadingPostPass for PersonNamePass<'_> {
                     all_kanji(&tokens[c - 1].surface)
                         && (c == tokens.len() || !all_kanji(&tokens[c].surface))
                 }
-                _ => c < tokens.len() && cue_score(&tokens[c].surface) > 0,
+                _ => {
+                    c < tokens.len()
+                        && cue_score(&tokens[c].surface) > 0
+                        && !title_continues_into_compound(tokens, c)
+                }
             };
             if !is_cue {
                 c += 1;
@@ -683,6 +702,20 @@ mod tests {
         PersonNamePass::new(&d).apply(&mut t);
         let after: Vec<String> = t.iter().map(|x| x.reading.clone()).collect();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn title_followed_by_a_group_noun_is_not_a_cue() {
+        let d = dict();
+        // 日野市医師会: 医師 + 会 は医師会で、 市 を名 (いち) にしない
+        let mut t = vec![
+            token("日野", "ヒノ", 0..6),
+            token("市", "シ", 6..9),
+            token("医師", "イシ", 9..15),
+            token("会", "カイ", 15..18),
+        ];
+        PersonNamePass::new(&d).apply(&mut t);
+        assert_eq!(t[1].reading, "シ");
     }
 
     #[test]
