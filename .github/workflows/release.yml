@@ -12,8 +12,7 @@ on:
         required: true
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,6 +25,8 @@ jobs:
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
@@ -50,11 +51,11 @@ jobs:
       - name: Create release if missing (draft)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           # ※ Immutable Releases policy 下では published release に asset を
           # 追加できないため、 必ず --draft で create する。 binary 全アップロード
           # 完了後に finalize-release job で --draft=false に切り替え publish する。
-          TAG="${{ steps.tag.outputs.tag }}"
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "Release $TAG already exists, skipping creation"
           else
@@ -70,6 +71,8 @@ jobs:
     name: ${{ matrix.target }}
     needs: create-release
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -113,6 +116,9 @@ jobs:
     name: Docker (ghcr.io)
     needs: create-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
 
@@ -155,12 +161,14 @@ jobs:
     name: Finalize Release (publish draft)
     needs: [create-release, binary]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag }}"
           gh release edit "$TAG" --repo "${{ github.repository }}" \
             --draft=false \
             --latest
@@ -183,6 +191,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+      # 依存クレートの build.rs / proc-macro が走るのはここ。 トークンはこのステップの環境に無い
+      - name: Build (トークン無しで検証ビルド)
+        run: cargo build --release --workspace --locked
       - name: Publish (依存順、 公開済みは skip)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -195,7 +206,8 @@ jobs:
             if curl -sf "https://crates.io/api/v1/crates/$crate/$VER" -H 'User-Agent: ja-furigana-release' >/dev/null; then
               echo "$crate $VER は公開済み、 skip"; continue
             fi
-            cargo publish -p "$crate"
+            # 検証ビルドは上で済ませた (トークンを依存の build.rs に渡さないため --no-verify)
+            cargo publish --no-verify -p "$crate"
             # 次の crate が依存解決できるよう index への反映を待つ
             for i in $(seq 1 30); do
               curl -sf "https://crates.io/api/v1/crates/$crate/$VER" -H 'User-Agent: ja-furigana-release' >/dev/null && break
