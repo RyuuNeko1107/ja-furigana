@@ -44,6 +44,10 @@
 - **Docker イメージが起動しなかった**: build 段が `rust:1.89-slim` (Debian 13、 glibc 2.41)、 実行段が
   `distroless/cc-debian12` (glibc 2.36) で、 公開済みの `ghcr.io/…/furigana:latest` も
   `GLIBC_2.38 not found` で起動しない (実機で確認)。 build 段を `rust:1.89-slim-bookworm` に揃えた。
+- **`4294967297日` が「ついたち」になる誤読**: 助数詞「日」の暦表の引きで `i64 as u32` が巻き戻っていた。 範囲外は表を引かない (`u32::try_from`)。
+- **テーブルキャッシュの一時ファイル** (`.tables-*.tmp`): 名前を予測できない形にし、 既にあるファイルは開かず失敗させる (`create_new`)。
+- **examples/voicevox-reading-bridge**: Host ヘッダが `127.0.0.1:<port>` / `localhost:<port>` でない要求を 403 (DNS rebinding 対策。
+  無認証の `/talk` が音声再生という副作用を持つため)。 本文 1,000 字・キュー 100 件の上限。 WAV は予測できない名前の専用ディレクトリへ。
 
 ## [0.6.7] - 2026-10-20
 

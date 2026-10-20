@@ -83,10 +83,9 @@ pub fn euphonic_counter_read(
     // ─── 2. 日: days.toml 優先 ─────────────────────────────────────────────
     if counter == "日" {
         if let Some(n) = to_int(raw_num) {
-            if n >= 0 {
-                if let Some(day) = days.get(n as u32) {
-                    return day.to_string();
-                }
+            // `as u32` だと 4294967297 日が 1 日 (ついたち) に化けるので、 範囲外は表を引かない
+            if let Some(day) = u32::try_from(n).ok().and_then(|d| days.get(d)) {
+                return day.to_string();
             }
         }
         if let Some(rule) = counters.counter.get("日") {
@@ -173,6 +172,19 @@ mod tests {
     fn load_days() -> DaysData {
         let raw = include_str!("../../tests/fixtures/rules/days.toml");
         parse_toml(raw, "days.toml").unwrap()
+    }
+
+    #[test]
+    fn huge_day_count_does_not_wrap_into_a_calendar_day() {
+        let c = load_counters();
+        let d = load_days();
+        // 2^32 + 1 日が `as u32` で 1 日 (ついたち) になっていた
+        let big = "4294967297";
+        assert_ne!(
+            euphonic_counter_read("ヨンジュウ", "日", big, &c, &d),
+            "ツイタチ"
+        );
+        assert_eq!(euphonic_counter_read("イチ", "日", "1", &c, &d), "ツイタチ");
     }
 
     #[test]
