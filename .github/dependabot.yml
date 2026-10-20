@@ -53,3 +53,17 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+
+  # Dockerfile のベース画像 (digest 固定なので、 更新は PR で受ける)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - "dependencies"
