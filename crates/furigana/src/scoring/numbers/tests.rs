@@ -1,6 +1,10 @@
 //! [`NumberCandidateProvider`] の integration-level tests
 //! (fixture rules を load して `candidates_at` を直接叩く)。
 
+use super::context::digit_value;
+use super::context::leading_number;
+use super::context::normalize_digits;
+use super::context::trailing_number;
 use super::*;
 use crate::loader::load_rules_dir;
 use crate::scoring::boundary::BoundaryAnalysis;
