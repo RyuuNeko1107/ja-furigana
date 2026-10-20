@@ -73,6 +73,7 @@ GitHub API rate limit (60 req/h/IP) を考えて `interval` は **1h 以上推�
 |---|---|---|---|
 | `per_second` | int | `1` | 1 秒あたりに補充される許可リクエスト数 (per IP) |
 | `burst_size` | int | `5` | バケットに貯められる上限 (= 瞬間バースト許容数) |
+| `trust_proxy_headers` | bool | `false` | key に `X-Forwarded-For` / `X-Real-IP` / `Forwarded` の IP を使う。 リバースプロキシ配下では `true` にしないと、 全クライアントが proxy の IP 1 つとして数えられる。 **プロキシが無い (直接公開の) 状態で `true` にしない**: ヘッダを偽って制限を回避できる |
 
 ```toml
 [rate_limit]
