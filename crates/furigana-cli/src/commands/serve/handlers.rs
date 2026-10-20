@@ -140,6 +140,21 @@ pub(super) async fn do_reload(state: &AppState, source: ReloadSource) -> Result<
     Ok(dict_size)
 }
 
+/// ログに出す本文の抜粋 (先頭 [`LOG_EXCERPT_CHARS`] 字)。 呼び出し側は `?` (Debug) で出す:
+/// 改行や制御文字がエスケープされ、 入力で偽のログ行を作れない。 全文を残さないので、
+/// 配信コメント等の個人情報がログに丸ごと溜まることも避ける。
+fn log_excerpt(s: &str) -> String {
+    let mut out: String = s.chars().take(LOG_EXCERPT_CHARS).collect();
+    let total = s.chars().count();
+    if total > LOG_EXCERPT_CHARS {
+        out.push_str(&format!("…(全{total}字)"));
+    }
+    out
+}
+
+/// [`log_excerpt`] が残す最大文字数
+const LOG_EXCERPT_CHARS: usize = 60;
+
 /// HeaderMap から User-Agent 取り出し (= debug log 用、 無ければ None)
 fn ua(headers: &HeaderMap) -> Option<String> {
     headers
@@ -164,7 +179,7 @@ fn process(
     tracing::debug!(
         peer = %peer,
         user_agent = user_agent.unwrap_or("-"),
-        text = %text,
+        text = ?log_excerpt(&text),
         mode = %mode,
         "request"
     );
@@ -204,8 +219,8 @@ fn process(
             state.metrics.record_failed_resolution();
             tracing::warn!(
                 peer = %peer,
-                text = %text,
-                result = %result,
+                text = ?log_excerpt(&text),
+                result = ?log_excerpt(&result),
                 mode = %mode,
                 "reading resolution degraded (= empty or identity to input)"
             );
@@ -222,8 +237,8 @@ fn process(
         }
         tracing::debug!(
             peer = %peer,
-            result = %result,
-            tokens = %token_dump,
+            result = ?log_excerpt(&result),
+            tokens = ?token_dump,
             n_tokens = analyze_result.tokens.len(),
             total_ms = round1(t_total_ms),
             convert_ms = round1(t_convert_ms),
@@ -401,8 +416,8 @@ fn process(
         state.metrics.record_failed_resolution();
         tracing::warn!(
             peer = %peer,
-            text = %text,
-            result = %result,
+            text = ?log_excerpt(&text),
+            result = ?log_excerpt(&result),
             mode = %mode,
             "reading resolution degraded (= empty or identity to input)"
         );
@@ -421,8 +436,8 @@ fn process(
     }
     tracing::debug!(
         peer = %peer,
-        result = %result,
-        tokens = %token_dump,
+        result = ?log_excerpt(&result),
+        tokens = ?token_dump,
         n_tokens = tokens.len(),
         n_segments,
         total_ms = round1(t_total_ms),
@@ -591,6 +606,19 @@ fn parse_unknown_alpha(v: Option<&str>) -> Result<furigana::accent_symbols::Unkn
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn log_excerpt_truncates_and_debug_format_escapes_newlines() {
+        let long = "あ".repeat(LOG_EXCERPT_CHARS + 10);
+        let ex = log_excerpt(&long);
+        assert!(ex.starts_with(&"あ".repeat(LOG_EXCERPT_CHARS)));
+        assert!(ex.contains(&format!("全{}字", LOG_EXCERPT_CHARS + 10)));
+        assert_eq!(log_excerpt("短い"), "短い");
+        // Debug で出すと、 改行や ESC は 1 行のままエスケープされる (偽のログ行を作れない)
+        let shown = format!("{:?}", log_excerpt("a\nWARN fake\u{1b}[31m"));
+        assert!(!shown.contains('\n') && !shown.contains('\u{1b}'));
+        assert!(shown.contains("\\n"));
+    }
+
     use super::*;
     use crate::commands::serve::types::{default_long_pause, default_max_seg, default_short_pause};
 
