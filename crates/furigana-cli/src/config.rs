@@ -34,7 +34,7 @@ pub struct ServerConfig {
     #[serde(default = "default_bind")]
     pub bind: String,
 
-    /// CORS 許可オリジン (空 = same-origin only)
+    /// CORS 許可オリジン (空 = **全オリジン許可**。 ローカル用途向け。 公開するなら明示指定する)
     #[serde(default)]
     pub cors_origins: Vec<String>,
 }
@@ -112,6 +112,13 @@ pub struct RateLimitConfig {
     /// バーストサイズ (default: 5)
     #[serde(default = "default_burst_size")]
     pub burst_size: u32,
+
+    /// レート制限の key に `X-Forwarded-For` / `X-Real-IP` / `Forwarded` を使う (default: false)。
+    /// リバースプロキシ配下ではこれが無いと全クライアントが同じ key (= proxy の IP) になる。
+    /// **プロキシが無い (直接公開している) 状態で true にしないこと**: 送り手がヘッダを偽って
+    /// 制限を回避できる。
+    #[serde(default)]
+    pub trust_proxy_headers: bool,
 }
 
 impl Default for RateLimitConfig {
@@ -119,6 +126,7 @@ impl Default for RateLimitConfig {
         Self {
             per_second: default_per_second(),
             burst_size: default_burst_size(),
+            trust_proxy_headers: false,
         }
     }
 }
@@ -155,6 +163,20 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.rate_limit.per_second, 1);
         assert_eq!(cfg.rate_limit.burst_size, 5);
+        // プロキシのヘッダは既定で信用しない (偽装で制限を回避されないように)
+        assert!(!cfg.rate_limit.trust_proxy_headers);
+    }
+
+    #[test]
+    fn trust_proxy_headers_is_opt_in() {
+        let cfg: Config = toml::from_str(
+            "[rate_limit]
+trust_proxy_headers = true
+",
+        )
+        .unwrap();
+        assert!(cfg.rate_limit.trust_proxy_headers);
+        assert_eq!(cfg.rate_limit.per_second, 1);
     }
 
     #[test]

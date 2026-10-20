@@ -157,6 +157,8 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
     // これを超えるのは異常 (ハング / 想定外の重い入力)。 408 で打ち切り、
     // ワーカーを 1 リクエストに占有され続けないようにする defense-in-depth。
     const REQUEST_TIMEOUT_SECS: u64 = 30;
+    // key は既定で接続元 IP。 リバースプロキシ配下では全員が同じ IP になるので、
+    // `trust_proxy_headers = true` で X-Forwarded-For / X-Real-IP / Forwarded を使う。
     let governor_conf = std::sync::Arc::new(
         GovernorConfigBuilder::default()
             .per_second(cfg.rate_limit.per_second)
@@ -166,6 +168,21 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
     );
     let governor_layer = GovernorLayer {
         config: governor_conf,
+    };
+    let proxy_governor_layer = if cfg.rate_limit.trust_proxy_headers {
+        use tower_governor::key_extractor::SmartIpKeyExtractor;
+        Some(GovernorLayer {
+            config: std::sync::Arc::new(
+                GovernorConfigBuilder::default()
+                    .key_extractor(SmartIpKeyExtractor)
+                    .per_second(cfg.rate_limit.per_second)
+                    .burst_size(cfg.rate_limit.burst_size)
+                    .finish()
+                    .ok_or_else(|| anyhow!("governor config 構築失敗"))?,
+            ),
+        })
+    } else {
+        None
     };
 
     let furigana_routes = Router::new()
@@ -223,7 +240,7 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
         },
     );
 
-    let app = Router::new()
+    let base = Router::new()
         .merge(furigana_routes)
         .merge(admin_routes)
         .route("/healthz", get(healthz))
@@ -234,10 +251,12 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
             axum::http::StatusCode::REQUEST_TIMEOUT,
             std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS),
         ))
-        .layer(log_429)
-        .layer(governor_layer)
-        .layer(trace_layer)
-        .with_state(state.clone());
+        .layer(log_429);
+    let app = match proxy_governor_layer {
+        Some(layer) => base.layer(layer).layer(trace_layer),
+        None => base.layer(governor_layer).layer(trace_layer),
+    }
+    .with_state(state.clone());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -253,6 +272,17 @@ pub fn run(args: Args, paths: &Paths, cfg: &Config) -> Result<()> {
             .unwrap_or_else(|_| bind.clone());
 
         tracing::info!("furigana serving on http://{actual}");
+        if cfg.server.cors_origins.is_empty() {
+            tracing::info!("CORS: 全オリジン許可 ([server].cors_origins が空)");
+        }
+        tracing::info!(
+            "レート制限の key: {}",
+            if cfg.rate_limit.trust_proxy_headers {
+                "X-Forwarded-For / X-Real-IP / Forwarded (無ければ接続元 IP)"
+            } else {
+                "接続元 IP"
+            }
+        );
         if auth_enabled {
             tracing::info!("認証 (/furigana): 有効 (X-API-Key または Bearer)");
         } else {
