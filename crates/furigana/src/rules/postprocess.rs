@@ -41,6 +41,15 @@
 
 use serde::Deserialize;
 
+/// `replacement` 1 件の長さ上限 (byte)。 空マッチする規則と組み合わさると、 入力の文字数 ×
+/// replacement の長さの出力ができるため。 実際の規則は数 byte。
+const MAX_REPLACEMENT_BYTES: usize = 1024;
+/// 規則の件数上限。 規則は上から順に全部走るので、 件数がそのまま 1 変換あたりの処理量になる。
+const MAX_RULES: usize = 10_000;
+/// 出力が入力の何倍まで伸びてよいか (+ [`GROWTH_SLACK_BYTES`])。 超えたら以降の規則を適用しない。
+const MAX_GROWTH_FACTOR: usize = 8;
+const GROWTH_SLACK_BYTES: usize = 4096;
+
 /// 後処理ルール TOML 全体
 ///
 /// `[[rule]]` array をそのまま受ける defensive な型。pattern parse は
@@ -83,10 +92,22 @@ impl PostProcessData {
     /// # Errors
     /// regex パターンのコンパイル失敗時。
     pub fn from_spec(spec: PostProcessSpec) -> Result<Self, regex::Error> {
+        if spec.rules.len() > MAX_RULES {
+            return Err(regex::Error::Syntax(format!(
+                "postprocess の規則が多すぎます: {} 件 (上限 {MAX_RULES})",
+                spec.rules.len()
+            )));
+        }
         let rules = spec
             .rules
             .into_iter()
             .map(|r| {
+                if r.replacement.len() > MAX_REPLACEMENT_BYTES {
+                    return Err(regex::Error::Syntax(format!(
+                        "postprocess の replacement が長すぎます: {} bytes (上限 {MAX_REPLACEMENT_BYTES})",
+                        r.replacement.len()
+                    )));
+                }
                 // size_limit で巨大 regex (compile 後 DFA / NFA size) を拒否。
                 // postprocess.toml の pattern は dist (or user) 制御の data なので、
                 // 攻撃者が regex bomb を仕込んで memory を食わせるのを防御。
@@ -113,12 +134,24 @@ impl PostProcessData {
         if self.rules.is_empty() {
             return text.to_string();
         }
+        let limit = text
+            .len()
+            .saturating_mul(MAX_GROWTH_FACTOR)
+            .saturating_add(GROWTH_SLACK_BYTES);
         let mut current = text.to_string();
         for r in &self.rules {
             if r.modes.is_empty() || r.modes.iter().any(|m| m == mode) {
-                current =
+                let next =
                     r.re.replace_all(&current, r.replacement.as_str())
                         .into_owned();
+                // 空マッチする規則の連鎖で出力が膨らむのを止める (その規則の結果は採らない)
+                if next.len() > limit {
+                    tracing::warn!(
+                        "postprocess: 出力が入力の {MAX_GROWTH_FACTOR} 倍を超えるため、 以降の規則を適用しません"
+                    );
+                    return current;
+                }
+                current = next;
             }
         }
         current
@@ -200,5 +233,58 @@ mod tests {
             }],
         };
         assert!(PostProcessData::from_spec(spec).is_err());
+    }
+
+    fn rule(pattern: &str, replacement: &str) -> PostProcessRuleSpec {
+        PostProcessRuleSpec {
+            pattern: pattern.to_string(),
+            replacement: replacement.to_string(),
+            modes: vec![],
+        }
+    }
+
+    #[test]
+    fn rejects_oversize_replacement_and_too_many_rules() {
+        let long = "x".repeat(MAX_REPLACEMENT_BYTES + 1);
+        let spec = PostProcessSpec {
+            rules: vec![rule("a", &long)],
+        };
+        assert!(PostProcessData::from_spec(spec).is_err());
+        let ok = "x".repeat(MAX_REPLACEMENT_BYTES);
+        let spec = PostProcessSpec {
+            rules: vec![rule("a", &ok)],
+        };
+        assert!(PostProcessData::from_spec(spec).is_ok());
+        let spec = PostProcessSpec {
+            rules: (0..=MAX_RULES).map(|_| rule("a", "b")).collect(),
+        };
+        assert!(PostProcessData::from_spec(spec).is_err());
+    }
+
+    #[test]
+    fn chained_empty_match_rules_cannot_blow_up_the_output() {
+        // 空マッチ × 100 byte の規則 3 連: 80 字の入力が約 100 MB になっていた
+        let spec = PostProcessSpec {
+            rules: (0..3).map(|_| rule("", &"x".repeat(100))).collect(),
+        };
+        let p = PostProcessData::from_spec(spec).unwrap();
+        let input = "今日は天気がいい".repeat(10);
+        let out = p.apply(&input, "tts");
+        assert!(
+            out.len() <= input.len() * MAX_GROWTH_FACTOR + GROWTH_SLACK_BYTES,
+            "出力は {} bytes",
+            out.len()
+        );
+        // 止めた規則の結果は採らない = 上限を超えた時点の直前の文字列
+        assert!(out.starts_with('今'));
+    }
+
+    #[test]
+    fn normal_rules_are_unaffected_by_the_growth_limit() {
+        let spec = PostProcessSpec {
+            rules: vec![rule("a", "bbbb"), rule("b", "cc")],
+        };
+        let p = PostProcessData::from_spec(spec).unwrap();
+        assert_eq!(p.apply("aaa", "tts"), "c".repeat(24));
     }
 }
