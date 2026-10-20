@@ -30,13 +30,15 @@ jobs:
         # `test-macos` job (下) でカバー。
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: ${{ matrix.os }}
 
@@ -54,9 +56,11 @@ jobs:
     if: github.event_name == 'schedule'
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: macos
       - run: cargo build --workspace --all-targets
@@ -66,15 +70,16 @@ jobs:
     name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Install Rust toolchain (stable + components)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: lint
 
@@ -88,13 +93,15 @@ jobs:
     name: License audit (cargo-about)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: license
 
@@ -125,13 +132,15 @@ jobs:
     # 致命的な advisory が出たら手動で対応する運用。
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: audit
 
@@ -154,21 +163,23 @@ jobs:
     continue-on-error: true
     steps:
       - name: Checkout ja-furigana
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           path: ja-furigana
 
       - name: Checkout ja-furigana-dict
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: RyuuNeko1107/ja-furigana-dict
           path: ja-furigana-dict
 
       - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: corpus
           workspaces: ja-furigana
@@ -178,7 +189,7 @@ jobs:
         run: cargo build --release -p ja-furigana-cli
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -218,22 +229,23 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0     # diff-cover が base branch と比較するため全履歴が要る
 
       - name: Install Rust toolchain (stable + llvm-tools)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: llvm-tools-preview
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: coverage
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: cargo-llvm-cov
 
@@ -241,7 +253,7 @@ jobs:
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
@@ -261,7 +273,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage
           path: |
@@ -279,20 +291,22 @@ jobs:
     if: github.event_name == 'pull_request'
     needs: [test]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
       - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Cache cargo / target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: mutation
 
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         with:
           tool: cargo-mutants
 
@@ -312,7 +326,7 @@ jobs:
 
       - name: Upload mutants report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mutants-diff
           path: mutants.out/

@@ -10,6 +10,7 @@
 
 - **`dict pull` が、 展開した新辞書を build で検証してから入れ替える** (セキュリティ監査 REPORT-035)。 これまでは、 SHA-256 が合っていても中身が使えない配布物 (壊れた TOML・schema 違反・中身が欠けた tarball) をそのまま入れ替えてしまい、 稼働中の辞書が壊れた。 いまは入れ替えの前に、 新辞書を実際に build し (rules / 辞書が読めること)、 辞書の件数が下限 (1 万件。 実際の配布物は約 10 万件) に満たなければ **入れ替えずに中止**する。 稼働中の辞書は触られない。 検査するのは配布物だけで、 `user/` と `overrides.toml` の不備はこの pull のせいにしない
   - `serve` の自動更新は、 使えないと判った tag を **次の tag が出るまで取り直さない** (これまでは interval ごとに数十 MB を取り直していた)。 ネットワークの失敗のような、 やり直せば直る失敗は従来どおり再試行する
+- **GitHub Actions を commit SHA で固定した** (セキュリティ監査 REPORT-020 の残り)。 `uses: owner/repo@v6` のようなタグ指定は、 タグが付け替えられると別のコードが走る (供給網攻撃)。 11 個の action を 40 桁の SHA に固定し、 元のタグをコメントで残した (`@<sha> # v6`)。 Dependabot (`github-actions`) はこのコメントを見て SHA ごと更新する。 `dtolnay/rust-toolchain@stable` は ref 名から toolchain を決める仕組みなので、 SHA 固定に合わせて `toolchain: stable` を明示した (12 箇所)
 
 - **`dict pull` の整合性と更新の原子性** (セキュリティ監査 REPORT-001〜004 / 012 / 013):
   - SHA-256 sidecar が取得できない時は **中止する** (既定)。 これまでは警告だけで検証を省いて展開していた。 古い release 向けに `--allow-unverified` を追加
