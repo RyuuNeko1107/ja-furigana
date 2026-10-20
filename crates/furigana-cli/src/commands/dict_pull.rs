@@ -6,9 +6,10 @@
 //! 流れ:
 //! 1. version 解決 (`--version` 指定 or GitHub API で latest)
 //! 2. tarball + sha256 sidecar を download
-//! 3. SHA-256 検証
-//! 4. `<data_dir>/data/` 配下の旧配布ファイルを削除 (`user/`, `overrides.toml` は保持)
-//! 5. tarball を展開: `core/X` / `rules/X` を `data/X` に prefix 剥がして flat 配置
+//! 3. SHA-256 検証 (sidecar が取れなければ中止。 `--allow-unverified` で明示的に省ける)
+//! 4. 一時ディレクトリへ展開: `core/X` / `rules/X` を `X` に prefix 剥がして flat 配置
+//! 5. `user/` と `overrides.toml` を引き継ぎ、 `<data_dir>/data/` と rename で入れ替え
+//!    (途中で失敗しても旧辞書はそのまま残る。 同時に 2 つ走らないよう lock file で排他)
 //!
 //! tarball の中身は furigana-dict repo そのままの 2 階層 (`core/...` `rules/...`)、
 //! 配布側で flat 化する。これは「PR 投稿者が見る repo 内構造」と「実際に動く配置」を
@@ -19,7 +20,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 const REPO: &str = "RyuuNeko1107/ja-furigana-dict";
@@ -34,8 +36,23 @@ const MAX_DOWNLOAD_BYTES: usize = 50 * 1024 * 1024;
 const MAX_UNCOMPRESSED_TOTAL: u64 = 200 * 1024 * 1024;
 const MAX_PER_ENTRY_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_ENTRY_COUNT: usize = 50_000;
+/// sha256 sidecar (`<hex>  <name>` の 1 行) の上限。 数百 byte しかない
+const MAX_SIDECAR_BYTES: usize = 4 * 1024;
+/// GitHub API の応答 (`releases/latest`) の上限
+const MAX_API_BYTES: usize = 1024 * 1024;
+
+/// pull の挙動を変えるオプション
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PullOptions {
+    /// SHA-256 sidecar が取れない release でも続行する。 既定は中止 (整合性を確認できないため)
+    pub allow_unverified: bool,
+}
 
 pub fn run(paths: &Paths, version: Option<&str>) -> Result<()> {
+    run_with(paths, version, PullOptions::default())
+}
+
+pub fn run_with(paths: &Paths, version: Option<&str>, opts: PullOptions) -> Result<()> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(60))
@@ -68,19 +85,16 @@ pub fn run(paths: &Paths, version: Option<&str>) -> Result<()> {
 
     println!("SHA-256 sidecar 取得中...");
     let expected_hex = match download_text(&client, &sha_url) {
-        Ok(text) => parse_sha256_sidecar(&text)
-            .with_context(|| format!("sha256 sidecar の parse 失敗: {sha_url}"))?,
+        Ok(text) => Some(
+            parse_sha256_sidecar(&text)
+                .with_context(|| format!("sha256 sidecar の parse 失敗: {sha_url}"))?,
+        ),
         Err(e) => {
-            // sidecar が無い古い release もあり得るので warn にとどめる
-            tracing::warn!("SHA-256 sidecar 取得失敗: {e}. 検証をスキップします");
-            String::new()
+            tracing::warn!("SHA-256 sidecar 取得失敗: {e}");
+            None
         }
     };
-    if !expected_hex.is_empty() {
-        let actual_hex = sha256_hex(&tarball);
-        if !actual_hex.eq_ignore_ascii_case(&expected_hex) {
-            bail!("SHA-256 mismatch:\n  expected: {expected_hex}\n  actual:   {actual_hex}");
-        }
+    if verify_sha256(&tarball, expected_hex.as_deref(), opts.allow_unverified)? {
         println!("SHA-256 検証 OK");
     }
 
@@ -107,13 +121,14 @@ fn resolve_latest_tag(client: &reqwest::blocking::Client) -> Result<String> {
         .send()?;
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().unwrap_or_default();
         bail!(
             "GitHub API {status}: {url}\n  body: {}",
-            body.chars().take(300).collect::<String>()
+            error_body_head(resp)
         );
     }
-    let release: Release = resp.json()?;
+    let body = read_limited(resp, MAX_API_BYTES, &url)?;
+    let release: Release =
+        serde_json::from_slice(&body).context("GitHub API の応答の parse 失敗")?;
     Ok(release.tag_name)
 }
 
@@ -145,14 +160,29 @@ fn download_bytes(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u
             bail!("download size {len} bytes が上限 {MAX_DOWNLOAD_BYTES} bytes を超過: {url}");
         }
     }
-    let bytes = resp.bytes()?.to_vec();
-    if bytes.len() > MAX_DOWNLOAD_BYTES {
-        bail!(
-            "download size {} bytes が上限 {MAX_DOWNLOAD_BYTES} bytes を超過 (post-check): {url}",
-            bytes.len()
-        );
+    // Content-Length が無い (chunked) / 嘘の場合でも、 上限を超えた時点で読むのをやめる
+    read_limited(resp, MAX_DOWNLOAD_BYTES, url)
+}
+
+/// エラー応答の本文の先頭 300 字 (診断表示用)。 `resp.text()` は全量を溜めるので、
+/// 先頭 2 KiB だけ読んでやめる。 読めなくても診断が欠けるだけで、 失敗扱いは変えない。
+fn error_body_head(reader: impl Read) -> String {
+    let mut buf = Vec::new();
+    let _ = reader.take(2048).read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).chars().take(300).collect()
+}
+
+/// `reader` を最大 `limit` bytes まで読む。 超えたら (全部は読まずに) 中止。
+fn read_limited(reader: impl Read, limit: usize, what: &str) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    reader
+        .take(limit as u64 + 1)
+        .read_to_end(&mut buf)
+        .with_context(|| format!("応答の読み込み失敗: {what}"))?;
+    if buf.len() > limit {
+        bail!("応答が上限 {limit} bytes を超過: {what}");
     }
-    Ok(bytes)
+    Ok(buf)
 }
 
 fn download_text(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
@@ -161,7 +191,32 @@ fn download_text(client: &reqwest::blocking::Client, url: &str) -> Result<String
     if !status.is_success() {
         bail!("HTTP {status}: {url}");
     }
-    Ok(resp.text()?)
+    let body = read_limited(resp, MAX_SIDECAR_BYTES, url)?;
+    String::from_utf8(body).with_context(|| format!("UTF-8 でない応答: {url}"))
+}
+
+/// SHA-256 を検証する。 検証した (一致した) なら `Ok(true)`、 `allow_unverified` で省いたなら `Ok(false)`。
+///
+/// sidecar が無い / 取れない場合 (`expected = None`) は既定で中止する。 sidecar は tarball と
+/// 同じ配布元から取るので破損しか検知できないが、 それすら無い状態で辞書を差し替えない。
+fn verify_sha256(tarball: &[u8], expected: Option<&str>, allow_unverified: bool) -> Result<bool> {
+    match expected {
+        Some(expected_hex) => {
+            let actual_hex = sha256_hex(tarball);
+            if !actual_hex.eq_ignore_ascii_case(expected_hex) {
+                bail!("SHA-256 mismatch:\n  expected: {expected_hex}\n  actual:   {actual_hex}");
+            }
+            Ok(true)
+        }
+        None if allow_unverified => {
+            tracing::warn!("SHA-256 を検証せずに続行します (--allow-unverified)");
+            Ok(false)
+        }
+        None => bail!(
+            "SHA-256 sidecar が取得できないため中止します (整合性を確認できません)。\n  \
+             検証なしで続けるなら `--allow-unverified` を指定してください"
+        ),
+    }
 }
 
 /// `sha256sum` 形式 (`<hex>  <filename>`) から hex を抜き出す。
@@ -224,41 +279,78 @@ fn sha256_hex(data: &[u8]) -> String {
 /// 「core/ と rules/ を分ける必要ない (同じ furigana-dict から PR/DL する
 /// データなのに)」という指摘を受けてこの flat layout に統合した。
 ///
-/// 既存の `data_root/` 配下にあった分は **`user/` と `overrides.toml` を残して**
-/// 削除してから展開する。これにより古い配布ファイルが残らない一方、ユーザー
-/// 追加分は保持される。
+/// 入れ替えは **一時ディレクトリへ展開 → `user/` と `overrides.toml` を引き継ぎ → rename** の順。
+/// 展開の途中で失敗 (壊れた archive / 上限超過 / ディスク満杯 / kill) しても、 稼働中の辞書は
+/// そのまま残る。 archive 内の `user/` と `overrides.toml` は無視する (ユーザーのデータを
+/// 配布物で上書きさせない)。 同時に 2 つの pull が走らないよう `<data_dir>/.furigana-dict.lock` で排他する。
 fn extract_to(tarball: &[u8], paths: &Paths) -> Result<()> {
     let data_root: PathBuf = paths.data_root();
     let user_dir: PathBuf = paths.dict_user_dir();
     let overrides: PathBuf = paths.overrides_file();
+    let parent: PathBuf = data_root
+        .parent()
+        .ok_or_else(|| {
+            anyhow!(
+                "data_root の親ディレクトリが解決できない: {}",
+                data_root.display()
+            )
+        })?
+        .to_path_buf();
+    fs::create_dir_all(&parent)?;
 
-    // 既存の配布ファイルを掃除 (user / overrides は保持)
-    if data_root.exists() {
-        for entry in fs::read_dir(&data_root)? {
-            let path = entry?.path();
-            if path == user_dir || path == overrides {
-                continue;
-            }
-            if path.is_dir() {
-                fs::remove_dir_all(&path)
-                    .with_context(|| format!("既存削除失敗: {}", path.display()))?;
-            } else {
-                fs::remove_file(&path)
-                    .with_context(|| format!("既存削除失敗: {}", path.display()))?;
-            }
+    let _lock = PullLock::acquire(&parent)?;
+    let stage = fresh_sibling(&parent, ".data-new")?;
+
+    let result = (|| -> Result<()> {
+        // data_root 配下の相対パスで「ユーザーのもの」を判定する
+        let user_rel = user_dir
+            .strip_prefix(&data_root)
+            .unwrap_or(Path::new("user"));
+        let overrides_rel = overrides
+            .strip_prefix(&data_root)
+            .unwrap_or(Path::new("overrides.toml"));
+        extract_into(tarball, &stage, user_rel, overrides_rel)?;
+        // 旧辞書のユーザーデータを (コピーで) 引き継ぐ。 元は入れ替えが済むまで触らない
+        if user_dir.is_dir() {
+            copy_dir_all(&user_dir, &stage.join(user_rel))?;
         }
-    } else {
-        fs::create_dir_all(&data_root)?;
+        if overrides.is_file() {
+            fs::copy(&overrides, stage.join(overrides_rel))
+                .with_context(|| format!("引き継ぎ失敗: {}", overrides.display()))?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = fs::remove_dir_all(&stage);
+        return Err(e);
     }
 
+    if data_root.exists() {
+        let backup = fresh_sibling(&parent, ".data-old")?;
+        // `fresh_sibling` が空ディレクトリを作るので、 rename 先は一度消す
+        fs::remove_dir(&backup)?;
+        fs::rename(&data_root, &backup)
+            .with_context(|| format!("旧辞書の退避失敗: {}", data_root.display()))?;
+        if let Err(e) = fs::rename(&stage, &data_root) {
+            // 入れ替えに失敗したら旧辞書を戻す
+            let _ = fs::rename(&backup, &data_root);
+            let _ = fs::remove_dir_all(&stage);
+            return Err(anyhow!(e)).context("新辞書の配置失敗 (旧辞書を戻しました)");
+        }
+        let _ = fs::remove_dir_all(&backup);
+    } else {
+        fs::rename(&stage, &data_root)
+            .with_context(|| format!("辞書の配置失敗: {}", data_root.display()))?;
+    }
+    Ok(())
+}
+
+/// 信頼できない tarball を `stage` (空の新規ディレクトリ) に展開する。
+/// `user_rel` / `overrides_rel` (`data/` からの相対) に当たる entry は無視する。
+fn extract_into(tarball: &[u8], stage: &Path, user_rel: &Path, overrides_rel: &Path) -> Result<()> {
     let gz = GzDecoder::new(tarball);
     let mut archive = tar::Archive::new(gz);
     archive.set_preserve_permissions(false);
-    archive.set_overwrite(true);
-
-    let canonical_root = data_root
-        .canonicalize()
-        .unwrap_or_else(|_| data_root.clone());
 
     let mut total_uncompressed: u64 = 0;
     let mut entry_count: usize = 0;
@@ -284,8 +376,9 @@ fn extract_to(tarball: &[u8], paths: &Paths) -> Result<()> {
             );
         }
 
-        // entry サイズ上限 (1 file)
-        let entry_size = entry.header().size().unwrap_or(0);
+        // entry サイズ上限 (1 file)。 `entry.size()` は PAX 拡張の `size` を反映した実サイズ。
+        // (header 生の size だと、 PAX で巨大サイズを宣言した entry が上限を素通りする)
+        let entry_size = entry.size();
         if entry_size > MAX_PER_ENTRY_BYTES {
             bail!(
                 "archive entry が大きすぎる: {entry_size} bytes (上限 {MAX_PER_ENTRY_BYTES} bytes): {}",
@@ -302,46 +395,133 @@ fn extract_to(tarball: &[u8], paths: &Paths) -> Result<()> {
         }
 
         let entry_path = entry.path()?.into_owned();
-        // archive 内 `core/...` `rules/...` の prefix を剥がして `data/` 直下に。
+        // archive 内 `core/...` `rules/...` の prefix を剥がして `stage` 直下に。
         // prefix だけのディレクトリエントリ (`core/` `rules/`) は rest が空に
-        // なるので skip (data_root はすでに作ってある)。
-        let dest = if let Ok(rest) = entry_path.strip_prefix("core") {
-            if rest.as_os_str().is_empty() {
-                continue;
-            }
-            data_root.join(rest)
+        // なるので skip。
+        let rest = if let Ok(rest) = entry_path.strip_prefix("core") {
+            rest
         } else if let Ok(rest) = entry_path.strip_prefix("rules") {
-            if rest.as_os_str().is_empty() {
-                continue;
-            }
-            data_root.join(rest)
+            rest
         } else {
             // 想定外の top-level entry は無視 (README 等が混入してもスキップ)
             tracing::debug!("skip archive entry: {}", entry_path.display());
             continue;
         };
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
+        if rest.as_os_str().is_empty() {
+            continue;
         }
-        // path traversal 防御: dest の親が data_root 配下に収まることを確認
-        let canonical_parent = dest
-            .parent()
-            .and_then(|p| p.canonicalize().ok())
-            .unwrap_or_else(|| dest.clone());
-        if !canonical_parent.starts_with(&canonical_root) {
+        // path traversal 防御: ディレクトリを作る **前** に、 構成要素が通常の名前だけか確認する
+        // (`..` / 絶対パス / ドライブ名 / `:` (NTFS の代替データストリーム) を含むものは拒否)
+        if !is_plain_relative(rest) {
             bail!(
-                "path traversal を検出: {} は {} の外",
-                entry_path.display(),
-                data_root.display()
+                "不正な path を検出: {} (`..` / 絶対パス / `:` は不可)",
+                entry_path.display()
             );
         }
+        // ユーザーのデータ (user/ と overrides.toml) は配布物で上書きさせない
+        if rest.starts_with(user_rel) || rest == overrides_rel {
+            tracing::warn!(
+                "archive 内のユーザー領域の entry を無視: {}",
+                entry_path.display()
+            );
+            continue;
+        }
+
+        let dest = stage.join(rest);
         if entry.header().entry_type().is_dir() {
             fs::create_dir_all(&dest)?;
         } else {
-            entry.unpack(&dest)?;
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            // stage は新規ディレクトリで symlink は作られない。 書く量にも上限を掛ける
+            // (宣言サイズと実サイズが食い違っても 1 file の上限を超えて書かない)
+            let mut out = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&dest)
+                .with_context(|| format!("作成失敗: {}", dest.display()))?;
+            let written = std::io::copy(&mut (&mut entry).take(MAX_PER_ENTRY_BYTES + 1), &mut out)?;
+            if written > MAX_PER_ENTRY_BYTES {
+                bail!(
+                    "archive entry が大きすぎる (実際に書いた量): {} (上限 {MAX_PER_ENTRY_BYTES} bytes)",
+                    entry_path.display()
+                );
+            }
         }
     }
     Ok(())
+}
+
+/// `rest` が通常の名前だけで構成された相対パスか (`..` / `/` 始まり / ドライブ名 / `:` を含む名前は不可)。
+fn is_plain_relative(rest: &Path) -> bool {
+    rest.components().all(|c| match c {
+        Component::Normal(name) => !name.to_string_lossy().contains(':'),
+        _ => false,
+    })
+}
+
+/// `parent` の下に、 予測しにくい名前の新しい空ディレクトリを作る (`<prefix>-<pid>-<nanos>`)。
+fn fresh_sibling(parent: &Path, prefix: &str) -> Result<PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let dir = parent.join(format!("{prefix}-{}-{nanos}", std::process::id()));
+    // `create_dir` は既存なら失敗する (他のプロセスのものを再利用しない)
+    fs::create_dir(&dir)
+        .with_context(|| format!("一時ディレクトリの作成失敗: {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// 通常ファイルとディレクトリだけを再帰コピーする (symlink などは引き継がない)。
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let meta = fs::symlink_metadata(&from)?;
+        if meta.is_dir() {
+            copy_dir_all(&from, &to)?;
+        } else if meta.is_file() {
+            fs::copy(&from, &to).with_context(|| format!("引き継ぎ失敗: {}", from.display()))?;
+        } else {
+            tracing::warn!("通常ファイル以外は引き継ぎません: {}", from.display());
+        }
+    }
+    Ok(())
+}
+
+/// 同時に 2 つの pull (serve の auto_update / `dict pull` / REPL の `:pull`) が走らないようにする。
+/// 取得できるまで待つ。 drop (ファイルを閉じる) で解放される。 前回の中断で残った
+/// 一時ディレクトリ (`.data-new-*` / `.data-old-*`) は、 lock を取った後に掃除する。
+struct PullLock {
+    _file: fs::File,
+}
+
+impl PullLock {
+    fn acquire(dir: &Path) -> Result<Self> {
+        let path = dir.join(".furigana-dict.lock");
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("lock file を開けない: {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("lock の取得失敗: {}", path.display()))?;
+        if let Ok(rd) = fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with(".data-new-") || name.starts_with(".data-old-") {
+                    let _ = fs::remove_dir_all(e.path());
+                }
+            }
+        }
+        Ok(Self { _file: file })
+    }
 }
 
 #[cfg(test)]
@@ -627,7 +807,7 @@ mod tests {
             "entry 数上限エラーであること"
         );
         // skip 対象なので何も展開されていない
-        assert_eq!(fs::read_dir(p.data_root()).unwrap().count(), 0);
+        assert_nothing_extracted(&p);
         fs::remove_dir_all(&p.data_dir).ok();
     }
 
@@ -645,7 +825,216 @@ mod tests {
             format!("{:#}", res.unwrap_err()).contains("展開合計"),
             "展開合計上限エラーであること"
         );
-        assert_eq!(fs::read_dir(p.data_root()).unwrap().count(), 0);
+        assert_nothing_extracted(&p);
         fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    // ─── セキュリティ監査 (REPORT-001〜004, 012, 013) の回帰テスト ───────────────
+
+    #[test]
+    fn verify_sha256_is_strict_by_default() {
+        let data = b"abc";
+        let good = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        // 一致 → 検証した
+        assert!(verify_sha256(data, Some(good), false).unwrap());
+        // 不一致 → 中止 (--allow-unverified でも、 sidecar があって違うなら通さない)
+        let bad = "0".repeat(64);
+        assert!(verify_sha256(data, Some(&bad), false).is_err());
+        assert!(verify_sha256(data, Some(&bad), true).is_err());
+        // sidecar が無い → 既定は中止。 明示した時だけ検証なしで続行
+        let err = verify_sha256(data, None, false).unwrap_err();
+        assert!(format!("{err:#}").contains("--allow-unverified"));
+        assert!(!verify_sha256(data, None, true).unwrap());
+    }
+
+    #[test]
+    fn read_limited_stops_at_the_limit() {
+        let data = [7u8; 100];
+        assert_eq!(read_limited(&data[..], 100, "t").unwrap().len(), 100);
+        let err = read_limited(&data[..], 99, "t").unwrap_err();
+        assert!(format!("{err:#}").contains("上限"));
+        // 無限に続く読み手でも、 上限 + 1 で止まる (全部は読まない)
+        assert!(read_limited(std::io::repeat(0u8), 1024, "t").is_err());
+    }
+
+    #[test]
+    fn error_body_head_reads_only_a_prefix() {
+        // 無限に続く本文でも返ってくる (全量を溜めない)。 表示は 300 字まで
+        let head = error_body_head(std::io::repeat(b'x'));
+        assert_eq!(head.chars().count(), 300);
+        // 壊れた UTF-8 でも落ちない
+        assert!(!error_body_head(&[0xffu8, 0xfe, b'a'][..]).is_empty());
+    }
+
+    /// PAX 拡張ヘッダ (`size=`) で実サイズを宣言し、 ustar ヘッダの size は 0 にした entry。
+    /// header 生の size を見る実装は上限を素通りする。
+    fn targz_pax_size(name: &str, declared: u64) -> Vec<u8> {
+        let mut builder = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        let size = declared.to_string();
+        builder
+            .append_pax_extensions([("size", size.as_bytes())])
+            .unwrap();
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_mode(0o644);
+        h.set_size(0);
+        builder.append_data(&mut h, name, std::io::empty()).unwrap();
+        // 宣言したサイズ分の中身 (+ padding) を直接流す
+        let w = builder.get_mut();
+        let zeros = vec![0u8; 64 * 1024];
+        let mut left = declared;
+        while left > 0 {
+            let n = left.min(zeros.len() as u64) as usize;
+            w.write_all(&zeros[..n]).unwrap();
+            left -= n as u64;
+        }
+        let pad = (512 - declared % 512) % 512;
+        w.write_all(&vec![0u8; pad as usize]).unwrap();
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn extract_to_rejects_pax_declared_oversize() {
+        let p = temp_paths("paxsize");
+        let tb = targz_pax_size("core/pax.toml", MAX_PER_ENTRY_BYTES + 1);
+        let res = extract_to(&tb, &p);
+        assert!(res.is_err(), "PAX で宣言した巨大 entry は上限で bail");
+        assert!(
+            !p.data_root().join("pax.toml").exists(),
+            "巨大ファイルは書かれない"
+        );
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn extract_to_creates_no_directory_outside_on_traversal() {
+        let p = temp_paths("traversaldir");
+        // data_root = <data_dir>/data。 `core/../../<名前>/y.toml` は <data_dir の親>/<名前> を指す
+        let marker = format!("furigana_escape_{}", std::process::id());
+        let tb = raw_targz_single(&format!("core/../../{marker}/y.toml"), b"x");
+        let res = extract_to(&tb, &p);
+        assert!(res.is_err(), "`..` を含む path は bail");
+        let outside = p.data_dir.parent().unwrap().join(&marker);
+        assert!(
+            !outside.exists(),
+            "検査より前にディレクトリを作らない: {}",
+            outside.display()
+        );
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn extract_to_rejects_colon_in_path_component() {
+        let p = temp_paths("colon");
+        // NTFS の代替データストリーム (`file.toml:stream`) になりうる名前
+        let tb = raw_targz_single("core/jukugo/x.toml:evil", b"x");
+        assert!(extract_to(&tb, &p).is_err());
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn extract_to_ignores_archive_entries_in_user_area() {
+        let p = temp_paths("userarea");
+        fs::create_dir_all(p.dict_user_dir()).unwrap();
+        fs::write(p.dict_user_dir().join("mine.toml"), b"MINE").unwrap();
+        fs::write(p.overrides_file(), b"MY-OVERRIDES").unwrap();
+
+        let tb = build_targz(&[
+            Tar::File("core/user/mine.toml", b"EVIL"),
+            Tar::File("core/user/extra.toml", b"EVIL"),
+            Tar::File("core/overrides.toml", b"EVIL"),
+            Tar::File("core/jukugo/new.toml", b"[entries]\n"),
+        ]);
+        extract_to(&tb, &p).unwrap();
+
+        assert_eq!(
+            fs::read(p.dict_user_dir().join("mine.toml")).unwrap(),
+            b"MINE",
+            "user/ は配布物で上書きされない"
+        );
+        assert!(
+            !p.dict_user_dir().join("extra.toml").exists(),
+            "配布物から user/ に新しいファイルを置かせない"
+        );
+        assert_eq!(
+            fs::read(p.overrides_file()).unwrap(),
+            b"MY-OVERRIDES",
+            "overrides.toml は配布物で上書きされない"
+        );
+        assert!(p.data_root().join("jukugo/new.toml").exists());
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn failed_extract_leaves_existing_dictionary_untouched() {
+        let p = temp_paths("atomic");
+        fs::create_dir_all(p.data_root()).unwrap();
+        fs::write(p.data_root().join("old.toml"), b"[entries]\nOLD").unwrap();
+        fs::create_dir_all(p.dict_user_dir()).unwrap();
+        fs::write(p.dict_user_dir().join("mine.toml"), b"MINE").unwrap();
+
+        // 途中で拒否される tarball (先に有効な entry、 後ろに symlink)
+        let tb = build_targz(&[
+            Tar::File("core/new.toml", b"[entries]\nNEW"),
+            Tar::Symlink("core/link.toml", "/etc/passwd"),
+        ]);
+        assert!(extract_to(&tb, &p).is_err());
+
+        // 旧辞書は消えていない (以前の実装は展開の前に全部消していた)
+        assert_eq!(
+            fs::read(p.data_root().join("old.toml")).unwrap(),
+            b"[entries]\nOLD"
+        );
+        assert!(p.dict_user_dir().join("mine.toml").exists());
+        assert!(
+            !p.data_root().join("new.toml").exists(),
+            "半端な新辞書は配置されない"
+        );
+        assert_no_staging_dirs(&p);
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn successful_extract_swaps_and_leaves_no_staging_dirs() {
+        let p = temp_paths("swap");
+        fs::create_dir_all(p.data_root()).unwrap();
+        fs::write(p.data_root().join("old.toml"), b"stale").unwrap();
+        let tb = build_targz(&[Tar::File("core/new.toml", b"[entries]\n")]);
+        extract_to(&tb, &p).unwrap();
+        assert!(p.data_root().join("new.toml").exists());
+        assert!(!p.data_root().join("old.toml").exists());
+        assert_no_staging_dirs(&p);
+        // 続けてもう一度 (lock が解放されている)
+        extract_to(&tb, &p).unwrap();
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    #[test]
+    fn leftover_staging_dirs_are_cleaned_on_next_pull() {
+        let p = temp_paths("leftover");
+        fs::create_dir_all(p.data_dir.join(".data-new-1-1/x")).unwrap();
+        fs::create_dir_all(p.data_dir.join(".data-old-1-1")).unwrap();
+        let tb = build_targz(&[Tar::File("core/new.toml", b"[entries]\n")]);
+        extract_to(&tb, &p).unwrap();
+        assert_no_staging_dirs(&p);
+        fs::remove_dir_all(&p.data_dir).ok();
+    }
+
+    fn assert_nothing_extracted(p: &Paths) {
+        assert!(
+            !p.data_root().exists() || fs::read_dir(p.data_root()).unwrap().count() == 0,
+            "何も展開されていないこと"
+        );
+        assert_no_staging_dirs(p);
+    }
+
+    fn assert_no_staging_dirs(p: &Paths) {
+        let left: Vec<_> = fs::read_dir(&p.data_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".data-new-") || n.starts_with(".data-old-"))
+            .collect();
+        assert!(left.is_empty(), "一時ディレクトリが残っている: {left:?}");
     }
 }

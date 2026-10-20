@@ -64,6 +64,10 @@ pub enum Action {
         /// ピン留めバージョン (例: `v0.1.0`)。未指定で最新。
         #[arg(long)]
         version: Option<String>,
+        /// SHA-256 sidecar が取得できない release でも、 検証せずに続行する (既定は中止)。
+        /// 古い release 向け。 検証なしで辞書を差し替えることになる
+        #[arg(long)]
+        allow_unverified: bool,
     },
 }
 
@@ -74,7 +78,14 @@ pub fn run(args: Args, paths: &Paths, _cfg: &Config) -> Result<()> {
         Action::Remove { surface } => remove(paths, &surface),
         Action::Import { path } => import(paths, &path),
         Action::BuildCache => build_cache(paths),
-        Action::Pull { version } => super::dict_pull::run(paths, version.as_deref()),
+        Action::Pull {
+            version,
+            allow_unverified,
+        } => super::dict_pull::run_with(
+            paths,
+            version.as_deref(),
+            super::dict_pull::PullOptions { allow_unverified },
+        ),
     }
 }
 
