@@ -164,3 +164,41 @@ jobs:
           gh release edit "$TAG" --repo "${{ github.repository }}" \
             --draft=false \
             --latest
+
+  # ─── crates.io へ 4 crate を依存順に公開 ───
+  # secret CARGO_REGISTRY_TOKEN (publish 権限のみ) が要る。 environment `crates-io` に承認者を
+  # 設定すると、 承認するまで公開されない (誤 tag による誤公開の防止)。
+  # 公開済みの版は飛ばすので、 失敗後の再実行は安全。
+  publish-crates:
+    name: Publish to crates.io
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Publish (依存順、 公開済みは skip)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          VER="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="ja-furigana"))')"
+          [ "v$VER" = "$TAG" ] || { echo "tag $TAG と Cargo.toml の版 $VER が違う"; exit 1; }
+          for crate in ja-furigana ja-furigana-voicevox ja-furigana-aquestalk ja-furigana-cli; do
+            if curl -sf "https://crates.io/api/v1/crates/$crate/$VER" -H 'User-Agent: ja-furigana-release' >/dev/null; then
+              echo "$crate $VER は公開済み、 skip"; continue
+            fi
+            cargo publish -p "$crate"
+            # 次の crate が依存解決できるよう index への反映を待つ
+            for i in $(seq 1 30); do
+              curl -sf "https://crates.io/api/v1/crates/$crate/$VER" -H 'User-Agent: ja-furigana-release' >/dev/null && break
+              sleep 10
+            done
+          done
