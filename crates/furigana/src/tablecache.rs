@@ -291,8 +291,20 @@ fn write_cache(dirs: &[PathBuf], key: u64, bytes: &[u8]) {
         if std::fs::create_dir_all(parent).is_err() {
             continue;
         }
-        let tmp = parent.join(format!(".tables-{key:016x}.{}.tmp", std::process::id()));
-        if std::fs::write(&tmp, bytes).is_err() {
+        // 予測できない名前で、 既にあるファイル (他人が置いたリンク等) は開かず失敗させる
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let tmp = parent.join(format!(
+            ".tables-{key:016x}.{}.{nanos:x}.tmp",
+            std::process::id()
+        ));
+        let written = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, bytes));
+        if written.is_err() {
             let _ = std::fs::remove_file(&tmp);
             continue;
         }

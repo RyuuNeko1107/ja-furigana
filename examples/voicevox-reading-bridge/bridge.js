@@ -400,7 +400,7 @@ async function processQueue() {
         }
       }
       for (const [i, wav] of wavs.entries()) {
-        const wavPath = path.join(os.tmpdir(), `vv_bridge_${item.taskId}_${i}.wav`)
+        const wavPath = path.join(WAV_DIR, `${item.taskId}_${i}.wav`)
         fs.writeFileSync(wavPath, wav)
         await playWav(wavPath)
         fs.unlink(wavPath, () => {})
@@ -413,7 +413,21 @@ async function processQueue() {
 }
 
 // ─── 棒読みちゃん互換 HTTP ────────────────────────────────────────────────────
+// 上限 (悪意あるページや暴走したクライアントが、 長文・大量のキューでメモリと再生を占有しないように)
+const MAX_TEXT_CHARS = 1000
+const MAX_QUEUE = 100
+// WAV の一時置き場: 予測できない名前の専用ディレクトリ (共有の tmp 直下に固定名で書かない)
+const WAV_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'vv_bridge_'))
+process.on('exit', () => { try { fs.rmSync(WAV_DIR, { recursive: true, force: true }) } catch {} })
+
 const server = http.createServer((req, res) => {
+  // DNS rebinding 対策: Host が自分宛て (127.0.0.1 / localhost) でなければ拒否する。
+  // ブラウザ上の悪意あるページが、 この無認証の /talk を叩けないようにする。
+  const host = (req.headers.host || '').toLowerCase()
+  if (host !== `127.0.0.1:${PORT}` && host !== `localhost:${PORT}`) {
+    res.writeHead(403, { 'Content-Type': 'application/json' })
+    return res.end('{"error":"forbidden host"}')
+  }
   const u = new URL(req.url, `http://127.0.0.1:${PORT}`)
   const route = u.pathname.toLowerCase()
   const json = (obj) => {
@@ -423,6 +437,8 @@ const server = http.createServer((req, res) => {
   if (route === '/talk') {
     const text = (u.searchParams.get('text') || '').trim()
     if (!text) return json({ taskId: 0, error: 'no text' })
+    if (text.length > MAX_TEXT_CHARS) return json({ taskId: 0, error: 'text too long' })
+    if (queue.length >= MAX_QUEUE) return json({ taskId: 0, error: 'queue full' })
     const taskId = ++taskSeq
     const item = {
       taskId,
