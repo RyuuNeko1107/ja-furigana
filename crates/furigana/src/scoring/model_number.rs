@@ -54,6 +54,9 @@ impl CompiledModel {
     /// # Errors
     /// 正規表現が不正 / 雛形が不正 / 絞り込み用の先頭英字が取れない時
     pub fn compile(spec: &ModelSpec) -> Result<Self, String> {
+        // 単独で正規表現として成り立つか先に確かめる。 `a)|(?:b` のような括弧の閉じ込みを含む
+        // パターンは、 下の連結で `^(?i:a)|(?:b)` になり、 先頭固定が最初の選択肢にしか掛からない。
+        Regex::new(&spec.pattern).map_err(|e| e.to_string())?;
         let re = Regex::new(&format!("^(?i:{})", spec.pattern)).map_err(|e| e.to_string())?;
         let pieces = parse_template(&spec.reading, re.captures_len() - 1)?;
         let first = first_chars(spec)?;
@@ -302,6 +305,23 @@ mod tests {
         let d: ModelsData = toml::from_str(toml_str).unwrap();
         d.validate().unwrap();
         CompiledModels::new(&d)
+    }
+
+    #[test]
+    fn pattern_that_closes_the_wrapper_group_is_rejected() {
+        // `a)|(?:b` は連結後 `^(?i:a)|(?:b)` になり、 先頭固定が効かない選択肢ができる
+        let spec = ModelSpec {
+            pattern: "A1)|(?:B2".to_string(),
+            reading: "えー".to_string(),
+            first: Some("a".to_string()),
+        };
+        assert!(CompiledModel::compile(&spec).is_err());
+        let ok = ModelSpec {
+            pattern: "A1|B2".to_string(),
+            reading: "えー".to_string(),
+            first: Some("ab".to_string()),
+        };
+        assert!(CompiledModel::compile(&ok).is_ok());
     }
 
     fn sample() -> CompiledModels {

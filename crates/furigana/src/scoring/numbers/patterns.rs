@@ -244,29 +244,32 @@ pub(super) fn build_counter_regexes(
     // recursive group は optional 化し、 bare match (recursive 無し) の採否は matcher 側で
     // `kanji_numeral` フラグにより gate する (= 「一日中」 の 「一日」 等の誤 counter 化を防ぐ)。
     if recursive.is_empty() {
-        let arabic = HeadRegex::new(&format!(r"({NUM_PAT})(?: )?({base_joined})"))
-            .expect("scoring counter regex build failed");
+        let arabic = dict_regex(&format!(r"({NUM_PAT})(?: )?({base_joined})"), "counter");
         let kanji = if kanji_optin {
-            Some(
-                HeadRegex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})"))
-                    .expect("scoring kanji counter regex build failed"),
+            dict_regex(
+                &format!(r"({KANJI_NUM_PAT})({base_joined})"),
+                "kanji counter",
             )
         } else {
             None
         };
-        return (Some(arabic), kanji);
+        return (arabic, kanji);
     }
 
     recursive.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
     let rec_alts: Vec<String> = recursive.iter().map(|s| regex::escape(s)).collect();
     let rec_joined = rec_alts.join("|");
 
-    let arabic = HeadRegex::new(&format!(r"({NUM_PAT})(?: )?({base_joined})({rec_joined})?"))
-        .expect("scoring counter regex build failed");
+    let arabic = dict_regex(
+        &format!(r"({NUM_PAT})(?: )?({base_joined})({rec_joined})?"),
+        "counter",
+    );
     // recursive group を optional 化 (= 「一個目」 の recursive 形 + opt-in 助数詞の bare 形 両対応)。
-    let kanji = HeadRegex::new(&format!(r"({KANJI_NUM_PAT})({base_joined})({rec_joined})?"))
-        .expect("scoring kanji counter regex build failed");
-    (Some(arabic), Some(kanji))
+    let kanji = dict_regex(
+        &format!(r"({KANJI_NUM_PAT})({base_joined})({rec_joined})?"),
+        "kanji counter",
+    );
+    (arabic, kanji)
 }
 
 /// 大数スケール (+ optional 末尾漢字 unit / counter) の regex を構築。 空 list なら `None`。
@@ -321,7 +324,7 @@ pub(super) fn build_scale_regex(
             trailing.join("|")
         )
     };
-    Some(HeadRegex::new(&pat).expect("scoring scale regex build failed"))
+    dict_regex(&pat, "scale")
 }
 
 /// SI 単位の regex を構築 (case-insensitive)。 空 list なら `None`。
@@ -334,7 +337,21 @@ pub(super) fn build_si_unit_regex(units: &UnitsData) -> Option<HeadRegex> {
     sorted.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
     let alts: Vec<String> = sorted.iter().map(|s| regex::escape(s)).collect();
     let pat = format!(r"(?i)({NUM_PAT})({})", alts.join("|"));
-    Some(HeadRegex::new(&pat).expect("scoring si_unit regex build failed"))
+    dict_regex(&pat, "si_unit")
+}
+
+/// 辞書の内容から組み立てた正規表現を作る。 辞書が極端に大きいと regex の上限
+/// (コンパイル後 10 MB) を超えて失敗するので、 panic せず、 その機能だけを外して警告する。
+fn dict_regex(pattern: &str, what: &str) -> Option<HeadRegex> {
+    match HeadRegex::new(pattern) {
+        Ok(re) => Some(re),
+        Err(e) => {
+            tracing::warn!(
+                "辞書から組み立てた {what} の正規表現を作れません。 この機能は無効になります: {e}"
+            );
+            None
+        }
+    }
 }
 
 /// 「文字列の先頭で一致するか」 だけを見る正規表現。
@@ -397,14 +414,40 @@ pub(super) fn build_grouped_kanji_counter_regex(counters: &CountersData) -> Opti
         .map(|s| regex::escape(s))
         .collect::<Vec<_>>()
         .join("|");
-    Some(
-        HeadRegex::new(&format!(r"([一二三四五六七八九][〇一二三四五六七八九]{{0,2}}(?:、[〇一二三四五六七八九]{{3}})+)([万億兆千])?({base_joined})"))
-            .expect("scoring grouped kanji counter regex build failed"),
+    dict_regex(
+        &format!(
+            r"([一二三四五六七八九][〇一二三四五六七八九]{{0,2}}(?:、[〇一二三四五六七八九]{{3}})+)([万億兆千])?({base_joined})"
+        ),
+        "grouped kanji counter",
     )
 }
 
 #[cfg(test)]
 mod tests {
+    /// 助数詞が極端に多い辞書でも panic せず、 その機能だけが無効になる
+    /// (50,000 件で regex のコンパイル上限を超え、 以前は `expect` で落ちていた)。
+    #[test]
+    fn huge_counter_dictionary_degrades_instead_of_panicking() {
+        let mut c = CountersData::default();
+        for i in 0..50_000usize {
+            let k: String = (0..6)
+                .map(|j| {
+                    char::from_u32(0x4e00 + ((i * 7 + j * 131 + i / 3000 * 17) % 20000) as u32)
+                        .unwrap()
+                })
+                .collect::<String>()
+                + &i.to_string();
+            c.simple.insert(k, "ホン".to_string());
+        }
+        let (arabic, kanji) = build_counter_regexes(&c);
+        assert!(arabic.is_none(), "上限を超えたら機能を外す");
+        assert!(kanji.is_none());
+        // 普通の大きさなら従来どおり作れる
+        let mut small = CountersData::default();
+        small.simple.insert("本".to_string(), "ホン".to_string());
+        assert!(build_counter_regexes(&small).0.is_some());
+    }
+
     use super::*;
     use crate::rules::RulesData;
 
