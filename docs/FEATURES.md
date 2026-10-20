@@ -107,6 +107,7 @@ tts では英数字にはさまれた `.` `?` は文の区切りにしない (`e
 | `counters` `scales` `days` `numeric_phrases` | `rules/numbers/` | 助数詞・大数・日付・慣用句 |
 | `units` `symbols` `models` `postprocess` | `rules/text/` | 単位・記号・型番・出力後の置換 |
 | `context_cues` | `rules/text/context_cues.toml` | `N/M` が日付か分数かを決める手がかりの語 (直後 / 直前 / 文中)。 lib の組み込みに足される |
+| `person_name_cues` | `rules/text/person_name_cues.toml` | 人名の専用経路の手がかり (敬称・肩書き・名にしない語・複合語の頭の字)。 **辞書のファイルが正で、 lib に既定値は無い** (ファイルが無いと人名の専用経路は何もしない) |
 | `compat` | `rules/compat.toml` | 異体字の正規化 |
 
 辞書は毎日自動でリリースされ (CalVer `vYYYY.MM.DD`)、 サーバーは `--auto-pull` / `[auto_update]` で取り込む。

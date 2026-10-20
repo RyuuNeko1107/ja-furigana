@@ -176,6 +176,8 @@ impl FuriganaBuilder {
         // Smart engine 用の数字系 provider (★C3): rules を pre-compile して保持。
         // analyze() 呼び出しごとに rebuild すると regex compile cost が乗るので一度作る。
         let number_provider = NumberCandidateProvider::new(&rules);
+        let person_cues =
+            crate::scoring::person_names::PersonCues::from_data(&rules.person_name_cues);
 
         // ★alpha.21: loanwords を再統合。 core_dict_dirs / user_dict_dirs 配下から
         // `role = "loanwords"` file を集めて lookup map に。 AlphabetPassthroughProvider
@@ -222,6 +224,7 @@ impl FuriganaBuilder {
             rules,
             dict,
             number_provider,
+            person_cues,
             loanwords: Arc::new(loanwords_map),
             accent_lexicon,
             chain_table,

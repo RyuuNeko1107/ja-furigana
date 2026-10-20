@@ -8,19 +8,16 @@
 //! 表の読みに組み直す (「水田 | 選手」 → みずた、 「水田 | 雄一郎 | さん」 → みずた | ゆういちろう)。
 //! 組み直す前の読みは `alternatives` に残す。
 //!
-//! 判定は [`cue_score`] に分けてある。 いまは規則 (手がかり語の表) だが、 学習済みの重みの表に
+//! 判定は [`PersonCues::cue_score`] に分けてある。 いまは規則 (手がかり語の表) だが、 学習済みの重みの表に
 //! 差し替えられる (実行時は決定論のまま)。
 //!
 //! 表は dict repo の `core/names/` (NDL 典拠由来)。 形式は `[entries]` の `"表記" = "読み"`。
 
 mod cues;
 
-use self::cues::cue_score;
-use self::cues::may_have_cue;
-use self::cues::title_continues_into_compound;
+pub use self::cues::PersonCues;
+
 use self::cues::ALT_WEIGHT;
-use self::cues::COMMON_WORD_GIVEN;
-use self::cues::HONORIFICS;
 use self::cues::MAX_RUN_CHARS;
 use self::cues::MAX_RUN_TOKENS;
 use crate::dict::Dict;
@@ -100,14 +97,16 @@ pub enum NameHint {
 /// 人名の専用経路の post-pass。
 pub struct PersonNamePass<'a> {
     dict: &'a Dict,
+    cues: &'a PersonCues,
     hint: NameHint,
 }
 
 impl<'a> PersonNamePass<'a> {
     #[must_use]
-    pub fn new(dict: &'a Dict) -> Self {
+    pub fn new(dict: &'a Dict, cues: &'a PersonCues) -> Self {
         Self {
             dict,
+            cues,
             hint: NameHint::Auto,
         }
     }
@@ -192,7 +191,7 @@ impl PersonNamePass<'_> {
                     && !tail.is_empty()
                     && all_kanji(head)
                     && head.chars().count() <= 3
-                    && HONORIFICS.iter().any(|h| {
+                    && self.cues.honorifics.iter().any(|h| {
                         h.len() > tail.len()
                             && h.starts_with(tail)
                             && tokens
@@ -258,12 +257,12 @@ impl PersonNamePass<'_> {
         self.repair_kana_straddle(tokens);
         let mut i = 1;
         while i < tokens.len() {
-            let Some((head, suffix)) = HONORIFICS.iter().find_map(|h| {
+            let Some((head, suffix)) = self.cues.honorifics.iter().find_map(|h| {
                 tokens[i]
                     .surface
-                    .strip_suffix(h)
+                    .strip_suffix(h.as_str())
                     .filter(|head| all_kanji(head) && head.chars().count() <= 3)
-                    .map(|head| (head.to_string(), *h))
+                    .map(|head| (head.to_string(), h.as_str()))
             }) else {
                 i += 1;
                 continue;
@@ -321,7 +320,7 @@ impl ReadingPostPass for PersonNamePass<'_> {
             return;
         }
         // 手がかりが無い行は何も起きない (Name ヒントは手がかり無しで引くので除く)
-        if self.hint == NameHint::Auto && !may_have_cue(tokens) {
+        if self.hint == NameHint::Auto && !self.cues.may_have_cue(tokens) {
             return;
         }
         self.split_merged_honorific(tokens);
@@ -336,8 +335,8 @@ impl ReadingPostPass for PersonNamePass<'_> {
                 }
                 _ => {
                     c < tokens.len()
-                        && cue_score(&tokens[c].surface) > 0
-                        && !title_continues_into_compound(tokens, c)
+                        && self.cues.cue_score(&tokens[c].surface) > 0
+                        && !self.cues.title_continues_into_compound(tokens, c)
                 }
             };
             if !is_cue {
@@ -393,7 +392,7 @@ impl ReadingPostPass for PersonNamePass<'_> {
             if self.hint != NameHint::Name
                 && p.mei
                     .as_ref()
-                    .is_some_and(|(m, _)| COMMON_WORD_GIVEN.contains(&m.as_str()))
+                    .is_some_and(|(m, _)| self.cues.not_given_names.contains(m))
             {
                 c += 1;
                 continue;

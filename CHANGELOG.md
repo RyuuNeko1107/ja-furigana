@@ -35,6 +35,10 @@
   (更新は Dependabot の docker)。 `cargo build` を `--locked` にし、 配布する `furigana` bin だけを build する。
   **bind mount で `/data` を渡している場合は、 ホスト側を uid 65532 が書ける権限にする** (名前付き volume は自動で合う)。
 
+### Changed
+
+- **人名の手がかり (敬称・肩書き・名にしない語・複合語の頭の字) を辞書側のファイルに出した** (`rules/text/person_name_cues.toml`、 role = `person_name_cues`)。 これまで Rust に固定されていて、 直すたびに lib のリリースが要った。 **lib には既定値を持たない**: 辞書にこのファイルが無いと、 手がかりが空になり人名の専用経路は何もしない。 **このファイルを含む辞書 (ja-furigana-dict の対応する PR) を先に入れてから、 この lib に更新する**こと。 辞書のファイルに今の値を書いた場合、 出力は変わらない (人名の文 3,434 件で前後が完全一致)。 語は 1 語 16 字・1 つの表 1,000 語まで、 空・空白・制御文字は読み込みで弾く。 設計: `docs/PROPOSALS/dict-driven-rules.md`
+
 ### Added
 
 - **`[rate_limit].trust_proxy_headers`** (既定 `false`): レート制限の key に `X-Forwarded-For` / `X-Real-IP` / `Forwarded` を使う。

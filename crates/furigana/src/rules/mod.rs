@@ -12,6 +12,7 @@ pub mod days;
 pub mod emoji;
 pub mod models;
 pub mod numeric_phrases;
+pub mod person_name_cues;
 pub mod postprocess;
 pub mod scales;
 pub mod symbols;
@@ -24,6 +25,7 @@ pub use days::DaysData;
 pub use emoji::EmojiData;
 pub use models::{ModelSpec, ModelsData};
 pub use numeric_phrases::NumericPhrasesData;
+pub use person_name_cues::{PersonCueLists, PersonNameCuesData};
 pub use postprocess::{PostProcessData, PostProcessRuleSpec, PostProcessSpec};
 pub use scales::{ScaleEntry, ScalesData};
 pub use symbols::SymbolsData;
@@ -52,6 +54,8 @@ pub struct RulesData {
     pub emoji: EmojiData,
     /// 文脈の手がかり語 (context_cues.toml)
     pub context_cues: ContextCuesData,
+    /// 人名の専用経路の手がかり (敬称・肩書き)。 辞書のファイルが正で、 既定値は持たない
+    pub person_name_cues: PersonNameCuesData,
     /// 例外語句 (numeric_phrases.toml)
     pub numeric_phrases: NumericPhrasesData,
     /// 異体字マップ (compat_map.toml)

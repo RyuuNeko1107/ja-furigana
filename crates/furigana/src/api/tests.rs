@@ -889,7 +889,19 @@ role = \"name_sei\"
 ",
     )
     .unwrap();
-    let f = Furigana::builder().core_dict_dir(&dir).build().unwrap();
+    // 手がかり (敬称・肩書き) は辞書の rules が正。 lib には既定値が無いので fixture を置く
+    let rules = dir.with_extension("rules");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(
+        rules.join("person_name_cues.toml"),
+        include_str!("../../tests/fixtures/rules/person_name_cues.toml"),
+    )
+    .unwrap();
+    let f = Furigana::builder()
+        .rules_dir(&rules)
+        .core_dict_dir(&dir)
+        .build()
+        .unwrap();
     // 手がかり (選手) があれば人名の読み、 無ければ辞書の既定 (田んぼの水田)
     assert_eq!(f.to_hiragana("水田選手"), "みずたせんしゅ");
     assert_eq!(f.to_hiragana("広い水田"), "ひろいすいでん");
@@ -909,6 +921,8 @@ role = \"name_sei\"
         .alternatives
         .iter()
         .any(|x| x.reading == "スイデン"));
+    std::fs::remove_dir_all(&rules).ok();
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
