@@ -321,13 +321,23 @@ jobs:
           git diff "origin/${{ github.base_ref }}...HEAD" -- '*.rs' > pr.diff
           echo "--- changed Rust lines ---"; wc -l pr.diff
 
-      # 生存変異 (caught されなかった変異) があれば cargo-mutants は非0で fail。
+      # 生存変異 (caught されなかった変異) があれば cargo-mutants は終了コード 2 で fail。
       # diff に .rs 変更が無い (= dict/doc のみの PR) 場合は変異対象ゼロで即 pass。
+      #
+      # 終了コード 3 (= **タイムアウトだけ**。 生存変異は無い) は失敗にしない。 添字の加減算を壊す変異
+      # (`i += 1` → `i -= 1` など) はループが終わらなくなり、 テストが終わらない形で検出されている。
+      # 生存変異が 1 件でもあれば 2 になる (3 より優先) ので、 見逃しはこれまでどおり fail する。
       - name: Mutation test on changed lines
         run: |
+          rc=0
           cargo mutants --no-shuffle -j 2 --timeout 120 \
             --in-diff pr.diff \
-            --package ja-furigana
+            --package ja-furigana || rc=$?
+          if [ "$rc" -eq 3 ]; then
+            echo "::warning::タイムアウトした変異があります (生存変異は無し)。 mutants.out/ のレポートを確認してください"
+            exit 0
+          fi
+          exit "$rc"
 
       - name: Upload mutants report
         if: always()
