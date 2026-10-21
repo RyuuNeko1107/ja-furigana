@@ -109,11 +109,7 @@ impl PersonCues {
             return false;
         };
         // 敬称の後半だけの token (利さ|ん / ちゃ|ん / ち|ゃん)
-        if self
-            .honorifics
-            .iter()
-            .any(|h| h.ends_with(surface))
-        {
+        if self.honorifics.iter().any(|h| h.ends_with(surface)) {
             return true;
         }
         // 手がかり語で始まる (さん / ちゃん / くん / 氏 / 肩書き)

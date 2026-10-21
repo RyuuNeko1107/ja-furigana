@@ -785,5 +785,8 @@ fn role_is_inferred_from_rule_file_names() {
             "{name}"
         );
     }
-    assert_eq!(infer_role_from_path(&PathBuf::from("rules/unknown_table.toml")), None);
+    assert_eq!(
+        infer_role_from_path(&PathBuf::from("rules/unknown_table.toml")),
+        None
+    );
 }
