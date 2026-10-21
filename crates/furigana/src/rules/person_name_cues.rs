@@ -1,6 +1,6 @@
 //! 人名の手がかり (person_name_cues.toml)
 //!
-//! 人名の専用経路 ([`crate::scoring::person_names::PersonNamePass`]) が、 漢字の並びを人名と
+//! 人名の専用経路 (`crate::scoring::person_names::PersonNamePass`) が、 漢字の並びを人名と
 //! 判断する手がかりの語。 辞書側のファイルが **正** で、 lib には既定値を持たない
 //! (ファイルが無ければ手がかりは空 = 人名の専用経路は何もしない)。
 //!
