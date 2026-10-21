@@ -41,6 +41,8 @@ pub struct Furigana {
     /// `analyze()` で provider として使う。 rules を pre-compile して保持、
     /// 各 `analyze()` 呼び出しごとに regex compile しない。
     number_provider: NumberCandidateProvider,
+    /// 人名の専用経路の手がかり (辞書の `person_name_cues.toml` から構築時に作る)
+    person_cues: crate::scoring::person_names::PersonCues,
     /// 外来語 (alphabet surface) lookup map (★alpha.21 再統合)
     ///
     /// `core_dict_dirs` 配下の `role = "loanwords"` file から構築。
@@ -140,6 +142,7 @@ impl Furigana {
             &self.loanwords,
             &self.accent_lexicon,
             self.analyzer(),
+            &self.person_cues,
             self.estimate_accent,
             self.cost_engine,
         )

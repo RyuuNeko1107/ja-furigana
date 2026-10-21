@@ -47,7 +47,7 @@ crates/
 │       ├── lattice.rs        #   コスト lattice engine (opt-in 実験、 IPADIC 語/連接コスト + dict 候補)
 │       ├── boundary.rs       #   BoundaryAnalysis (b)(c) 漢字連続 penalty
 │       ├── format.rs         #   Entry / EntryDetail / MatchBlock / KanjiBlock の dict 受け入れ型
-│       ├── matcher.rs        #   MatchContext + matches_context() + classify_char() + resolve_readings
+│       ├── matcher.rs        #   MatchContext + matches_context() + classify_char() + resolve_readings (matcher/: tokens.rs = 文字種境界の pseudo-token 走査 / tests.rs)
 │       ├── special.rs        #   special/protect.rs = ProtectTokenProvider (URL/Email/絵文字/顔文字)、 special/alphabet.rs = AlphabetPassthroughProvider (loanwords lookup 込)
 │       ├── dict_bridge.rs    #   DictBridgeProvider (rich entry / unihan / [[kanji]] block、 先頭 2 文字の区間引き)
 │       ├── numbers/          #   NumberCandidateProvider (band 950)。 patterns.rs = regex 構築、 mod.rs = 候補種別ごとの try_* (日付 / 時刻 / scale / SI / 助数詞 / 分数 / 数詞慣用語句 / 記号 / 素数字)
@@ -57,7 +57,7 @@ crates/
 │       ├── phonojoin.rs      #   SokuonJoinPass (OOV 漢字複合語の促音便 join)
 │       ├── accent_estimate.rs #  rule-based accent 推定 (opt-in estimate_accent)
 │       ├── postpass.rs       #   ReadingPostPass trait + POST_PASSES 配列 (path 確定後の token 補正 seam)
-│       ├── lindera_fallback.rs #   LinderaFallbackProvider (band 50/150 safety net + gap-passthrough)
+│       ├── lindera_fallback.rs #   LinderaFallbackProvider (band 50/150 safety net + gap-passthrough) (lindera_fallback/: helpers.rs = 送り仮名・記号・連濁の判定 / tests.rs)
 │       ├── bracket.rs        #   bracket notation parse → AccentPhrase (0.2.0 core)
 │       ├── analyze.rs        #   AnalyzeResult / Token + analyze() / analyze_tokens()
 │       └── inspect.rs        #   dict gap 抽出等の inspection helper (公開 re-export)

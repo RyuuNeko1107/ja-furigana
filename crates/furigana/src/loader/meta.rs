@@ -163,6 +163,7 @@ pub(super) fn infer_role_from_path(path: &Path) -> Option<&'static str> {
         "units.toml" => Some("units"),
         "models.toml" => Some("models"),
         "context_cues.toml" => Some("context_cues"),
+        "person_name_cues.toml" => Some("person_name_cues"),
         "symbols.toml" => Some("symbols"),
         "emoji.toml" => Some("emoji"),
         "emoji_context.toml" => Some("emoji_context"),
