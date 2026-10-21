@@ -78,7 +78,9 @@ crates/
             ├── lookup.rs     # furigana lookup
             ├── repl.rs       # furigana repl (rustyline + Tab 補完 + 履歴)
             ├── dict.rs       # furigana dict {add,list,remove,import,pull}
-            ├── dict_pull.rs  #   pull 実装 (GitHub Releases + SHA-256 検証 + tar 展開)
+            ├── dict_pull.rs  #   pull の流れ (tag 解決 → 取得 → 検証 → 展開 → 入れ替え) + 上限値 + DictRejected
+            ├── dict_pull/    #     download.rs (HTTP・サイズ上限・SHA-256・tag 形式) / extract.rs (flat 展開・パス検査・
+            │                 #     新辞書の検証・入れ替え・排他 lock) / tests.rs
             └── serve/        # furigana serve (Axum HTTP)
                 ├── mod.rs    #   run() + Args + shutdown_signal + SIGHUP reload
                 ├── handlers.rs # /furigana / /healthz / /metrics / /admin/reload + do_reload
