@@ -14,7 +14,7 @@ crates/
 │   ├── analyzer.rs           # Lindera + IPADIC のラッパ (Smart engine の fallback として使用)
 │   ├── kana.rs               # ひら⇄カタ + 漢字判定。 kana/normalize.rs = 入力の正規化 (Unicode / 異体字 / 不可視文字)
 │   ├── char_class.rs         # 文字種 (CharType) 分類 + Unicode range 表の single home
-│   ├── accent_symbols.rs     # TTS 記号列 adapter (voicevox / aquestalk crate) の共有コア
+│   ├── accent_symbols.rs     # TTS 記号列 adapter (voicevox / aquestalk crate) の共有コア (accent_symbols/: alpha.rs = 英字語の綴り・ローマ字読み / tests.rs)
 │   ├── dict.rs               # surface→reading 辞書 (unihan 1 文字 default / rich entry = 熟語 + Detailed Entry / [[kanji]] block)
 │   ├── sanitize.rs           # 辞書 load 経路の sanitize layer (任意コード埋め込み防御 — 制御文字 / bidi override / zero-width / 過大長 reject)
 │   ├── tts.rs                # TTS 整形 (normalize_for_tts) + segment_for_tts
