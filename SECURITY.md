@@ -4,7 +4,7 @@ ja-furigana (lib `ja-furigana` + bin `ja-furigana-cli`) のセキュリティ報
 
 ## English summary
 
-- **Latest released version is the only supported one** while we are in `0.1.x` alpha.
+- **Only the latest released version is supported** while the crates are `0.x` (currently `0.6.x`).
 - **Report privately** via GitHub Security Advisories (`Security` → `Report a vulnerability`
   on https://github.com/RyuuNeko1107/ja-furigana). Email fallback: mail@ryuuneko.com.
 - **Do not** open a public issue / PR / discussion thread for unpatched issues.
@@ -12,16 +12,19 @@ ja-furigana (lib `ja-furigana` + bin `ja-furigana-cli`) のセキュリティ報
 
 ## サポート対象
 
-`0.1.x` は alpha のため、 セキュリティ修正は **常に最新タグ** にのみ提供。
-古い alpha 版を使用している場合は、 修正版に上げる。
+`0.x` の間、 セキュリティ修正は **常に最新のリリース** にのみ提供する (現在は `0.6.x`)。
+古い版を使っている場合は、 最新版に上げる。 修正は `CHANGELOG.md` の `Security` 欄に書く。
 
-| Version             | Supported          |
-| ------------------- | ------------------ |
-| latest `0.1.x`      | :white_check_mark: |
-| older `0.1.x` alpha | :x:                |
+| Version                     | Supported          |
+| --------------------------- | ------------------ |
+| latest release (`0.6.x`)    | :white_check_mark: |
+| older releases              | :x:                |
 
-`0.1.0` 安定版到達後は [SemVer](https://semver.org/lang/ja/) ポリシーに従い
+`1.0` に到達した後は [SemVer](https://semver.org/lang/ja/) ポリシーに従い
 直近 minor 系列に対してセキュリティ修正を提供する予定。
+
+辞書 ([ja-furigana-dict](https://github.com/RyuuNeko1107/ja-furigana-dict)) は日次で自動リリースされ、
+`furigana dict pull` は常に最新を取得する。
 
 ## 報告方法
 
