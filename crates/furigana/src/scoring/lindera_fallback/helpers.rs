@@ -20,12 +20,12 @@ pub(super) fn is_okurigana_form_voiced_after_noun_excluded(surface: &str) -> boo
         && !matches!(surface, "通り" | "越し" | "帰り" | "攻め" | "沿い" | "伝い")
 }
 
-/// 閉じ括弧・閉じ引用符 (この直後は直前の語句の続きになりやすい)
 /// 記号だけの token を途中で切ってよい字か (英数・かな・漢字・空白・制御文字以外)
 pub(super) fn is_split_symbol(c: char) -> bool {
     !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control()
 }
 
+/// 閉じ括弧・閉じ引用符 (この直後は直前の語句の続きになりやすい)
 pub(super) fn is_closing_symbol(c: char) -> bool {
     matches!(
         c,

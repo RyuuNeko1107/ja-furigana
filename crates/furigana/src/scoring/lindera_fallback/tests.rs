@@ -385,3 +385,71 @@ fn dead_end_does_not_fill_kanji_or_token_boundary() {
     p.dead_end_candidates_at(&ctx, "断".len(), &mut out);
     assert!(out.is_empty(), "漢字を含む残りは補わない: {out:?}");
 }
+
+// ─── helpers.rs の判定 (変異テストの見逃しを塞ぐ。 分割前から検証されていなかった) ───
+
+#[test]
+fn split_symbol_is_symbols_only() {
+    // 切ってよいのは記号 (英数・かな・漢字・空白・制御文字は不可)
+    for c in ['、', '「', '!', '%', '〜', '☆'] {
+        assert!(is_split_symbol(c), "{c:?} は記号");
+    }
+    for c in ['a', 'Z', '7', 'あ', 'カ', '漢'] {
+        assert!(!is_split_symbol(c), "{c:?} は英数・かな・漢字");
+    }
+    assert!(!is_split_symbol(' '), "空白");
+    assert!(!is_split_symbol('\u{3000}'), "全角空白");
+    assert!(!is_split_symbol('\u{0007}'), "制御文字");
+}
+
+#[test]
+fn closing_symbol_is_closers_only() {
+    for c in [
+        ')', '）', '」', '』', '】', ']', '］', '〉', '》', '〕', '"', '”', '’',
+    ] {
+        assert!(is_closing_symbol(c), "{c:?} は閉じ記号");
+    }
+    for c in ['(', '（', '「', '『', '【', '[', 'a', 'あ', '。'] {
+        assert!(!is_closing_symbol(c), "{c:?} は閉じ記号でない");
+    }
+}
+
+#[test]
+fn devoice_first_kana_maps_every_voiced_kana_to_its_plain_one() {
+    // 濁音 20 文字 (ガ行・ザ行・ダ行・バ行。 ヅ を含む) → 清音。 後ろは変えない
+    let table = [
+        ('ガ', 'カ'),
+        ('ギ', 'キ'),
+        ('グ', 'ク'),
+        ('ゲ', 'ケ'),
+        ('ゴ', 'コ'),
+        ('ザ', 'サ'),
+        ('ジ', 'シ'),
+        ('ズ', 'ス'),
+        ('ゼ', 'セ'),
+        ('ゾ', 'ソ'),
+        ('ダ', 'タ'),
+        ('ヂ', 'チ'),
+        ('ヅ', 'ツ'),
+        ('デ', 'テ'),
+        ('ド', 'ト'),
+        ('バ', 'ハ'),
+        ('ビ', 'ヒ'),
+        ('ブ', 'フ'),
+        ('ベ', 'ヘ'),
+        ('ボ', 'ホ'),
+    ];
+    for (voiced, plain) in table {
+        let input = format!("{voiced}カレ");
+        let expected = format!("{plain}カレ");
+        assert_eq!(devoice_first_kana(&input), Some(expected), "{voiced}");
+    }
+}
+
+#[test]
+fn devoice_first_kana_leaves_other_readings_alone() {
+    // 清音・半濁音・ひらがな・漢字・空文字は対象外 (None)
+    for r in ["カレ", "ツカレ", "パン", "がくせい", "漢字", "A", ""] {
+        assert_eq!(devoice_first_kana(r), None, "{r:?}");
+    }
+}
