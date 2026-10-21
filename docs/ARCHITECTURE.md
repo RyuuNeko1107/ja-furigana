@@ -47,7 +47,7 @@ crates/
 │       ├── lattice.rs        #   コスト lattice engine (opt-in 実験、 IPADIC 語/連接コスト + dict 候補)
 │       ├── boundary.rs       #   BoundaryAnalysis (b)(c) 漢字連続 penalty
 │       ├── format.rs         #   Entry / EntryDetail / MatchBlock / KanjiBlock の dict 受け入れ型
-│       ├── matcher.rs        #   MatchContext + matches_context() + classify_char() + resolve_readings
+│       ├── matcher.rs        #   MatchContext + matches_context() + classify_char() + resolve_readings (matcher/: tokens.rs = 文字種境界の pseudo-token 走査 / tests.rs)
 │       ├── special.rs        #   special/protect.rs = ProtectTokenProvider (URL/Email/絵文字/顔文字)、 special/alphabet.rs = AlphabetPassthroughProvider (loanwords lookup 込)
 │       ├── dict_bridge.rs    #   DictBridgeProvider (rich entry / unihan / [[kanji]] block、 先頭 2 文字の区間引き)
 │       ├── numbers/          #   NumberCandidateProvider (band 950)。 patterns.rs = regex 構築、 mod.rs = 候補種別ごとの try_* (日付 / 時刻 / scale / SI / 助数詞 / 分数 / 数詞慣用語句 / 記号 / 素数字)
