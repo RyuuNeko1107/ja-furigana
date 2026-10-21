@@ -687,3 +687,106 @@ fn load_rules_dir_rejects_v1_format() {
 fn supported_schema_versions_contains_v2() {
     assert!(SUPPORTED_SCHEMA_VERSIONS.contains(&"2"));
 }
+
+#[test]
+fn load_rules_dir_loads_and_merges_person_name_cues() {
+    let a = "[meta]
+schema_version = \"2\"
+role = \"person_name_cues\"
+
+[cues]
+honorifics = [\"さん\"]
+titles = [\"選手\"]
+";
+    let b = "[meta]
+schema_version = \"2\"
+role = \"person_name_cues\"
+
+[cues]
+honorifics = [\"さん\", \"くん\"]
+titles = [\"監督\"]
+compound_heads = [\"会\"]
+";
+    let dir = fresh_temp_dir("person_cues_ok");
+    // file 名からも role を推定できる
+    std::fs::write(dir.join("person_name_cues.toml"), a).unwrap();
+    std::fs::write(dir.join("more.toml"), b).unwrap();
+    let data = load_rules_dir(&dir).unwrap();
+    // 合算された語 (並びは file の読み込み順で、 結果には影響しない)
+    let sorted = |v: &Vec<String>| {
+        let mut v = v.clone();
+        v.sort();
+        v
+    };
+    assert_eq!(
+        sorted(&data.person_name_cues.cues.honorifics),
+        ["くん", "さん"]
+    );
+    assert_eq!(sorted(&data.person_name_cues.cues.titles), ["監督", "選手"]);
+    assert_eq!(data.person_name_cues.cues.compound_heads, ["会"]);
+    std::fs::remove_dir_all(&dir).ok();
+
+    // ファイルが無ければ空 (既定値は持たない)
+    let dir = fresh_temp_dir("person_cues_none");
+    let data = load_rules_dir(&dir).unwrap();
+    assert!(data.person_name_cues.cues.honorifics.is_empty());
+    assert!(data.person_name_cues.cues.titles.is_empty());
+    std::fs::remove_dir_all(&dir).ok();
+
+    // 書式が壊れていれば読み込みで弾く (空の語)
+    let bad = "[meta]
+schema_version = \"2\"
+role = \"person_name_cues\"
+
+[cues]
+titles = [\" \"]
+";
+    let dir = fresh_temp_dir("person_cues_bad");
+    std::fs::write(dir.join("person_name_cues.toml"), bad).unwrap();
+    assert!(load_rules_dir(&dir).is_err());
+    std::fs::remove_dir_all(&dir).ok();
+
+    // 複数 file に分けて 1 つの表の上限 (1,000 語) を超える書き方も、 合算後に弾く
+    let dir = fresh_temp_dir("person_cues_many");
+    for n in 0..2 {
+        let words: Vec<String> = (0..600).map(|i| format!("\"語{n}_{i}\"")).collect();
+        std::fs::write(
+            dir.join(format!("part{n}.toml")),
+            format!(
+                "[meta]
+schema_version = \"2\"
+role = \"person_name_cues\"
+
+[cues]
+titles = [{}]
+",
+                words.join(", ")
+            ),
+        )
+        .unwrap();
+    }
+    assert!(load_rules_dir(&dir).is_err());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// ファイル名から role を推定する対応表 (ディレクトリ構造に依存しない)。 辞書側のファイル名が role に結びつく
+#[test]
+fn role_is_inferred_from_rule_file_names() {
+    use super::meta::infer_role_from_path;
+    for (name, role) in [
+        ("context_cues.toml", "context_cues"),
+        ("person_name_cues.toml", "person_name_cues"),
+        ("postprocess.toml", "postprocess"),
+        ("models.toml", "models"),
+    ] {
+        assert_eq!(
+            infer_role_from_path(&PathBuf::from("rules").join("text").join(name)),
+            Some(role),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        infer_role_from_path(&PathBuf::from("rules/unknown_table.toml")),
+        None
+    );
+}

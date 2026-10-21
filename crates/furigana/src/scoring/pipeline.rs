@@ -50,6 +50,8 @@ pub struct Pipeline<'a> {
     /// アクセント専用の表 (role = "accent")。 post-pass の後、 rule 推定の前に当てる
     accent_lexicon: &'a crate::scoring::accent_lexicon::AccentLexicon,
     analyzer: &'a Analyzer,
+    /// 人名の専用経路の手がかり (辞書の person_name_cues.toml から構築時に作った表)
+    person_cues: &'a crate::scoring::person_names::PersonCues,
     /// コスト lattice engine (ADR-0011) の opt-in flag。
     cost_engine: bool,
     /// rule-based accent 推定の opt-in flag (ADR-0007)。 post-pass 適用後に
@@ -61,12 +63,14 @@ pub struct Pipeline<'a> {
 
 impl<'a> Pipeline<'a> {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         dict: &'a Dict,
         number_provider: &'a NumberCandidateProvider,
         loanwords: &'a Arc<HashMap<String, String>>,
         accent_lexicon: &'a crate::scoring::accent_lexicon::AccentLexicon,
         analyzer: &'a Analyzer,
+        person_cues: &'a crate::scoring::person_names::PersonCues,
         estimate_accent: bool,
         cost_engine: bool,
     ) -> Self {
@@ -76,6 +80,7 @@ impl<'a> Pipeline<'a> {
             loanwords,
             accent_lexicon,
             analyzer,
+            person_cues,
             estimate_accent,
             cost_engine,
             name_hint: crate::scoring::person_names::NameHint::Auto,
@@ -97,7 +102,13 @@ impl<'a> Pipeline<'a> {
             .iter()
             .map(|t| (t.range.start, t.range.end))
             .collect();
-        postpass::apply_all(tokens, self.dict, self.analyzer, self.name_hint);
+        postpass::apply_all(
+            tokens,
+            self.dict,
+            self.analyzer,
+            self.person_cues,
+            self.name_hint,
+        );
         for t in tokens.iter_mut() {
             if before.binary_search(&(t.range.start, t.range.end)).is_err() {
                 t.band = 50;
@@ -114,7 +125,13 @@ impl<'a> Pipeline<'a> {
     #[must_use]
     pub fn tokens(&self, input: &str) -> Vec<Token> {
         let mut tokens = self.with_providers(input, run_analyze_tokens);
-        postpass::apply_all(&mut tokens, self.dict, self.analyzer, self.name_hint);
+        postpass::apply_all(
+            &mut tokens,
+            self.dict,
+            self.analyzer,
+            self.person_cues,
+            self.name_hint,
+        );
         tokens
     }
 

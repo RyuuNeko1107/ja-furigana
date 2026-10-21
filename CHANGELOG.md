@@ -12,6 +12,8 @@
 
 ### Security
 
+- **依存の脆弱性 2 件を、 修正版に上げた** (RUSTSEC-2026-0382 / 0383)。 `rustls-webpki` 0.103.15 → 0.103.16 (配布が失効させた中間証明書を受け入れうる)、 `webpki-root-certs` 1.0.7 → 1.0.10 (失効させた emSign の中間証明書を信頼する)。 `Cargo.lock` だけの変更で、 互換版への更新。 辞書の取得 (`dict pull` / `serve` の自動更新) の TLS 検証に関わる
+
 - **`dict pull` が、 展開した新辞書を build で検証してから入れ替える** (セキュリティ監査 REPORT-035)。 これまでは、 SHA-256 が合っていても中身が使えない配布物 (壊れた TOML・schema 違反・中身が欠けた tarball) をそのまま入れ替えてしまい、 稼働中の辞書が壊れた。 いまは入れ替えの前に、 新辞書を実際に build し (rules / 辞書が読めること)、 辞書の件数が下限 (1 万件。 実際の配布物は約 10 万件) に満たなければ **入れ替えずに中止**する。 稼働中の辞書は触られない。 検査するのは配布物だけで、 `user/` と `overrides.toml` の不備はこの pull のせいにしない
   - `serve` の自動更新は、 使えないと判った tag を **次の tag が出るまで取り直さない** (これまでは interval ごとに数十 MB を取り直していた)。 ネットワークの失敗のような、 やり直せば直る失敗は従来どおり再試行する
 - **GitHub Actions を commit SHA で固定した** (セキュリティ監査 REPORT-020 の残り)。 `uses: owner/repo@v6` のようなタグ指定は、 タグが付け替えられると別のコードが走る (供給網攻撃)。 11 個の action を 40 桁の SHA に固定し、 元のタグをコメントで残した (`@<sha> # v6`)。 Dependabot (`github-actions`) はこのコメントを見て SHA ごと更新する。 `dtolnay/rust-toolchain@stable` は ref 名から toolchain を決める仕組みなので、 SHA 固定に合わせて `toolchain: stable` を明示した (12 箇所)
@@ -38,6 +40,10 @@
 - **Dockerfile**: 非 root (`distroless/cc-debian12:nonroot`、 uid 65532) で実行する。 ベース画像を digest で固定
   (更新は Dependabot の docker)。 `cargo build` を `--locked` にし、 配布する `furigana` bin だけを build する。
   **bind mount で `/data` を渡している場合は、 ホスト側を uid 65532 が書ける権限にする** (名前付き volume は自動で合う)。
+
+### Changed
+
+- **人名の手がかり (敬称・肩書き・名にしない語・複合語の頭の字) を辞書側のファイルに出した** (`rules/text/person_name_cues.toml`、 role = `person_name_cues`)。 これまで Rust に固定されていて、 直すたびに lib のリリースが要った。 **lib には既定値を持たない**: 辞書にこのファイルが無いと、 手がかりが空になり人名の専用経路は何もしない。 **このファイルを含む辞書 (ja-furigana-dict の対応する PR) を先に入れてから、 この lib に更新する**こと。 辞書のファイルに今の値を書いた場合、 出力は変わらない (人名の文 3,434 件で前後が完全一致)。 語は 1 語 16 字・1 つの表 1,000 語まで、 空・空白・制御文字は読み込みで弾く。 設計: `docs/PROPOSALS/dict-driven-rules.md`
 
 ### Added
 

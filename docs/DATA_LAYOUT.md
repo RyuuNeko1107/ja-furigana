@@ -33,6 +33,7 @@ default では **実行ファイルと同じディレクトリ**:
     ├── emoji_context.toml         # 絵文字の文脈読み ([[entries."X".match]]: 直前 / 直後 / 文中の語 / 発言がその絵文字だけ)
     ├── models.toml                # 型番パターン (正規表現 + 雛形。 Ryzen 7 5800X3D / RTX 4070 Ti / GPT-4o 等)
     ├── context_cues.toml          # N/M が日付か分数かを決める手がかりの語、 伏せ字の敬称
+    ├── person_name_cues.toml      # 人名の専用経路の手がかり (敬称・肩書き・名にしない語・複合語の頭の字)。 lib に既定値は無い
     ├── numeric_phrases.toml       # 慣用語句 (二十歳→ハタチ 等)
     ├── counters/*.toml            # 助数詞ルール (年度 / 時間半 含む 7+ ファイル)
     ├── postprocess.toml           # 後処理 regex 置換

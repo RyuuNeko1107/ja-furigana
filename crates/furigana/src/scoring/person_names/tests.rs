@@ -1,7 +1,126 @@
-use super::cues::may_have_cue;
-use super::cues::token_may_be_cue;
 use super::*;
 use std::ops::Range;
+
+/// テスト用の手がかり。 辞書の `person_name_cues.toml` と同じ値の fixture から作る
+/// (lib には既定値が無いので、 テストも辞書のファイルを読む)。
+fn test_cues() -> &'static PersonCues {
+    static CUES: std::sync::OnceLock<PersonCues> = std::sync::OnceLock::new();
+    CUES.get_or_init(|| {
+        let data: crate::rules::PersonNameCuesData = toml::from_str(include_str!(
+            "../../../tests/fixtures/rules/person_name_cues.toml"
+        ))
+        .unwrap();
+        data.validate().unwrap();
+        PersonCues::from_data(&data)
+    })
+}
+
+/// 辞書の `[cues]` 文字列から手がかりを作る (辞書で語を足す / 削る / 空にするテスト用)
+fn cues_from(body: &str) -> PersonCues {
+    let data: crate::rules::PersonNameCuesData = toml::from_str(&format!(
+        "[cues]
+{body}"
+    ))
+    .unwrap();
+    data.validate().unwrap();
+    PersonCues::from_data(&data)
+}
+
+fn suden_tokens() -> Vec<Token> {
+    vec![
+        token("水田", "スイデン", 0..6),
+        token("選手", "センシュ", 6..12),
+    ]
+}
+
+#[test]
+fn empty_cues_make_the_pass_do_nothing() {
+    // 辞書にファイルが無い = 手がかりが空 = 人名の専用経路は何もしない
+    let d = dict();
+    let cues = PersonCues::default();
+    let mut t = suden_tokens();
+    PersonNamePass::new(&d, &cues).apply(&mut t);
+    assert_eq!(t[0].reading, "スイデン");
+    assert!(!t[0].is_name);
+    assert!(!cues.token_may_be_cue("選手"));
+    assert!(!cues.token_may_be_cue("さん"));
+    assert_eq!(cues.cue_score("選手"), 0);
+}
+
+#[test]
+fn dictionary_can_remove_a_title() {
+    // 肩書きの表から 選手 を削ると、 水田 | 選手 は人名にならない
+    let d = dict();
+    let without = cues_from(
+        "honorifics = [\"さん\"]
+titles = [\"監督\"]",
+    );
+    let mut t = suden_tokens();
+    PersonNamePass::new(&d, &without).apply(&mut t);
+    assert_eq!(t[0].reading, "スイデン");
+    // 残した 監督 は手がかりのまま
+    let mut t = vec![
+        token("水田", "スイデン", 0..6),
+        token("監督", "カントク", 6..12),
+    ];
+    PersonNamePass::new(&d, &without).apply(&mut t);
+    assert_eq!(t[0].reading, "ミズタ");
+}
+
+#[test]
+fn dictionary_can_add_a_title_and_an_honorific() {
+    let d = dict();
+    let base = cues_from(
+        "honorifics = [\"さん\"]
+titles = [\"監督\"]",
+    );
+    let more = cues_from(
+        "honorifics = [\"さん\", \"殿\"]
+titles = [\"監督\", \"オーナー\"]",
+    );
+    let owner = || {
+        vec![
+            token("水田", "スイデン", 0..6),
+            token("オーナー", "オーナー", 6..18),
+        ]
+    };
+    let mut t = owner();
+    PersonNamePass::new(&d, &base).apply(&mut t);
+    assert_eq!(t[0].reading, "スイデン");
+    let mut t = owner();
+    PersonNamePass::new(&d, &more).apply(&mut t);
+    assert_eq!(t[0].reading, "ミズタ");
+    // 敬称 殿 も同様 (敬称は肩書きより強い手がかり)
+    let mut t = vec![token("水田", "スイデン", 0..6), token("殿", "トノ", 6..9)];
+    PersonNamePass::new(&d, &base).apply(&mut t);
+    assert_eq!(t[0].reading, "スイデン");
+    let mut t = vec![token("水田", "スイデン", 0..6), token("殿", "トノ", 6..9)];
+    PersonNamePass::new(&d, &more).apply(&mut t);
+    assert_eq!(t[0].reading, "ミズタ");
+    assert_eq!(more.cue_score("殿"), 2);
+    assert_eq!(more.cue_score("オーナー"), 1);
+}
+
+#[test]
+fn dictionary_controls_not_given_names_and_compound_heads() {
+    let d = dict();
+    // compound_heads が空なら 選手 + 会 でも手がかりのまま。 あれば別の複合語として手がかりにしない
+    let t = chain(&[("水田", "スイデン"), ("選手", "センシュ"), ("会", "カイ")]);
+    let with = cues_from(
+        "titles = [\"選手\"]
+compound_heads = [\"会\"]",
+    );
+    let without = cues_from("titles = [\"選手\"]");
+    assert!(with.title_continues_into_compound(&t, 1));
+    assert!(!without.title_continues_into_compound(&t, 1));
+    // 敬称の後半だけの token (利さ|ん) の前判定は敬称の表から導く
+    let c = cues_from("honorifics = [\"さん\", \"ちゃん\"]");
+    assert!(c.token_may_be_cue("ん"));
+    assert!(c.token_may_be_cue("ゃん"));
+    assert!(!cues_from("honorifics = [\"氏\"]").token_may_be_cue("ん"));
+    assert!(c.token_may_be_cue("原さん"));
+    let _ = d;
+}
 
 fn token(surface: &str, reading: &str, range: Range<usize>) -> Token {
     Token {
@@ -35,7 +154,7 @@ fn surname_with_title_is_read_as_name() {
         token("選手", "センシュ", 6..12),
         token("が", "ガ", 12..15),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "ミズタ");
     assert!(t[0].is_name);
     assert_eq!(t[0].alternatives[0].reading, "スイデン");
@@ -72,7 +191,7 @@ fn several_names_in_one_sentence_are_all_converted() {
         ("環奈", "タマキナ"),
         ("さん", "サン"),
     ]);
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     let surfaces: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
     assert_eq!(
         surfaces,
@@ -108,7 +227,7 @@ fn surname_and_given_with_honorific_is_split() {
         token("一郎", "イチロウ", 9..15),
         token("さん", "サン", 15..21),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     let surfaces: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
     assert_eq!(surfaces, ["水田", "雄一郎", "さん"]);
     assert_eq!(t[0].reading, "ミズタ");
@@ -125,7 +244,7 @@ fn no_cue_leaves_common_word_alone() {
         token("水", "ミズ", 9..12),
     ];
     let before: Vec<String> = t.iter().map(|x| x.reading.clone()).collect();
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     let after: Vec<String> = t.iter().map(|x| x.reading.clone()).collect();
     assert_eq!(before, after);
 }
@@ -141,7 +260,7 @@ fn common_word_given_name_is_not_a_name() {
         token("新人", "シンジン", 6..12),
         token("さん", "サン", 12..18),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[1].reading, "シンジン");
 }
 
@@ -155,7 +274,7 @@ fn title_followed_by_a_group_noun_is_not_a_cue() {
         token("医師", "イシ", 9..15),
         token("会", "カイ", 15..18),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[1].reading, "シ");
 }
 
@@ -167,7 +286,7 @@ fn compound_title_is_not_a_cue() {
         token("水田", "スイデン", 0..6),
         token("選手権", "センシュケン", 6..15),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "スイデン");
 }
 
@@ -176,7 +295,7 @@ fn single_char_surname_alone_is_not_converted() {
     let d = dict();
     // 鳥さん は一般語と区別できないので触らない
     let mut t = vec![token("鳥", "チョウ", 0..3), token("さん", "サン", 3..9)];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "チョウ");
 }
 
@@ -190,7 +309,7 @@ fn full_name_in_dict_wins_over_tables() {
         token("江川卓", "エガワスグル", 0..9),
         token("投手", "トウシュ", 9..15),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "エガワスグル");
     assert_eq!(t.len(), 2);
 }
@@ -203,7 +322,7 @@ fn dzu_zu_difference_alone_is_not_replaced() {
         token("望月", "モチヅキ", 0..6),
         token("先生", "センセイ", 6..12),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "モチヅキ", "づ/ず だけの違いは現行を残す");
     assert!(!t[0].is_name);
 }
@@ -215,7 +334,7 @@ fn two_char_run_is_surname_only_not_split() {
     d.insert_name(false, "保", "たもつ");
     d.insert_name(true, "久保", "くぼ");
     let mut t = vec![token("久保", "クボ", 0..6), token("くん", "クン", 6..12)];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "クボ");
     assert_eq!(t.len(), 2);
 }
@@ -223,7 +342,7 @@ fn two_char_run_is_surname_only_not_split() {
 #[test]
 fn name_hint_reads_without_cue_and_allows_single_char_surname() {
     let d = dict();
-    let p = PersonNamePass::new(&d).with_hint(NameHint::Name);
+    let p = PersonNamePass::new(&d, test_cues()).with_hint(NameHint::Name);
     let mut t = vec![
         token("水田", "スイデン", 0..6),
         token("雄一郎", "ユウイチロウ", 6..15),
@@ -249,7 +368,7 @@ fn name_hint_reads_without_cue_and_allows_single_char_surname() {
 #[test]
 fn not_name_hint_disables_the_pass() {
     let d = dict();
-    let p = PersonNamePass::new(&d).with_hint(NameHint::NotName);
+    let p = PersonNamePass::new(&d, test_cues()).with_hint(NameHint::NotName);
     let mut t = vec![
         token("水田", "スイデン", 0..6),
         token("選手", "センシュ", 6..12),
@@ -269,7 +388,7 @@ fn whole_three_char_surname_beats_surname_plus_given_split() {
         token("原", "ハラ", 6..9),
         token("さん", "サン", 9..15),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].surface, "太田原");
     assert_eq!(t[0].reading, "オオタワラ");
 }
@@ -283,7 +402,7 @@ fn merged_honorific_token_is_split_when_table_hits() {
         token("太田", "オオタ", 0..6),
         token("原さん", "ハラサン", 6..15),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     let s: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
     assert_eq!(s, ["太田原", "さん"]);
     assert_eq!(t[0].reading, "オオタワラ");
@@ -302,7 +421,7 @@ fn honorific_straddling_a_kana_tail_is_repaired() {
         token("利さ", "リサ", 9..16),
         token("ん", "ン", 16..19),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     let s: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
     assert_eq!(s, ["田中", "弘利", "さん"]);
     assert_eq!(t[1].reading, "ヒロトシ");
@@ -315,7 +434,7 @@ fn merged_honorific_token_untouched_without_table_hit() {
         token("太田", "オオタ", 0..6),
         token("原さん", "ハラサン", 6..15),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t.len(), 2);
     assert_eq!(t[1].surface, "原さん");
 }
@@ -325,7 +444,7 @@ fn shop_ya_is_not_a_name() {
     let mut d = dict();
     d.insert_name(true, "本屋", "もとや");
     let mut t = vec![token("本屋", "ホンヤ", 0..6), token("さん", "サン", 6..12)];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "ホンヤ");
 }
 
@@ -334,7 +453,7 @@ fn sama_is_not_a_cue() {
     let mut d = dict();
     d.insert_name(true, "王子", "おうし");
     let mut t = vec![token("王子", "オウジ", 0..6), token("様", "サマ", 6..9)];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "オウジ");
 }
 
@@ -346,7 +465,7 @@ fn already_correct_is_untouched() {
         token("環奈", "カンナ", 6..12),
         token("さん", "サン", 12..18),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert!(!t[0].is_name, "読みも境界も同じなら触らない");
     assert!(t[0].alternatives.is_empty());
 }
@@ -358,7 +477,7 @@ fn name_hint_reads_consecutive_kanji_tokens_as_one_full_name() {
     // Name ヒントの手がかりは 「漢字 token 列の終わり」。 水田 | 雄一郎 の間 (次も漢字) は手がかりではなく、
     // 姓 + 名 を 1 回で組み直す (alternatives に 2 token 分の元の読みが残る)。
     let d = dict();
-    let p = PersonNamePass::new(&d).with_hint(NameHint::Name);
+    let p = PersonNamePass::new(&d, test_cues()).with_hint(NameHint::Name);
     let mut t = vec![
         token("水田", "スイデン", 0..6),
         token("雄一郎", "ユウイチロウ", 6..15),
@@ -382,7 +501,7 @@ fn replaced_ranges_follow_the_token_start_offset() {
         token("雄一郎", "ユウイチロウ", 9..18),
         token("さん", "サン", 18..24),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     let s: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
     assert_eq!(s, ["の", "水田", "雄一郎", "さん"]);
     assert_eq!(t[1].range, 3..9);
@@ -394,7 +513,7 @@ fn replaced_ranges_follow_the_token_start_offset() {
         token("水田", "スイデン", 3..9),
         token("選手", "センシュ", 9..15),
     ];
-    PersonNamePass::new(&d).apply(&mut u);
+    PersonNamePass::new(&d, test_cues()).apply(&mut u);
     assert_eq!(u[1].range, 3..9);
     assert_eq!(u[1].reading, "ミズタ");
 }
@@ -412,7 +531,7 @@ fn longest_run_with_given_name_wins_up_to_seven_chars() {
         token("大二郎太", "ダイジロウタ", 9..21),
         token("さん", "サン", 21..27),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     let s: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
     assert_eq!(s, ["東小野", "大二郎太", "さん"]);
     assert_eq!(t[0].reading, "ヒガシオノ");
@@ -430,7 +549,7 @@ fn run_longer_than_seven_chars_is_not_looked_up() {
         token("伍陸漆捌", "ゴ", 12..24),
         token("さん", "サン", 24..30),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t.len(), 3, "8 字の列は姓の表にあっても引かない");
     assert!(!t[0].is_name);
     assert_eq!(t[0].reading, "イチ");
@@ -449,7 +568,7 @@ fn surname_given_beats_longer_surname_only_run() {
         token("太", "タ", 9..12),
         token("さん", "サン", 12..18),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     let s: Vec<&str> = t.iter().map(|x| x.surface.as_str()).collect();
     assert_eq!(s, ["西", "田中", "太", "さん"]);
     assert!(!t[0].is_name);
@@ -468,7 +587,7 @@ fn single_three_char_token_is_not_resplit_into_surname_and_given() {
         token("北海道", "ホッカイドウ", 3..12),
         token("さん", "サン", 12..18),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t.len(), 3);
     assert_eq!(t[1].surface, "北海道");
     assert_eq!(t[1].reading, "ホッカイドウ");
@@ -478,11 +597,11 @@ fn single_three_char_token_is_not_resplit_into_surname_and_given() {
         token("北海道", "ホッカイドウ", 0..9),
         token("さん", "サン", 9..15),
     ];
-    PersonNamePass::new(&d).apply(&mut u);
+    PersonNamePass::new(&d, test_cues()).apply(&mut u);
     assert_eq!(u.len(), 2);
     assert_eq!(u[0].surface, "北海道");
     // 人名と言われている時 (Name) は割る
-    let p = PersonNamePass::new(&d).with_hint(NameHint::Name);
+    let p = PersonNamePass::new(&d, test_cues()).with_hint(NameHint::Name);
     let mut n = vec![token("北海道", "ホッカイドウ", 0..9)];
     p.apply(&mut n);
     let s: Vec<&str> = n.iter().map(|x| x.surface.as_str()).collect();
@@ -502,7 +621,7 @@ fn three_char_first_token_of_multi_token_name_is_still_corrected() {
         token("卓", "スグル", 9..12),
         token("さん", "サン", 12..18),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[0].reading, "サウダ");
     assert_eq!(t[1].reading, "タク");
     assert!(t[0].is_name && t[1].is_name);
@@ -585,33 +704,33 @@ fn parse_table_skips_non_entry_lines_and_empty_parts() {
 #[test]
 fn token_may_be_cue_is_a_precise_prefilter() {
     // 手がかりでない
-    assert!(!token_may_be_cue(""));
-    assert!(!token_may_be_cue("に"));
-    assert!(!token_may_be_cue("水田"));
+    assert!(!test_cues().token_may_be_cue(""));
+    assert!(!test_cues().token_may_be_cue("に"));
+    assert!(!test_cues().token_may_be_cue("水田"));
     // 敬称の後半だけの token
-    assert!(token_may_be_cue("ん"));
-    assert!(token_may_be_cue("ゃん"));
+    assert!(test_cues().token_may_be_cue("ん"));
+    assert!(test_cues().token_may_be_cue("ゃん"));
     // 手がかり語で始まる
-    assert!(token_may_be_cue("さん"));
-    assert!(token_may_be_cue("選手"));
+    assert!(test_cues().token_may_be_cue("さん"));
+    assert!(test_cues().token_may_be_cue("選手"));
     // 手がかり語の先頭の字で始まるだけ (敬称でも肩書きの頭でもない) では通さない
-    assert!(!token_may_be_cue("さい"));
+    assert!(!test_cues().token_may_be_cue("さい"));
     // 敬称で終わる
-    assert!(token_may_be_cue("原さん"));
-    assert!(token_may_be_cue("原氏"));
+    assert!(test_cues().token_may_be_cue("原さん"));
+    assert!(test_cues().token_may_be_cue("原氏"));
     // ん で終わるだけでは通さない
-    assert!(!token_may_be_cue("あん"));
+    assert!(!test_cues().token_may_be_cue("あん"));
 }
 
 #[test]
 fn may_have_cue_depends_on_tokens() {
     let none = vec![token("水田", "スイデン", 0..6), token("に", "ニ", 6..9)];
-    assert!(!may_have_cue(&none));
+    assert!(!test_cues().may_have_cue(&none));
     let some = vec![
         token("水田", "スイデン", 0..6),
         token("さん", "サン", 6..12),
     ];
-    assert!(may_have_cue(&some));
+    assert!(test_cues().may_have_cue(&some));
 }
 
 #[test]
@@ -621,7 +740,7 @@ fn parse_boundaries_of_given_name_length() {
     d.insert_name(false, "雄", "ゆう");
     d.insert_name(false, "雄一郎太", "ゆういちろうた");
     d.insert_name(false, "雄一郎太朗", "ゆういちろうたろう");
-    let p = PersonNamePass::new(&d);
+    let p = PersonNamePass::new(&d, test_cues());
     // 3 字 (姓 2 + 名 1) から姓 + 名に割る
     let r = p.parse("水田雄").unwrap();
     assert_eq!(r.sei, "水田");
@@ -646,7 +765,7 @@ fn dict_full_name_is_not_resplit_across_tokens() {
         token("卓", "スグル", 6..9),
         token("投手", "トウシュ", 9..15),
     ];
-    PersonNamePass::new(&d).apply(&mut t);
+    PersonNamePass::new(&d, test_cues()).apply(&mut t);
     assert_eq!(t[1].reading, "スグル");
     assert_eq!(t.len(), 3);
 }
@@ -660,7 +779,7 @@ fn straddle_repair_fixes_ranges_and_copies_from_honorific_token() {
         with_band(token("利さ", "リサ", 9..15), 3),
         with_band(token("ん", "ン", 15..18), 7),
     ];
-    PersonNamePass::new(&d).repair_kana_straddle(&mut t);
+    PersonNamePass::new(&d, test_cues()).repair_kana_straddle(&mut t);
     assert_eq!(surfaces(&t), ["田中", "弘", "利", "さん"]);
     assert_eq!(t[2].reading, "リ");
     assert_eq!(t[2].range, 9..12);
@@ -679,7 +798,7 @@ fn straddle_repair_at_index_one_and_skip_ahead() {
         token("弘利さ", "ヒロトシサ", 6..15),
         token("ん", "ン", 15..18),
     ];
-    PersonNamePass::new(&d).repair_kana_straddle(&mut t);
+    PersonNamePass::new(&d, test_cues()).repair_kana_straddle(&mut t);
     assert_eq!(surfaces(&t), ["田中", "弘利", "さん"]);
     assert_eq!(t[1].reading, "ヒロトシ");
     // 1 つ直したあと、 すぐ後ろの (2 token 先以降の) 別の箇所も直す
@@ -694,7 +813,7 @@ fn straddle_repair_at_index_one_and_skip_ahead() {
         token("弘利さ", "ヒロトシサ", 30..39),
         token("ん", "ン", 39..42),
     ];
-    PersonNamePass::new(&d).repair_kana_straddle(&mut t);
+    PersonNamePass::new(&d, test_cues()).repair_kana_straddle(&mut t);
     assert_eq!(
         surfaces(&t),
         ["を", "を", "田中", "弘", "利", "さん", "田中", "弘利", "さん"]
@@ -711,7 +830,7 @@ fn straddle_repair_leaves_unmatched_cases_alone() {
         token("利さ", "トシ", 9..15),
         token("ん", "ン", 15..18),
     ];
-    PersonNamePass::new(&d).repair_kana_straddle(&mut t);
+    PersonNamePass::new(&d, test_cues()).repair_kana_straddle(&mut t);
     assert_eq!(surfaces(&t), ["田中", "弘", "利さ", "ん"]);
     // 表に当たらない
     let mut t = vec![
@@ -719,7 +838,7 @@ fn straddle_repair_leaves_unmatched_cases_alone() {
         token("利さ", "リサ", 3..9),
         token("ん", "ン", 9..12),
     ];
-    PersonNamePass::new(&d).repair_kana_straddle(&mut t);
+    PersonNamePass::new(&d, test_cues()).repair_kana_straddle(&mut t);
     assert_eq!(surfaces(&t), ["森", "利さ", "ん"]);
     // 次の token が敬称の続きでなければ、 かなの頭が敬称の頭と違っていても直さない
     let mut t = vec![
@@ -728,7 +847,7 @@ fn straddle_repair_leaves_unmatched_cases_alone() {
         token("利あ", "リア", 9..15),
         token("ん", "ン", 15..18),
     ];
-    PersonNamePass::new(&d).repair_kana_straddle(&mut t);
+    PersonNamePass::new(&d, test_cues()).repair_kana_straddle(&mut t);
     assert_eq!(surfaces(&t), ["田中", "弘", "利あ", "ん"]);
     // 敬称が丸ごと token に入っている時 (続きの token は空) は 「またぎ」 ではない
     let mut t = vec![
@@ -737,7 +856,7 @@ fn straddle_repair_leaves_unmatched_cases_alone() {
         token("利さん", "リサン", 9..18),
         token("", "", 18..18),
     ];
-    PersonNamePass::new(&d).repair_kana_straddle(&mut t);
+    PersonNamePass::new(&d, test_cues()).repair_kana_straddle(&mut t);
     assert_eq!(surfaces(&t), ["田中", "弘", "利さん", ""]);
 }
 
@@ -751,7 +870,7 @@ fn straddle_repair_allows_exactly_max_run_chars() {
         token("太さ", "タサ", 18..24),
         token("ん", "ン", 24..27),
     ];
-    PersonNamePass::new(&d).repair_kana_straddle(&mut t);
+    PersonNamePass::new(&d, test_cues()).repair_kana_straddle(&mut t);
     assert_eq!(surfaces(&t), ["三津谷", "雄一郎", "太", "さん"]);
 }
 
@@ -763,7 +882,7 @@ fn merged_honorific_split_fixes_ranges() {
         with_band(token("弘", "ヒロ", 6..9), 2),
         with_band(token("利さん", "リサン", 9..18), 3),
     ];
-    PersonNamePass::new(&d).split_merged_honorific(&mut t);
+    PersonNamePass::new(&d, test_cues()).split_merged_honorific(&mut t);
     assert_eq!(surfaces(&t), ["田中", "弘", "利", "さん"]);
     assert_eq!(t[2].reading, "リ");
     assert_eq!(t[2].range, 9..12);
@@ -783,7 +902,7 @@ fn merged_honorific_split_continues_past_a_split() {
         token("田中", "タナカ", 24..30),
         token("弘利さん", "ヒロトシサン", 30..42),
     ];
-    PersonNamePass::new(&d).split_merged_honorific(&mut t);
+    PersonNamePass::new(&d, test_cues()).split_merged_honorific(&mut t);
     assert_eq!(
         surfaces(&t),
         ["を", "を", "田中", "弘", "利", "さん", "田中", "弘利", "さん"]
@@ -799,11 +918,11 @@ fn merged_honorific_split_skips_when_reading_or_table_mismatch() {
         token("弘", "ヒロ", 6..9),
         token("利さん", "トシ", 9..18),
     ];
-    PersonNamePass::new(&d).split_merged_honorific(&mut t);
+    PersonNamePass::new(&d, test_cues()).split_merged_honorific(&mut t);
     assert_eq!(surfaces(&t), ["田中", "弘", "利さん"]);
     // 表に当たらない
     let mut t = vec![token("森", "モリ", 0..3), token("利さん", "リサン", 3..12)];
-    PersonNamePass::new(&d).split_merged_honorific(&mut t);
+    PersonNamePass::new(&d, test_cues()).split_merged_honorific(&mut t);
     assert_eq!(surfaces(&t), ["森", "利さん"]);
 }
 
@@ -816,6 +935,6 @@ fn merged_honorific_split_allows_exactly_max_run_chars() {
         token("雄一郎", "ユウイチロウ", 9..18),
         token("太さん", "タサン", 18..27),
     ];
-    PersonNamePass::new(&d).split_merged_honorific(&mut t);
+    PersonNamePass::new(&d, test_cues()).split_merged_honorific(&mut t);
     assert_eq!(surfaces(&t), ["三津谷", "雄一郎", "太", "さん"]);
 }
