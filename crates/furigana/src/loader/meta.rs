@@ -211,7 +211,7 @@ pub(super) fn infer_dict_role_from_path(path: &Path) -> Option<&'static str> {
 /// dict / rule 系 file の role を `[meta] role` から取得、 失敗時は path 推定。
 ///
 /// `parse_meta_role` で `[meta] role` を読み、 無ければ
-/// [`infer_role_from_path`] (rules) → [`infer_dict_role_from_path`] (dict) の
+/// `infer_role_from_path` (rules) → `infer_dict_role_from_path` (dict) の
 /// 順で path-based 推定を試す。 どちらにも該当しなければ None。
 ///
 /// dict 側 loader (`Dict::from_toml_dir` / `Loanwords::from_toml_dir`) からは

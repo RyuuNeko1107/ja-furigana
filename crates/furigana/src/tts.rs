@@ -104,7 +104,7 @@ const MEANINGFUL_SYMBOLS: &[char] = &[
 
 /// TTS で読み上げても意味を成さない装飾記号か (= [`TtsOptions::silence_symbols`] の対象)。
 ///
-/// 対象は 絵文字 と、 「かな / 漢字 / 英数 / 句読点 / 空白 / [`MEANINGFUL_SYMBOLS`]
+/// 対象は 絵文字 と、 「かな / 漢字 / 英数 / 句読点 / 空白 / `MEANINGFUL_SYMBOLS`
 /// のいずれでもない」 文字 (= ギリシャ文字 ω、 中黒 `・`、 括弧、 罫線、 各種装飾記号)。
 /// 句読点は pause 情報、 単位や演算子は語なので残す。
 #[must_use]

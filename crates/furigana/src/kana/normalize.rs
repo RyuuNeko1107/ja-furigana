@@ -53,7 +53,7 @@ fn is_invisible_char(c: char) -> bool {
 /// 入力が空なら空文字列を返す。
 ///
 /// 表示 surface も正規化したい呼び出し側はこちら、 lookup だけ正規化して表示は
-/// 原文を保つ場合は [`normalize_text_aligned`] を使う (production の `to_*` / `analyze`
+/// 原文を保つ場合は `normalize_text_aligned` を使う (production の `to_*` / `analyze`
 /// は後者)。 両者の正規化テキストは一致する (本関数は aligned 版の `.text` を返す)。
 #[must_use]
 pub fn normalize_text(s: &str, compat: &CompatData) -> String {
