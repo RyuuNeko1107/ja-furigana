@@ -203,7 +203,35 @@ function kanaToPhonemes(reading) {
 }
 
 // ─── 誤読判定 + token 単位部分置換 ───────────────────────────────────────────
-const MISMATCH_LOG = path.join(__dirname, 'mismatch_log.jsonl')
+// 不一致 log は辞書改善の材料になるが、 **配信コメント由来の文が平文で残る** (個人情報になりうる) ので、
+// 既定では記録しない。 `MISMATCH_LOG=<ファイルのパス>` を指定した時だけ書く。
+// 書く時も: 所有者だけが読める権限 (0600)、 1 件の文は 200 字まで、 ファイルは 5 MB まで。
+const MISMATCH_LOG = process.env.MISMATCH_LOG || ''
+const MISMATCH_LOG_MAX_BYTES = 5 * 1024 * 1024
+const MISMATCH_CLAUSE_CHARS = 200
+let mismatchLogFull = false
+
+function logMismatch(clause, ours, theirs) {
+  if (!MISMATCH_LOG || mismatchLogFull) return
+  try {
+    const size = fs.existsSync(MISMATCH_LOG) ? fs.statSync(MISMATCH_LOG).size : 0
+    if (size >= MISMATCH_LOG_MAX_BYTES) {
+      mismatchLogFull = true
+      log(`mismatch log が上限 (${MISMATCH_LOG_MAX_BYTES} bytes) に達したので、 以降は記録しません: ${MISMATCH_LOG}`)
+      return
+    }
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      clause: [...clause].slice(0, MISMATCH_CLAUSE_CHARS).join(''),
+      api: ours,
+      voicevox: theirs,
+    }) + '\n'
+    // mode は新規作成時だけ効く (既存ファイルの権限は変えない)
+    fs.appendFile(MISMATCH_LOG, line, { mode: 0o600 }, () => {})
+  } catch (e) {
+    log('mismatch log の書き込みに失敗:', e?.message || e)
+  }
+}
 
 /// VOICEVOX 自身の読み (accent_phrases の moras 連結、 発音カナ)
 async function voicevoxOwnReading(text) {
@@ -222,9 +250,7 @@ async function detectMisread(clause, reading) {
     if (ours.join(' ') === theirs.join(' ')) return { misread: false, theirs }
     log(`  誤読検出: VV=[${theirs.join(' ')}] → [${ours.join(' ')}]`)
     // 不一致 log は辞書改善の材料になる (エンジンとの読み比較 = どちらかが誤読)
-    fs.appendFile(MISMATCH_LOG, JSON.stringify({
-      ts: new Date().toISOString(), clause, api: ours.join(' '), voicevox: theirs.join(' '),
-    }) + '\n', () => {})
+    logMismatch(clause, ours.join(' '), theirs.join(' '))
     return { misread: true, theirs }
   } catch (e) {
     return { misread: true, theirs: [] } // 比較不能 → 読み優先に倒す
