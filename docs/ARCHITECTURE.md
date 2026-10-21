@@ -57,7 +57,7 @@ crates/
 │       ├── phonojoin.rs      #   SokuonJoinPass (OOV 漢字複合語の促音便 join)
 │       ├── accent_estimate.rs #  rule-based accent 推定 (opt-in estimate_accent)
 │       ├── postpass.rs       #   ReadingPostPass trait + POST_PASSES 配列 (path 確定後の token 補正 seam)
-│       ├── lindera_fallback.rs #   LinderaFallbackProvider (band 50/150 safety net + gap-passthrough)
+│       ├── lindera_fallback.rs #   LinderaFallbackProvider (band 50/150 safety net + gap-passthrough) (lindera_fallback/: helpers.rs = 送り仮名・記号・連濁の判定 / tests.rs)
 │       ├── bracket.rs        #   bracket notation parse → AccentPhrase (0.2.0 core)
 │       ├── analyze.rs        #   AnalyzeResult / Token + analyze() / analyze_tokens()
 │       └── inspect.rs        #   dict gap 抽出等の inspection helper (公開 re-export)
