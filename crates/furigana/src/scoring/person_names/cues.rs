@@ -112,7 +112,7 @@ impl PersonCues {
         if self
             .honorifics
             .iter()
-            .any(|h| h.len() > surface.len() && h.ends_with(surface))
+            .any(|h| h.ends_with(surface))
         {
             return true;
         }

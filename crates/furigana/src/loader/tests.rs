@@ -768,3 +768,22 @@ titles = [{}]
     assert!(load_rules_dir(&dir).is_err());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// ファイル名から role を推定する対応表 (ディレクトリ構造に依存しない)。 辞書側のファイル名が role に結びつく
+#[test]
+fn role_is_inferred_from_rule_file_names() {
+    use super::meta::infer_role_from_path;
+    for (name, role) in [
+        ("context_cues.toml", "context_cues"),
+        ("person_name_cues.toml", "person_name_cues"),
+        ("postprocess.toml", "postprocess"),
+        ("models.toml", "models"),
+    ] {
+        assert_eq!(
+            infer_role_from_path(&PathBuf::from("rules").join("text").join(name)),
+            Some(role),
+            "{name}"
+        );
+    }
+    assert_eq!(infer_role_from_path(&PathBuf::from("rules/unknown_table.toml")), None);
+}
