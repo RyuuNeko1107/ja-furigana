@@ -89,6 +89,11 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Rustdoc (リンク切れ・非公開項目へのリンクを警告にする)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+
   license:
     name: License audit (cargo-about)
     runs-on: ubuntu-latest

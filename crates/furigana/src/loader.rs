@@ -7,13 +7,13 @@
 //! | ファイル名 | 型 |
 //! |---|---|
 //! | `counters.toml` | [`CountersData`] |
-//! | `context.toml` | [`ContextData`] |
-//! | `days.toml` | [`DaysData`] |
-//! | `scales.toml` | [`ScalesData`] |
-//! | `units.toml` | [`UnitsData`] |
-//! | `symbols.toml` | [`SymbolsData`] |
-//! | `numeric_phrases.toml` | [`NumericPhrasesData`] |
-//! | `compat_map.toml` | [`CompatData`] |
+//! | `context.toml` | `ContextData` |
+//! | `days.toml` | `DaysData` |
+//! | `scales.toml` | `ScalesData` |
+//! | `units.toml` | `UnitsData` |
+//! | `symbols.toml` | `SymbolsData` |
+//! | `numeric_phrases.toml` | `NumericPhrasesData` |
+//! | `compat_map.toml` | `CompatData` |
 //!
 //! 個別ファイルが存在しない場合はその型のデフォルト値が返る。
 //! ただし [`load_rules_dir`] は **ディレクトリ自体が存在しない** 場合はエラーを返す。
@@ -23,7 +23,7 @@
 //! 大きくなりがちな counters.toml / context.toml は、それぞれ
 //! `counters/*.toml` / `context/*.toml` のサブディレクトリに分割して
 //! 配置することもできる。サブディレクトリ配下の `*.toml` はファイル名
-//! ソート順で読み込まれ、[`CountersData::merge`] / [`ContextData::merge`]
+//! ソート順で読み込まれ、`CountersData::merge` / `ContextData::merge`
 //! で 1 つにまとめられる。
 //!
 //! 単一ファイル `counters.toml` とサブディレクトリ `counters/` が両方

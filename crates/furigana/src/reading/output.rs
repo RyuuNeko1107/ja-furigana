@@ -173,7 +173,7 @@ fn surface_is_latin(surface: &str) -> bool {
         && surface.chars().any(|c| c.is_ascii_alphabetic())
 }
 
-/// escape 文字 `\` は backslash escape される ([`push_ruby_escaped`])。 これらを
+/// escape 文字 `\` は backslash escape される (`push_ruby_escaped`)。 これらを
 /// 含まない通常入力では出力は従来と完全に同一。
 #[must_use]
 pub fn tokens_to_ruby(tokens: &[ReadingToken]) -> String {
