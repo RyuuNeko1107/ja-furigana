@@ -48,7 +48,7 @@
 //! 呼べばよい (変換部は解析器に依存しない純粋な文字列処理)。
 //!
 //! 依存 crate の version ずれを避けるため、 本 crate は `furigana` 本体を
-//! [`furigana`](crate::furigana) として re-export している。
+//! [`furigana`] として re-export している。
 
 /// 本 crate がリンクしている `ja-furigana` 本体の re-export。
 ///

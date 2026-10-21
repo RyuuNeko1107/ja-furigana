@@ -7,7 +7,7 @@
 //!
 //! ## 公開 API
 //! - [`ReadingToken`]
-//! - [`tokens_to_hiragana`](output::tokens_to_hiragana) / [`tokens_to_ruby`](output::tokens_to_ruby)
+//! - [`tokens_to_hiragana`] / [`tokens_to_ruby`]
 
 pub mod output;
 

@@ -23,21 +23,21 @@ use std::sync::Mutex;
 pub struct MorphToken {
     /// 表層形
     pub surface: String,
-    /// カタカナ読み (IPADIC details[7])
+    /// カタカナ読み (IPADIC details\[7\])
     pub reading: Option<String>,
-    /// 品詞 (IPADIC details[0]) — 名詞 / 動詞 / 形容詞 等
+    /// 品詞 (IPADIC details\[0\]) — 名詞 / 動詞 / 形容詞 等
     pub pos: Option<String>,
-    /// 品詞細分類 1 (IPADIC details[1]) — 普通名詞 / 固有名詞 / 数 等
+    /// 品詞細分類 1 (IPADIC details\[1\]) — 普通名詞 / 固有名詞 / 数 等
     pub pos_detail: Option<String>,
-    /// 品詞細分類 2 (IPADIC details[2]) — 人名 / 地域 / 組織 等 (固有名詞の下位分類)
+    /// 品詞細分類 2 (IPADIC details\[2\]) — 人名 / 地域 / 組織 等 (固有名詞の下位分類)
     pub pos_detail2: Option<String>,
-    /// 品詞細分類 3 (IPADIC details[3]) — 姓 / 名 等 (人名の下位分類)
+    /// 品詞細分類 3 (IPADIC details\[3\]) — 姓 / 名 等 (人名の下位分類)
     pub pos_detail3: Option<String>,
-    /// 活用型 (IPADIC details[4]) — 五段・カ行イ音便 / 一段 等
+    /// 活用型 (IPADIC details\[4\]) — 五段・カ行イ音便 / 一段 等
     pub conjugation_type: Option<String>,
-    /// 活用形 (IPADIC details[5]) — 基本形 / 連用形 等
+    /// 活用形 (IPADIC details\[5\]) — 基本形 / 連用形 等
     pub conjugation_form: Option<String>,
-    /// 原形 (IPADIC details[6]) — 「食べた」→「食べる」
+    /// 原形 (IPADIC details\[6\]) — 「食べた」→「食べる」
     pub base_form: Option<String>,
 }
 
@@ -91,8 +91,8 @@ const EMBEDDED_DICT_URI: &str = "embedded://unidic";
 
 /// details field 番号: reading (= 表層形のカタカナ発音)。
 ///
-/// - IPADIC: details[7] (カタカナ reading)
-/// - UniDic: details[9] (pron = 発音形出現形)
+/// - IPADIC: details\[7\] (カタカナ reading)
+/// - UniDic: details\[9\] (pron = 発音形出現形)
 #[cfg(all(feature = "dict-ipadic", not(feature = "dict-unidic")))]
 const FIELD_READING: usize = 7;
 #[cfg(all(feature = "dict-unidic", not(feature = "dict-ipadic")))]
@@ -100,7 +100,7 @@ const FIELD_READING: usize = 9;
 
 /// details field 番号: base_form (= 原形 / 辞書形)。
 ///
-/// - IPADIC: details[6] (原形)
+/// - IPADIC: details\[6\] (原形)
 /// - UniDic: details[10] (orthBase = 書字形基本形)
 #[cfg(all(feature = "dict-ipadic", not(feature = "dict-unidic")))]
 const FIELD_BASE_FORM: usize = 6;

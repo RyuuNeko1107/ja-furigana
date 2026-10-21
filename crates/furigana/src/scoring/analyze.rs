@@ -88,7 +88,7 @@ impl Token {
         }
     }
 
-    /// [`Candidate`] から [`Token`] へ変換 (score を捨てる)。
+    /// `Candidate` から `Token` へ変換 (score を捨てる)。
     #[must_use]
     pub fn from_candidate(c: &Candidate) -> Self {
         let parsed = parse_bracket_notation(&c.reading);

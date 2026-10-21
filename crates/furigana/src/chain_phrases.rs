@@ -5,7 +5,7 @@
 //! 2. こちらの採択 token を形態素に重ねる。 token の読みが形態素の読みの連結と同じなら **形態素ごとのノード** に展開
 //!    (OpenJTalk の切り方に近づく)、 違う (辞書で読みを直した語) なら token 全体を 1 ノードにする
 //! 3. ノードごとに 語単体の核 / 拍数 (アクセント表) と 結合型 (付属語の表 + 内容語の既定 + 例外の表) を付ける
-//! 4. [`crate::accent_chain::build_phrases`] で句を組み立てる
+//! 4. `crate::accent_chain::build_phrases` で句を組み立てる
 //!
 //! 表は dict の `role = "accent_chain"` (`tools/gen_accent_chain.py` が naist-jdic から生成)。
 

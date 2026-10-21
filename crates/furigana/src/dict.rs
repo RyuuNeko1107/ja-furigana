@@ -22,8 +22,8 @@
 //! - **`jukugo`** : surface が 2 文字以上 (= 漢字熟語 / 固有名詞 / 複合語)
 //! - **`unihan`** : surface が 1 文字 (= 単漢字フォールバック)
 //!
-//! [`Self::lookup_jukugo`] と [`Self::lookup_unihan`] で別々に lookup できる。
-//! [`Self::lookup`] は両者を試す互換 API (jukugo 優先)。
+//! `Self::lookup_jukugo` と `Self::lookup_unihan` で別々に lookup できる。
+//! `Self::lookup` は両者を試す互換 API (jukugo 優先)。
 //!
 //! 呼び出し側 (`scoring/dict_bridge.rs` の `DictBridgeProvider`) は
 //! `entries (rich) → [[kanji]] block → unihan` の優先順で candidate を emit し、
@@ -111,9 +111,9 @@ impl Dict {
     /// あれば最後のものが採用)、 surface 文字数で内部的に jukugo / unihan に振り分け。
     ///
     /// **新 format 対応** (★A2、 alpha.11): string value (= 旧 Simple 形式) に加え、
-    /// inline / expanded sub-table 形式 (= [`EntryDetail`] = `reading` field +
+    /// inline / expanded sub-table 形式 (= `EntryDetail` = `reading` field +
     /// `[[match]]` block 配列) も受け付ける。 Simple は default_reading のみ保持、
-    /// Detailed は完全 [`Entry`] を `rich` field に保持して inline match を活用可能に。
+    /// Detailed は完全 `Entry` を `rich` field に保持して inline match を活用可能に。
     ///
     /// **旧 simple format との互換**: 99% の既存 entry は `"surface" = "reading"`
     /// 1 行 → `Entry::Simple` 経路で従来挙動。 `lookup_jukugo` / `lookup_unihan`
@@ -266,7 +266,7 @@ impl Dict {
     ///
     /// 以下の role は **skip** (= 別経路で別データ構造に load、 または alpha.15 で削除済):
     /// - `"loanwords"` → alpha.15 で削除済、 SKIP のまま (0.2.0 で再統合予定)
-    /// - `"single_overrides"` → alpha.15 で削除済、 [[kanji]] block で代替
+    /// - `"single_overrides"` → alpha.15 で削除済、 `[[kanji]]` block で代替
     /// - `"compat"` → rules loader (`load_rules_dir`)
     /// - rules 系 (`"counters"` / `"context"` / 等) も skip
     ///
@@ -415,7 +415,7 @@ impl Dict {
     pub fn merge(&mut self, other: Self) {
         self.unihan.extend(other.unihan);
         self.rich.extend(other.rich);
-        // ★A2 alpha.12: [[kanji]] block も merge (= append、 重複 char は両方残るので
+        // ★A2 alpha.12: `[[kanji]]` block も merge (= append、 重複 char は両方残るので
         // 「後勝ち」 ではなく order 依存。 同 char の重複は validate.py で reject 想定)
         self.kanji.extend(other.kanji);
         self.name_sei.extend(other.name_sei);
@@ -425,7 +425,7 @@ impl Dict {
         self.kanji_index = OnceLock::new();
     }
 
-    /// surface に対応する完全 [`Entry`] を返す (★A2、 alpha.11)。
+    /// surface に対応する完全 `Entry` を返す (★A2、 alpha.11)。
     ///
     /// Simple variant (= 旧 simple format) なら default reading のみ、 Detailed
     /// variant (= 新 inline match format) なら default + match block 配列を持つ。
@@ -435,7 +435,7 @@ impl Dict {
         self.rich.get(surface)
     }
 
-    /// (surface, [`Entry`]) ペアを iter 公開 (★A2、 alpha.11)。
+    /// (surface, `Entry`) ペアを iter 公開 (★A2、 alpha.11)。
     ///
     /// Smart engine 側 provider が dict 全 entry を walk して inline match を評価
     /// する用途。 `jukugo_iter` と異なり surface 長の制約なし、 Simple / Detailed
@@ -526,7 +526,7 @@ impl Dict {
             .map(move |&i| &self.kanji[i])
     }
 
-    /// [[kanji]] block 配列を iter 公開 (★A2、 alpha.12、 `core/kanji/*.toml` 由来)。
+    /// `[[kanji]]` block 配列を iter 公開 (★A2、 alpha.12、 `core/kanji/*.toml` 由来)。
     ///
     /// Smart engine 側 provider が単漢字単位の default + 文脈分岐 reading を
     /// 評価するために walk する。 entries (= rich) と独立して並走、 同 char

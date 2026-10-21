@@ -147,7 +147,7 @@ impl Furigana {
 
     /// テキストをトークン化 (生 [`ReadingToken`] 列)
     ///
-    /// 内部で [`Pipeline::tokens`] を呼び (= Smart engine path + Lindera fallback)、
+    /// 内部で `Pipeline::tokens` を呼び (= Smart engine path + Lindera fallback)、
     /// [`AnalyzeToken`] を [`ReadingToken`] に変換して返す。
     ///
     /// `to_hiragana` / `to_ruby` / `to_tts` / `to_romaji` は内部で本 method を呼ぶので、
@@ -356,9 +356,9 @@ impl Furigana {
     /// Smart engine で input を analyze、 採択 path / 候補 / boundary region を返す (★F1)。
     ///
     /// debug / inspection API。 構成 provider (Protect / Alphabet+loanwords / DictBridge /
-    /// Number / Odoriji / Lindera fallback) は [`Pipeline`] に集約。 本 method はその full 版
-    /// ([`Pipeline::analyze`] = debug 用の `candidates` 集約 + `alternatives` 抽出込み)。
-    /// production の `to_*` / `tokenize` は軽量 [`Pipeline::tokens`] 経由で同一 path を得る。
+    /// Number / Odoriji / Lindera fallback) は `Pipeline` に集約。 本 method はその full 版
+    /// (`Pipeline::analyze` = debug 用の `candidates` 集約 + `alternatives` 抽出込み)。
+    /// production の `to_*` / `tokenize` は軽量 `Pipeline::tokens` 経由で同一 path を得る。
     ///
     /// ## 戻り値
     ///
@@ -368,7 +368,7 @@ impl Furigana {
     /// `tokens` / `path_indices` 空 で `candidates` / `boundary_regions` のみ返る。
     ///
     /// 「々」 token の reading は path 確定後に直前 token reading + 連濁判定で書き換え
-    /// ([`crate::scoring::postpass`] の post-pass 群)、 placeholder の 「々」 は残らない。
+    /// (`crate::scoring::postpass` の post-pass 群)、 placeholder の 「々」 は残らない。
     #[must_use]
     pub fn analyze(&self, input: &str) -> AnalyzeResult {
         self.analyze_with_hint(input, NameHint::Auto)
