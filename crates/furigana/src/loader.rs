@@ -181,6 +181,12 @@ pub fn load_rules_dir<P: AsRef<Path>>(dir: P) -> Result<RulesData> {
                     .map_err(|e| FuriganaError::Validation(format!("{from}: {e}")))?;
                 data.context_cues.merge(part);
             }
+            Some("person_name_cues") => {
+                let part: crate::rules::PersonNameCuesData = parse_toml(content, from)?;
+                part.validate()
+                    .map_err(|e| FuriganaError::Validation(format!("{from}: {e}")))?;
+                data.person_name_cues.merge(part);
+            }
             Some("numeric_phrases") => data.numeric_phrases = parse_toml(content, from)?,
             Some("compat") => data.compat = parse_toml(content, from)?,
             Some("postprocess") => {
@@ -195,6 +201,10 @@ pub fn load_rules_dir<P: AsRef<Path>>(dir: P) -> Result<RulesData> {
         }
         Ok(())
     })?;
+    // 合算後にも検査する (複数 file に分けて語数の上限を超える書き方を弾く)
+    data.person_name_cues
+        .validate()
+        .map_err(|e| FuriganaError::Validation(format!("person_name_cues: {e}")))?;
     // postprocess を merge して compile
     data.postprocess = PostProcessData::from_spec(merged_spec)
         .map_err(|e| FuriganaError::Validation(format!("postprocess regex compile failed: {e}")))?;
