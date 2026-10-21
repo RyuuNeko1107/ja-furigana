@@ -10,9 +10,9 @@ ja-furigana の crate 構成と内部モジュールの役割。
 crates/
 ├── furigana/                 # lib crate (crates.io 名: ja-furigana / [lib] name = "furigana")
 │   ├── lib.rs                # module 宣言 + 公開 API re-export (ファサード)
-│   ├── api.rs                # Furigana 構造体 + FuriganaBuilder (公開 API のエントリ)
+│   ├── api.rs                # Furigana 構造体 (公開 API のエントリ)。 api/builder.rs = FuriganaBuilder と辞書・規則のローダ
 │   ├── analyzer.rs           # Lindera + IPADIC のラッパ (Smart engine の fallback として使用)
-│   ├── kana.rs               # ひら⇄カタ + Unicode 正規化
+│   ├── kana.rs               # ひら⇄カタ + 漢字判定。 kana/normalize.rs = 入力の正規化 (Unicode / 異体字 / 不可視文字)
 │   ├── char_class.rs         # 文字種 (CharType) 分類 + Unicode range 表の single home
 │   ├── accent_symbols.rs     # TTS 記号列 adapter (voicevox / aquestalk crate) の共有コア
 │   ├── dict.rs               # surface→reading 辞書 (unihan 1 文字 default / rich entry = 熟語 + Detailed Entry / [[kanji]] block)
@@ -20,7 +20,7 @@ crates/
 │   ├── tts.rs                # TTS 整形 (normalize_for_tts) + segment_for_tts
 │   ├── romaji.rs             # ひらがな → ローマ字 (ヘボン式 / 訓令式)
 │   ├── error.rs              # FuriganaError / Result
-│   ├── loader.rs             # TOML 汎用 parser (parse_toml<T> + load_or_default<T>)
+│   ├── loader.rs             # TOML 汎用 parser (parse_toml<T> + load_or_default<T>)。 loader/meta.rs = [meta] / role、 loader/walk.rs = ディレクトリ列挙
 │   ├── embedded.rs           # 空 default RulesData (rules は furigana-dict 側)
 │   ├── rules/                # データスキーマ
 │   │   ├── counters.rs       #   counters/*.toml
@@ -48,7 +48,7 @@ crates/
 │       ├── boundary.rs       #   BoundaryAnalysis (b)(c) 漢字連続 penalty
 │       ├── format.rs         #   Entry / EntryDetail / MatchBlock / KanjiBlock の dict 受け入れ型
 │       ├── matcher.rs        #   MatchContext + matches_context() + classify_char() + resolve_readings
-│       ├── special.rs        #   ProtectTokenProvider (URL/Email/絵文字) + AlphabetPassthroughProvider (loanwords lookup 込)
+│       ├── special.rs        #   special/protect.rs = ProtectTokenProvider (URL/Email/絵文字/顔文字)、 special/alphabet.rs = AlphabetPassthroughProvider (loanwords lookup 込)
 │       ├── dict_bridge.rs    #   DictBridgeProvider (rich entry / unihan / [[kanji]] block、 先頭 2 文字の区間引き)
 │       ├── numbers/          #   NumberCandidateProvider (band 950)。 patterns.rs = regex 構築、 mod.rs = 候補種別ごとの try_* (日付 / 時刻 / scale / SI / 助数詞 / 分数 / 数詞慣用語句 / 記号 / 素数字)
 │       ├── odoriji.rs        #   OdorijiProvider (々 placeholder) + RendakuPass
@@ -86,6 +86,8 @@ crates/
                 ├── metrics.rs #  Prometheus text format の counter / histogram (/metrics)
                 └── types.rs  #   FuriganaParams / FuriganaResponse / AppState
 ```
+
+ファイルごとの役割と「この変更ならここ」の早見表は [CONTRIBUTING.md の 2-4 / 2-5](../CONTRIBUTING.md) にある。
 
 ## 公開 API (lib)
 
