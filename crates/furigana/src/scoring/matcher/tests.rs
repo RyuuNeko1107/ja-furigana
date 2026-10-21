@@ -606,3 +606,39 @@ fn logical_token_caps_pathological_run() {
     assert_eq!(next_logical_token("漢字熟語", 0), "漢字熟語");
     assert_eq!(prev_logical_token("中学校生", 9), "中学校");
 }
+
+// ─── tokens.rs の境界 (変異テストの見逃しを塞ぐ。 分割前から検証されていなかった) ───
+
+#[test]
+fn max_logical_token_chars_is_one_past_the_dict_value_limit() {
+    // 上限 = condition の最大長 + 1。 これより長い token は、 どの condition とも一致しないと判別できる
+    assert_eq!(
+        MAX_LOGICAL_TOKEN_CHARS,
+        crate::sanitize::MAX_DICT_VALUE_CHARS + 1
+    );
+}
+
+#[test]
+fn next_logical_token_from_the_middle_of_a_run() {
+    // 先頭でなく途中の位置から (各字は 3 byte)。 位置の足し算を取り違えると切り出しがずれる
+    let s = "あいうえお漢字";
+    assert_eq!(next_logical_token(s, 3), "いうえお");
+    assert_eq!(next_logical_token(s, 6), "うえお");
+    assert_eq!(next_logical_token(s, 15), "漢字");
+}
+
+#[test]
+fn prev_logical_token_skips_spaces_after_alphanumerics_only() {
+    // 英数字の直後の空白は読み飛ばす (半角・全角・連続)
+    assert_eq!(prev_logical_token("Python 版", "Python ".len()), "Python");
+    assert_eq!(
+        prev_logical_token("32bit\u{3000}版", "32bit\u{3000}".len()),
+        "32bit"
+    );
+    assert_eq!(prev_logical_token("1000  分の", "1000  ".len()), "1000");
+    // 空白が無ければ、 そのまま直前の連続
+    assert_eq!(prev_logical_token("Python版", "Python".len()), "Python");
+    // 漢字・かなの後の空白は句の区切りなので飛ばさない (空になる)
+    assert_eq!(prev_logical_token("全部 白", "全部 ".len()), "");
+    assert_eq!(prev_logical_token("ぜんぶ 白", "ぜんぶ ".len()), "");
+}

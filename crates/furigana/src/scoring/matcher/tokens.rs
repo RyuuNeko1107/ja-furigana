@@ -45,7 +45,7 @@ pub fn next_logical_token(input: &str, start: usize) -> &str {
         match (first_class, class) {
             (None, Some(cls)) => {
                 first_class = Some(cls);
-                end = start + idx + c.len_utf8();
+                end = start + c.len_utf8(); // 最初の 1 字 (idx は常に 0)
             }
             (Some(fc), Some(cls)) if fc == cls => {
                 end = start + idx + c.len_utf8();
@@ -76,11 +76,11 @@ pub fn prev_logical_token(input: &str, end: usize) -> &str {
     // 英数字の直後の空白 (「Python 版」 「32bit 版」 「1000 分の」) は読み飛ばして英数字の run を前文脈にする。
     // 漢字 / かなの後の空白は句の区切りなので飛ばさない (「全部 白」 を 漢字 + 白 と見ると音読み規則が誤爆する)
     let trimmed = input[..end].trim_end_matches([' ', '\u{3000}']);
-    let end = if trimmed.len() < end
-        && trimmed
-            .chars()
-            .next_back()
-            .is_some_and(|c| classify_char(c) == Some(CharType::Alphanumeric))
+    // trimmed.len() <= end なので、 末尾に空白が無ければ end のまま (= 代入しても同じ)
+    let end = if trimmed
+        .chars()
+        .next_back()
+        .is_some_and(|c| classify_char(c) == Some(CharType::Alphanumeric))
     {
         trimmed.len()
     } else {
