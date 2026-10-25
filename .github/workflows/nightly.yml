@@ -4,8 +4,11 @@ name: Nightly (full mutation + flaky)
 # PR を遅くしないため、高コストな full mutation と flaky 検出はここ (定期) に隔離する。
 on:
   schedule:
-    # 毎日 18:00 UTC = 03:00 JST
-    - cron: "0 18 * * *"
+    # 週1回(日曜 18:00 UTC = 月曜 03:00 JST)。
+    # 2026-10-25: 毎日だと 8 shard x 最大 180 分 = 毎晩約 24 時間分のランナーを使い、
+    # しかも直近の夜は全部 timeout で cancel されていた(月の Actions 使用額 $314 の大半)。
+    # 結果が出ないまま消費だけしていたので週1に落とす。毎日戻したいときは cron を戻す。
+    - cron: "0 18 * * 0"
   workflow_dispatch: {}
 
 permissions:
