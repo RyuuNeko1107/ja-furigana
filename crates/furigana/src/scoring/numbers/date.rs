@@ -28,6 +28,25 @@ fn is_serial_prefix(before: &str) -> bool {
         .any(|p| before.ends_with(p))
 }
 
+/// 日付と決めた `N/M` の直後に付く 「日」 (`10/12日`) を、 同じ候補で覆うための長さ (byte)。
+///
+/// 覆わないと、 `10/12` の直後の 「日」 を band 950 の候補が覆えない (Lindera の弱い候補だけ) ので、
+/// 全部 band 950 の `10` + `/` + `12日` (日の助数詞) の経路が最弱 band の比較で勝って、
+/// じゅうすらっしゅじゅうににち と読まれる。 `10/12日` を 1 つの候補にすれば、 edge 数の少ない方が勝つ。
+///
+/// 直後がさらに漢字なら伸ばさない: 日曜日 / 日目 (2/4日目) / 日間 / 日付 / 日分 は別の語で、 今の読みが正しい。
+fn day_suffix_len(after: &str) -> usize {
+    let mut chars = after.chars();
+    if chars.next() != Some('日') {
+        return 0;
+    }
+    let is_kanji = |c: char| ('\u{4E00}'..='\u{9FFF}').contains(&c);
+    match chars.next() {
+        Some(c) if is_kanji(c) => 0,
+        _ => '日'.len_utf8(),
+    }
+}
+
 /// 範囲 `N/M〜N/M` の両端は日付 (後ろ ≥ 前)。 1/3から1/2 のように戻る組は分数どうしなので除く
 fn date_range(before: &str, after: &str, x: u32, y: u32) -> bool {
     let valid = |x: u32, y: u32| (1..=12).contains(&x) && (1..=31).contains(&y);
@@ -212,25 +231,27 @@ impl NumberCandidateProvider {
             || extra_match(&self.slash_cues.fraction_before, before);
         // ½ ¾ のような 1 字の分数 (NFKC で U+2044 の分数スラッシュになる) は常に分数
         let vulgar = whole.as_str().contains('\u{2044}');
-        let reading = if (fraction_cue || vulgar) && y > 0 {
-            fraction
+        let (reading, is_date) = if (fraction_cue || vulgar) && y > 0 {
+            (fraction, false)
         } else if (1..=12).contains(&x) && (13..=31).contains(&y) {
-            date()
+            (date(), true)
         } else if (1..=12).contains(&x) && (1..=12).contains(&y) {
             // 分数に倒れやすい組。 日付の手がかりがあれば日付
             let fraction_leaning = (x == 1 && (2..=10).contains(&y))
                 || (after_falls(after) || self.fraction_topic_only(input));
             if !fraction_leaning || (self.date_cue(before, after, x, y) && !after_falls(after)) {
-                date()
+                (date(), true)
             } else {
-                fraction
+                (fraction, false)
             }
         } else if x > 0 && y > 0 && x != y && !(x == 24 && y == 7) && !is_serial_prefix(before) {
-            fraction
+            (fraction, false)
         } else {
             return;
         };
-        out.push(self.make(input, pos, whole.end(), reading));
+        // 日付と決めたときだけ、 直後の 「日」 (10/12日) も同じ候補で覆う。 読みは変わらない (10/12 = じゅうがつじゅうににち)
+        let end = whole.end() + if is_date { day_suffix_len(after) } else { 0 };
+        out.push(self.make(input, pos, end, reading));
     }
 
     /// `10.14(水)` — 曜日の括弧が続く `月.日` は日付 (じゅうがつじゅうよっか)。 それまでは小数 (じゅうてんいちよん) だった。
