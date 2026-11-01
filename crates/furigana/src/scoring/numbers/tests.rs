@@ -2489,3 +2489,66 @@ fn kanji_decimal_after_bun_no_reads_as_decimal_without_unit() {
     );
     assert!(find(&p.candidates_vec(&ctx("七・五を"), 0), "七・五").is_none());
 }
+
+#[test]
+fn slash_date_covers_a_following_day_character() {
+    // 日付と決めた N/M の直後の 「日」 を同じ候補で覆う (10/12日 = じゅうがつじゅうににち)。
+    // 覆わないと 10 + / + 12日 (全部 band 950) の経路に負けて、 スラッシュのまま読まれた
+    assert_eq!(
+        reading_at("10/12日", 0, "10/12日").as_deref(),
+        Some("ジュウガツジュウニニチ")
+    );
+    assert_eq!(
+        reading_at("10/12日オープン", 0, "10/12日").as_deref(),
+        Some("ジュウガツジュウニニチ")
+    );
+    assert_eq!(
+        reading_at("10/12日 女子野球", 0, "10/12日").as_deref(),
+        Some("ジュウガツジュウニニチ")
+    );
+    assert_eq!(
+        reading_at("10/5日の配信", 0, "10/5日").as_deref(),
+        Some("ジュウガツイツカ")
+    );
+    assert_eq!(
+        reading_at("12/25日", 0, "12/25日").as_deref(),
+        Some("ジュウニガツニジュウゴニチ")
+    );
+}
+
+#[test]
+fn slash_date_does_not_cover_a_day_that_belongs_to_a_longer_word() {
+    // 直後がさらに漢字なら、 「日」 は別の語の一部 (日曜日 / 日目 / 日間 / 日付 / 日分)。 N/M だけを日付にして、 伸ばさない
+    for input in [
+        "10/12日曜日",
+        "2/4日目",
+        "10/12日間",
+        "10/12日付",
+        "10/12日分",
+    ] {
+        assert!(
+            reading_at(
+                input,
+                0,
+                &input.chars().take_while(|c| *c != '日').collect::<String>()
+            )
+            .is_some(),
+            "{input}: N/M の候補だけが出る"
+        );
+        let with_day = format!(
+            "{}日",
+            input.chars().take_while(|c| *c != '日').collect::<String>()
+        );
+        assert!(
+            reading_at(input, 0, &with_day).is_none(),
+            "{input}: 日まで伸ばさない"
+        );
+    }
+}
+
+#[test]
+fn slash_fraction_is_not_extended_over_a_following_day_character() {
+    // 分数と決めた N/M (1/3日 など) は伸ばさない (日の読みを奪わない)
+    assert!(reading_at("1/3日", 0, "1/3日").is_none());
+    assert!(reading_at("1/3日", 0, "1/3").is_some());
+}
