@@ -13,6 +13,12 @@ use super::NumberCandidateProvider;
 use crate::numbers::{kansuji_to_arabic, number_to_katakana, scale_reading, si_unit_reading};
 use crate::scoring::candidate::RawCandidate;
 
+/// 数字との間に半角空白 1 つがあっても単位として読む英字の単位 (小文字で照合)。
+/// `in` / `m` / `g` / `t` のように英語の語や英文と衝突するものは入れない。
+const SPACED_ALPHA_UNITS: &[&str] = &[
+    "cm", "mm", "km", "kg", "mg", "ml", "kl", "kb", "mb", "gb", "tb",
+];
+
 impl NumberCandidateProvider {
     /// section 6: 数値 + 単一助数詞 (+ optional 末尾再帰 「目」)。
     pub(super) fn try_counter(
@@ -314,6 +320,9 @@ impl NumberCandidateProvider {
         let Some(re) = &self.si_unit_re else { return };
         // 数字と記号始まりの単位の間の半角空白 1 つ (Wikipedia 表記の 「50 °C」) は詰めて照合する。
         // 英字の単位 (in / m) は英文 (Top 5 in) を巻き込むので空白を許さない。
+        // ただし cm / kg のように英語の語と衝突しない単位 (`SPACED_ALPHA_UNITS`) だけは
+        // 英字始まりでも許す (「高さ 64.4 cm」。 数字なしの CM はコマーシャルと読むので、
+        // 空白越しの cm を単位として拾わないと センチメートル が シーエム になる)。
         let spaced = DIGIT_RE
             .find(rest)
             .filter(|m| m.start() == 0)
@@ -324,7 +333,10 @@ impl NumberCandidateProvider {
                     .next()
                     // % は助数詞側 (促音の規則付き) で読むので対象外
                     .is_some_and(|c| {
-                        !c.is_alphanumeric() && !c.is_whitespace() && !matches!(c, '%' | '％' | '‰')
+                        c.is_ascii_alphabetic()
+                            || (!c.is_alphanumeric()
+                                && !c.is_whitespace()
+                                && !matches!(c, '%' | '％' | '‰'))
                     })
                     .then(|| (m.end(), format!("{}{}", m.as_str(), after)))
             });
@@ -332,7 +344,15 @@ impl NumberCandidateProvider {
             if let Some(caps) = at_start(re, &joined) {
                 let num = caps.get(1).unwrap().as_str();
                 let unit = caps.get(2).unwrap().as_str();
-                if caps.get(1).unwrap().end() == num_end && self.units.lookup(unit).is_some() {
+                // 英字始まりの単位は許可リストにあるものだけ。 直後に英字が続く (5 cmd) 場合も除く。
+                let alpha_ok = !joined[num_end..].starts_with(|c: char| c.is_ascii_alphabetic())
+                    || (SPACED_ALPHA_UNITS.contains(&unit.to_ascii_lowercase().as_str())
+                        && !joined[caps.get(0).unwrap().end()..]
+                            .starts_with(|c: char| c.is_ascii_alphabetic()));
+                if alpha_ok
+                    && caps.get(1).unwrap().end() == num_end
+                    && self.units.lookup(unit).is_some()
+                {
                     let m_end = caps.get(0).unwrap().end() + 1; // 詰めた空白 1 つ分を戻す
                     out.push(self.make(input, pos, m_end, si_unit_reading(num, unit, &self.units)));
                 }

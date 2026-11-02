@@ -889,6 +889,47 @@ fn si_unit_allows_space_before_symbol_unit() {
     assert!(find(&p.candidates_vec(&ctx("5 in"), 0), "5 in").is_none());
 }
 
+#[test]
+fn si_unit_allows_space_before_safe_alpha_unit() {
+    // 「高さ 64.4 cm」 のような 数字 + 空白 + cm / kg は単位として読む (英語の語と衝突しない単位だけ)。
+    // 数字なしの CM はコマーシャルと読むので、 ここで拾わないと センチメートル が シーエム になる。
+    let mut r = rules();
+    for (k, v) in [
+        ("cm", "センチメートル"),
+        ("kg", "キログラム"),
+        ("in", "インチ"),
+        ("m", "メートル"),
+    ] {
+        r.units.entries.insert(
+            k.to_string(),
+            crate::rules::UnitEntry {
+                kana: v.to_string(),
+                ci: true,
+            },
+        );
+    }
+    let p = NumberCandidateProvider::new(&r);
+    let c = p.candidates_vec(&ctx("64.4 cmです"), 0);
+    assert_eq!(
+        find(&c, "64.4 cm").expect("spaced cm").reading,
+        "ロクジュウヨンテンヨンセンチメートル"
+    );
+    let c = p.candidates_vec(&ctx("172 CMの"), 0);
+    assert!(
+        find(&c, "172 CM").is_some(),
+        "大文字 CM も数字の直後なら単位"
+    );
+    let c = p.candidates_vec(&ctx("3 kgを"), 0);
+    assert_eq!(
+        find(&c, "3 kg").expect("spaced kg").reading,
+        "サンキログラム"
+    );
+    // 英文は巻き込まない: in / m は許可リストにない。 単位の直後に英字が続く語 (5 cmd) も除く。
+    assert!(find(&p.candidates_vec(&ctx("5 in"), 0), "5 in").is_none());
+    assert!(find(&p.candidates_vec(&ctx("5 m"), 0), "5 m").is_none());
+    assert!(find(&p.candidates_vec(&ctx("5 cmd"), 0), "5 cm").is_none());
+}
+
 // ─── 助数詞の付かない漢数字の列 (★2026-09-27) ───
 
 #[test]
