@@ -10,7 +10,7 @@
 # ベース画像は digest で固定している (タグが指す中身が差し替わっても同じ画像で build する)。
 # 更新は Dependabot (docker) が PR にする。
 
-FROM rust:1.89-slim-bookworm@sha256:d7fc7de78bb8c1469933aeecbf801314d30d7d6e9f0578bba4cfa285bfa37fe6 AS builder
+FROM rust:1.100-slim-bookworm@sha256:7c7d4eb4d05b7781187a327809466cfddf29753f6defdc3d19a0e291951b7a37 AS builder
 
 WORKDIR /build
 
