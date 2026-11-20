@@ -1,0 +1,42 @@
+name: Publish crates
+
+# 手動実行で 4 crate を依存順に crates.io へ公開する。
+# crates.io の Trusted Publishing (OIDC) を使うので長期トークンは不要。
+# 事前設定: 各 crate の Settings > Trusted Publishing に
+#   repository = RyuuNeko1107/ja-furigana / workflow = publish.yml を登録する。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.5.9)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          for c in ja-furigana ja-furigana-voicevox ja-furigana-aquestalk ja-furigana-cli; do
+            # 既に公開済みならスキップ (再実行しやすくする)
+            ver=$(cargo metadata --no-deps --format-version 1 | jq -r --arg c "$c" '.packages[]|select(.name==$c)|.version')
+            if curl -sf "https://crates.io/api/v1/crates/$c/$ver" -A "publish-workflow" >/dev/null; then
+              echo "$c $ver already published"; continue
+            fi
+            cargo publish -p "$c" --locked
+          done
